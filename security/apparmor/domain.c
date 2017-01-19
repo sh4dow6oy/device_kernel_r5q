@@ -746,7 +746,7 @@ static struct aa_label *handle_onexec(struct aa_label *label,
  */
 int apparmor_bprm_set_creds(struct linux_binprm *bprm)
 {
-	struct aa_task_ctx *ctx;
+	struct aa_cred_ctx *ctx;
 	struct aa_label *label, *new = NULL;
 	struct aa_profile *profile;
 	char *buffer = NULL;
@@ -826,6 +826,9 @@ int apparmor_bprm_set_creds(struct linux_binprm *bprm)
 	set_cred_label(bprm->cred, new);
 
 done:
+	/* clear out temporary/transitional state from the context */
+	aa_clear_cred_ctx_trans(ctx);
+
 	aa_put_label(label);
 	put_buffers(buffer);
 
@@ -1014,7 +1017,7 @@ build:
 int aa_change_hat(const char *hats[], int count, u64 token, int flags)
 {
 	const struct cred *cred;
-	struct aa_task_ctx *ctx;
+	struct aa_cred_ctx *ctx;
 	struct aa_label *label, *previous, *new = NULL, *target = NULL;
 	struct aa_profile *profile;
 	struct aa_perms perms = {};

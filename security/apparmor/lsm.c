@@ -51,12 +51,12 @@ DEFINE_PER_CPU(struct aa_buffers, aa_buffers);
  */
 
 /*
- * put the associated labels
+ * free the associated aa_cred_ctx and put its labels
  */
 static void apparmor_cred_free(struct cred *cred)
 {
-	aa_put_label(cred_label(cred));
-	set_cred_label(cred, NULL);
+	aa_free_cred_ctx(cred_ctx(cred));
+	cred_ctx(cred) = NULL;
 }
 
 /*
@@ -64,17 +64,30 @@ static void apparmor_cred_free(struct cred *cred)
  */
 static int apparmor_cred_alloc_blank(struct cred *cred, gfp_t gfp)
 {
-	set_cred_label(cred, NULL);
+	/* freed by apparmor_cred_free */
+	struct aa_cred_ctx *ctx = aa_alloc_cred_ctx(gfp);
+
+	if (!ctx)
+		return -ENOMEM;
+
+	cred_ctx(cred) = ctx;
 	return 0;
 }
 
 /*
- * prepare new cred label for modification by prepare_cred block
+ * prepare new aa_cred_ctx for modification by prepare_cred block
  */
 static int apparmor_cred_prepare(struct cred *new, const struct cred *old,
 				 gfp_t gfp)
 {
-	set_cred_label(new, aa_get_newest_label(cred_label(old)));
+	/* freed by apparmor_cred_free */
+	struct aa_cred_ctx *ctx = aa_alloc_cred_ctx(gfp);
+
+	if (!ctx)
+		return -ENOMEM;
+
+	aa_dup_cred_ctx(ctx, cred_ctx(old));
+	cred_ctx(new) = ctx;
 	return 0;
 }
 
@@ -83,23 +96,10 @@ static int apparmor_cred_prepare(struct cred *new, const struct cred *old,
  */
 static void apparmor_cred_transfer(struct cred *new, const struct cred *old)
 {
-	set_cred_label(new, aa_get_newest_label(cred_label(old)));
-}
+	const struct aa_cred_ctx *old_ctx = cred_ctx(old);
+	struct aa_cred_ctx *new_ctx = cred_ctx(new);
 
-static void apparmor_task_free(struct task_struct *task)
-{
-
-	aa_free_task_ctx(task_ctx(task));
-}
-
-static int apparmor_task_alloc(struct task_struct *task,
-			       unsigned long clone_flags)
-{
-	struct aa_task_ctx *new = task_ctx(task);
-
-	aa_dup_task_ctx(new, task_ctx(current));
-
-	return 0;
+	aa_dup_cred_ctx(new_ctx, old_ctx);
 }
 
 static int apparmor_ptrace_access_check(struct task_struct *child,
@@ -577,7 +577,7 @@ static int apparmor_getprocattr(struct task_struct *task, char *name,
 	int error = -ENOENT;
 	/* released below */
 	const struct cred *cred = get_task_cred(task);
-	struct aa_task_ctx *ctx = task_ctx(current);
+	struct aa_cred_ctx *ctx = cred_ctx(cred);
 	struct aa_label *label = NULL;
 
 	if (strcmp(name, "current") == 0)
@@ -678,7 +678,7 @@ fail:
 static void apparmor_bprm_committing_creds(struct linux_binprm *bprm)
 {
 	struct aa_label *label = aa_current_raw_label();
-	struct aa_label *new_label = cred_label(bprm->cred);
+	struct aa_cred_ctx *new_ctx = cred_ctx(bprm->cred);
 
 	/* bail out if unconfined or not changing profile */
 	if ((new_label->proxy == label->proxy) ||
@@ -1044,8 +1044,14 @@ static int param_set_mode(const char *val, const struct kernel_param *kp)
 static int __init set_init_ctx(void)
 {
 	struct cred *cred = (struct cred *)current->real_cred;
+	struct aa_cred_ctx *ctx;
 
-	set_cred_label(cred, aa_get_label(ns_unconfined(root_ns)));
+	ctx = aa_alloc_cred_ctx(GFP_KERNEL);
+	if (!ctx)
+		return -ENOMEM;
+
+	ctx->label = aa_get_label(ns_unconfined(root_ns));
+	cred_ctx(cred) = ctx;
 
 	return 0;
 }

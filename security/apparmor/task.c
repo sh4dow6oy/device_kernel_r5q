@@ -10,14 +10,60 @@
  * published by the Free Software Foundation, version 2 of the
  * License.
  *
+ *
+ * AppArmor sets confinement on every task, via the the aa_cred_ctx and
+ * the aa_cred_ctx.label, both of which are required and are not allowed
+ * to be NULL.  The aa_cred_ctx is not reference counted and is unique
+ * to each cred (which is reference count).  The label pointed to by
+ * the cred_ctx is reference counted.
+ *
  * TODO
  * If a task uses change_hat it currently does not return to the old
  * cred or task context but instead creates a new one.  Ideally the task
  * should return to the previous cred if it has not been modified.
  */
 
-#include "include/cred.h"
-#include "include/task.h"
+#include "include/context.h"
+#include "include/policy.h"
+
+/**
+ * aa_alloc_cred_ctx - allocate a new cred_ctx
+ * @flags: gfp flags for allocation
+ *
+ * Returns: allocated buffer or NULL on failure
+ */
+struct aa_cred_ctx *aa_alloc_cred_ctx(gfp_t flags)
+{
+	return kzalloc(sizeof(struct aa_cred_ctx), flags);
+}
+
+/**
+ * aa_free_cred_ctx - free a cred_ctx
+ * @ctx: cred_ctx to free (MAYBE NULL)
+ */
+void aa_free_cred_ctx(struct aa_cred_ctx *ctx)
+{
+	if (ctx) {
+		aa_put_label(ctx->label);
+		aa_put_label(ctx->previous);
+		aa_put_label(ctx->onexec);
+
+		kzfree(ctx);
+	}
+}
+
+/**
+ * aa_dup_cred_ctx - duplicate a task context, incrementing reference counts
+ * @new: a blank task context      (NOT NULL)
+ * @old: the task context to copy  (NOT NULL)
+ */
+void aa_dup_cred_ctx(struct aa_cred_ctx *new, const struct aa_cred_ctx *old)
+{
+	*new = *old;
+	aa_get_label(new->label);
+	aa_get_label(new->previous);
+	aa_get_label(new->onexec);
+}
 
 /**
  * aa_get_task_label - Get another task's label
@@ -44,7 +90,7 @@ struct aa_label *aa_get_task_label(struct task_struct *task)
  */
 int aa_replace_current_label(struct aa_label *label)
 {
-	struct aa_label *old = aa_current_raw_label();
+	struct aa_cred_ctx *ctx = current_cred_ctx();
 	struct cred *new;
 
 	AA_BUG(!label);
@@ -64,7 +110,7 @@ int aa_replace_current_label(struct aa_label *label)
 		 * if switching to unconfined or a different label namespace
 		 * clear out context state
 		 */
-		aa_clear_task_ctx_trans(task_ctx(current));
+		aa_clear_cred_ctx_trans(ctx);
 
 	/*
 	 * be careful switching cred label, when racing replacement it
@@ -89,10 +135,13 @@ int aa_replace_current_label(struct aa_label *label)
  */
 int aa_set_current_onexec(struct aa_label *label, bool stack)
 {
-	struct aa_task_ctx *ctx = task_ctx(current);
+	struct aa_cred_ctx *ctx;
+	struct cred *new = prepare_creds();
+	if (!new)
+		return -ENOMEM;
 
 	aa_get_label(label);
-	aa_put_label(ctx->onexec);
+	aa_clear_cred_ctx_trans(ctx);
 	ctx->onexec = label;
 	ctx->token = stack;
 
@@ -111,10 +160,8 @@ int aa_set_current_onexec(struct aa_label *label, bool stack)
  */
 int aa_set_current_hat(struct aa_label *label, u64 token)
 {
-	struct aa_task_ctx *ctx = task_ctx(current);
-	struct cred *new;
-
-	new = prepare_creds();
+	struct aa_cred_ctx *ctx;
+	struct cred *new = prepare_creds();
 	if (!new)
 		return -ENOMEM;
 	AA_BUG(!label);
@@ -151,16 +198,8 @@ int aa_set_current_hat(struct aa_label *label, u64 token)
  */
 int aa_restore_previous_label(u64 token)
 {
-	struct aa_task_ctx *ctx = task_ctx(current);
-	struct cred *new;
-
-	if (ctx->token != token)
-		return -EACCES;
-	/* ignore restores when there is no saved label */
-	if (!ctx->previous)
-		return 0;
-
-	new = prepare_creds();
+	struct aa_cred_ctx *ctx;
+	struct cred *new = prepare_creds();
 	if (!new)
 		return -ENOMEM;
 
@@ -168,7 +207,7 @@ int aa_restore_previous_label(u64 token)
 	set_cred_label(new, aa_get_newest_label(ctx->previous));
 	AA_BUG(!cred_label(new));
 	/* clear exec && prev information when restoring to previous context */
-	aa_clear_task_ctx_trans(ctx);
+	aa_clear_cred_ctx_trans(ctx);
 
 	commit_creds(new);
 
