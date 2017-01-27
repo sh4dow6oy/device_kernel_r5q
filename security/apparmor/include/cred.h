@@ -23,21 +23,11 @@
 #include "policy_ns.h"
 #include "task.h"
 
-#define cred_ctx(X) ((X)->security)
-#define current_cred_ctx() cred_ctx(current_cred())
-
 #define task_ctx(X) ((X)->security)
 #define current_task_ctx() (task_ctx(current))
+#define cred_label(X) ((X)->security)
 
-/**
- * struct aa_cred_ctx - primary label for confined tasks
- * @label: the current label   (NOT NULL)
- */
-struct aa_cred_ctx {
-	struct aa_label *label;
-};
-
-/**
+/*
  * struct aa_task_ctx - information for current task label change
  * @onexec: profile to transition to on next exec  (MAY BE NULL)
  * @previous: profile the task may return to     (MAY BE NULL)
@@ -48,10 +38,6 @@ struct aa_task_ctx {
 	struct aa_label *previous;
 	u64 token;
 };
-
-struct aa_cred_ctx *aa_alloc_cred_ctx(gfp_t flags);
-void aa_free_cred_ctx(struct aa_cred_ctx *ctx);
-void aa_dup_cred_ctx(struct aa_cred_ctx *new, const struct aa_cred_ctx *old);
 
 struct aa_task_ctx *aa_alloc_task_ctx(gfp_t flags);
 void aa_free_task_ctx(struct aa_task_ctx *ctx);
@@ -77,7 +63,7 @@ struct aa_label *aa_get_task_label(struct task_struct *task);
  */
 static inline struct aa_label *aa_cred_raw_label(const struct cred *cred)
 {
-	struct aa_cred_ctx *ctx = cred_ctx(cred);
+	struct aa_label *label = cred_label(cred);
 
 	AA_BUG(!label);
 	return label;
