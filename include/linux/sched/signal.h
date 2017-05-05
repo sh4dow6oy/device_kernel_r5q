@@ -566,32 +566,9 @@ void walk_process_tree(struct task_struct *top, proc_visitor, void *);
 static inline
 struct pid *task_pid_type(struct task_struct *task, enum pid_type type)
 {
-	struct pid *pid;
-	if (type == PIDTYPE_PID)
-		pid = task_pid(task);
-	else
-		pid = task->signal->pids[type];
-	return pid;
-}
-
-static inline struct pid *task_tgid(struct task_struct *task)
-{
-	return task->signal->pids[PIDTYPE_TGID];
-}
-
-/*
- * Without tasklist or RCU lock it is not safe to dereference
- * the result of task_pgrp/task_session even if task == current,
- * we can race with another thread doing sys_setsid/sys_setpgid.
- */
-static inline struct pid *task_pgrp(struct task_struct *task)
-{
-	return task->signal->pids[PIDTYPE_PGID];
-}
-
-static inline struct pid *task_session(struct task_struct *task)
-{
-	return task->signal->pids[PIDTYPE_SID];
+	if (type != PIDTYPE_PID)
+		task = task->group_leader;
+	return task->pids[type].pid;
 }
 
 static inline int get_nr_threads(struct task_struct *tsk)
