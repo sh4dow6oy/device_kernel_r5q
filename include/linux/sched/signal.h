@@ -149,7 +149,6 @@ struct signal_struct {
 #endif
 
 	/* PID/PID hash table linkage. */
-	struct pid *leader_pid;
 	struct pid *pids[PIDTYPE_MAX];
 
 #ifdef CONFIG_NO_HZ_FULL
@@ -577,7 +576,7 @@ struct pid *task_pid_type(struct task_struct *task, enum pid_type type)
 
 static inline struct pid *task_tgid(struct task_struct *task)
 {
-	return task->signal->leader_pid;
+	return task->signal->pids[PIDTYPE_TGID];
 }
 
 /*
