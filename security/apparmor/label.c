@@ -1818,9 +1818,9 @@ static int label_count_strn_entries(const char *str, size_t n)
 
 	AA_BUG(!str);
 
-	for (split = aa_label_str_split(str);
+	for (split = aa_label_strn_split(str, end - str);
 	     split;
-	     split = aa_label_str_split(str)) {
+	     split = aa_label_strn_split(str, end - str)) {
 		count++;
 		str = split + 3;
 	}
@@ -1866,15 +1866,15 @@ struct aa_label *aa_label_strn_parse(struct aa_label *base, const char *str,
 	DEFINE_VEC(profile, vec);
 	struct aa_label *label, *currbase = base;
 	int i, len, stack = 0, error;
+	const char *end = str + n;
 	const char *split;
 
 	AA_BUG(!base);
 	AA_BUG(!str);
 
 	str = skipn_spaces(str, n);
-	if (str == NULL || (*str == '=' && base != &root_ns->unconfined->label))
+	if (str == NULL)
 		return ERR_PTR(-EINVAL);
-
 	len = label_count_strn_entries(str, end - str);
 	if (*str == '&' || force_stack) {
 		/* stack on top of base */
@@ -1891,7 +1891,7 @@ struct aa_label *aa_label_strn_parse(struct aa_label *base, const char *str,
 	for (i = 0; i < stack; i++)
 		vec[i] = aa_get_profile(base->vec[i]);
 
-	for (split = aa_label_str_split(str), i = stack;
+	for (split = aa_label_strn_split(str, end - str), i = stack;
 	     split && i < len; i++) {
 		vec[i] = fqlookupn_profile(base, currbase, str, split - str);
 		if (!vec[i])
@@ -1903,7 +1903,7 @@ struct aa_label *aa_label_strn_parse(struct aa_label *base, const char *str,
 		if (vec[i]->ns != labels_ns(currbase))
 			currbase = &vec[i]->label;
 		str = split + 3;
-		split = aa_label_str_split(str);
+		split = aa_label_strn_split(str, end - str);
 	}
 	/* last element doesn't have a split */
 	if (i < len) {
@@ -1937,6 +1937,13 @@ out:
 fail:
 	label = ERR_PTR(-ENOENT);
 	goto out;
+}
+
+struct aa_label *aa_label_parse(struct aa_label *base, const char *str,
+				gfp_t gfp, bool create, bool force_stack)
+{
+	return aa_label_strn_parse(base, str, strlen(str), gfp, create,
+				   force_stack);
 }
 
 /**
