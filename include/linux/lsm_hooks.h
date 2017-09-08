@@ -1640,7 +1640,7 @@ union security_list_options {
 	int (*task_getscheduler)(struct task_struct *p);
 	int (*task_movememory)(struct task_struct *p);
 	int (*task_kill)(struct task_struct *p, struct siginfo *info,
-				int sig, u32 secid);
+				int sig, const struct cred *cred);
 	int (*task_prctl)(int option, unsigned long arg2, unsigned long arg3,
 				unsigned long arg4, unsigned long arg5);
 	void (*task_to_inode)(struct task_struct *p, struct inode *inode);
