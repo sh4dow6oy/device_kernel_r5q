@@ -1873,8 +1873,9 @@ struct aa_label *aa_label_strn_parse(struct aa_label *base, const char *str,
 	AA_BUG(!str);
 
 	str = skipn_spaces(str, n);
-	if (str == NULL)
+	if (str == NULL || (*str == '=' && base != &root_ns->unconfined->label))
 		return ERR_PTR(-EINVAL);
+
 	len = label_count_strn_entries(str, end - str);
 	if (*str == '&' || force_stack) {
 		/* stack on top of base */
