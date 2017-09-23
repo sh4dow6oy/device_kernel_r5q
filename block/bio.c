@@ -1399,7 +1399,22 @@ struct bio *bio_map_user_iov(struct request_queue *q,
 	struct iov_iter i;
 	struct bio_vec *bvec;
 
-	if (!iov_iter_count(iter))
+	iov_for_each(iov, i, *iter) {
+		unsigned long uaddr = (unsigned long) iov.iov_base;
+		unsigned long len = iov.iov_len;
+		unsigned long end = (uaddr + len + PAGE_SIZE - 1) >> PAGE_SHIFT;
+		unsigned long start = uaddr >> PAGE_SHIFT;
+
+		/*
+		 * Overflow, abort
+		 */
+		if (end < start)
+			return ERR_PTR(-EINVAL);
+
+		nr_pages += end - start;
+	}
+
+	if (!nr_pages)
 		return ERR_PTR(-EINVAL);
 
 	bio = bio_kmalloc(gfp_mask, iov_iter_npages(iter, BIO_MAX_PAGES));
@@ -1421,25 +1436,34 @@ struct bio *bio_map_user_iov(struct request_queue *q,
 
 		npages = DIV_ROUND_UP(offs + bytes, PAGE_SIZE);
 
-		for (j = 0; j < npages; j++) {
-			unsigned int n = PAGE_SIZE - offs;
-			unsigned short prev_bi_vcnt = bio->bi_vcnt;
+		if (unlikely(offs & queue_dma_alignment(q))) {
+			ret = -EINVAL;
+			j = 0;
+		} else {
+			for (j = 0; j < npages; j++) {
+				struct page *page = pages[j];
+				unsigned int n = PAGE_SIZE - offs;
+				unsigned short prev_bi_vcnt = bio->bi_vcnt;
 
-			if (n > bytes)
-				n = bytes;
-
-			if (!bio_add_pc_page(q, bio, pages[j], n, offs))
-				break;
+				if (n > bytes)
+					n = bytes;
 
 				if (!bio_add_pc_page(q, bio, page, n, offs))
 					break;
 
-			added += n;
-			bytes -= n;
-			offs = 0;
-		}
-		iov_iter_advance(&i, added);
+				/*
+				 * check if vector was merged with previous
+				 * drop page reference if needed
+				 */
+				if (bio->bi_vcnt == prev_bi_vcnt)
+					put_page(page);
 
+				added += n;
+				bytes -= n;
+				offs = 0;
+			}
+			iov_iter_advance(&i, added);
+		}
 		/*
 		 * release the pages we didn't map into the bio, if any
 		 */
