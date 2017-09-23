@@ -1394,6 +1394,7 @@ struct bio *bio_map_user_iov(struct request_queue *q,
 {
 	int j;
 	struct bio *bio;
+	int cur_page = 0;
 	int ret;
 	struct iov_iter i;
 	struct bio_vec *bvec;
@@ -1412,7 +1413,14 @@ struct bio *bio_map_user_iov(struct request_queue *q,
 		size_t offs, added = 0;
 		int npages;
 
-		bytes = iov_iter_get_pages_alloc(&i, &pages, LONG_MAX, &offs);
+	i = *iter;
+	while (iov_iter_count(&i)) {
+		ssize_t bytes;
+		size_t offs, added = 0;
+		int npages;
+
+		bytes = iov_iter_get_pages(&i, pages + cur_page, LONG_MAX,
+						nr_pages - cur_page, &offs);
 		if (unlikely(bytes <= 0)) {
 			ret = bytes ? bytes : -EFAULT;
 			goto out_unmap;
@@ -1420,43 +1428,34 @@ struct bio *bio_map_user_iov(struct request_queue *q,
 
 		npages = DIV_ROUND_UP(offs + bytes, PAGE_SIZE);
 
-		if (unlikely(offs & queue_dma_alignment(q))) {
-			ret = -EINVAL;
-			j = 0;
-		} else {
-			for (j = 0; j < npages; j++) {
-				struct page *page = pages[j];
-				unsigned int n = PAGE_SIZE - offs;
-				unsigned short prev_bi_vcnt = bio->bi_vcnt;
+		for (j = cur_page; j < cur_page + npages; j++) {
+			unsigned int n = PAGE_SIZE - offs;
+			unsigned short prev_bi_vcnt = bio->bi_vcnt;
 
-				if (n > bytes)
-					n = bytes;
+			if (n > bytes)
+				n = bytes;
+
+			/*
+			 * sorry...
+			 */
+			if (bio_add_pc_page(q, bio, pages[j], n, offs) < n)
+				break;
 
 				if (!bio_add_pc_page(q, bio, page, n, offs))
 					break;
 
-				/*
-				 * check if vector was merged with previous
-				 * drop page reference if needed
-				 */
-				if (bio->bi_vcnt == prev_bi_vcnt)
-					put_page(page);
-
-				added += n;
-				bytes -= n;
-				offs = 0;
-			}
-			iov_iter_advance(&i, added);
+			added += n;
+			bytes -= n;
+			offs = 0;
 		}
+		iov_iter_advance(&i, added);
+
 		/*
 		 * release the pages we didn't map into the bio, if any
 		 */
-		while (j < npages)
+		while (j < cur_page + npages)
 			put_page(pages[j++]);
-		kvfree(pages);
-		/* couldn't stuff something into bio? */
-		if (bytes)
-			break;
+		cur_page = j;
 	}
 
 	bio_set_flag(bio, BIO_USER_MAPPED);
