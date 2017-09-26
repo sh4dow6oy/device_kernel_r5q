@@ -1396,7 +1396,22 @@ struct task_struct {
 
 static inline struct pid *task_pid(struct task_struct *task)
 {
-	return task->thread_pid;
+	return task->pids[PIDTYPE_PID].pid;
+}
+
+/*
+ * Without tasklist or RCU lock it is not safe to dereference
+ * the result of task_pgrp/task_session even if task == current,
+ * we can race with another thread doing sys_setsid/sys_setpgid.
+ */
+static inline struct pid *task_pgrp(struct task_struct *task)
+{
+	return task->group_leader->pids[PIDTYPE_PGID].pid;
+}
+
+static inline struct pid *task_session(struct task_struct *task)
+{
+	return task->group_leader->pids[PIDTYPE_SID].pid;
 }
 
 /*

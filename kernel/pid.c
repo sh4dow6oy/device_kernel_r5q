@@ -460,8 +460,16 @@ pid_t __task_pid_nr_ns(struct task_struct *task, enum pid_type type,
 	rcu_read_lock();
 	if (!ns)
 		ns = task_active_pid_ns(current);
-	if (likely(pid_alive(task)))
-		nr = pid_nr_ns(rcu_dereference(*task_pid_ptr(task, type)), ns);
+	if (likely(pid_alive(task))) {
+		struct pid *pid;
+		if (type == PIDTYPE_PID)
+			pid = task_pid(task);
+		else if (type == __PIDTYPE_TGID)
+			pid = task_tgid(task);
+		else
+			pid = rcu_dereference(task->group_leader->pids[type].pid);
+		nr = pid_nr_ns(pid, ns);
+	}
 	rcu_read_unlock();
 
 	return nr;
