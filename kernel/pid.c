@@ -317,6 +317,8 @@ static struct pid **task_pid_ptr(struct task_struct *task, enum pid_type type)
 {
 	return (type == PIDTYPE_PID) ?
 		&task->thread_pid :
+		(type == __PIDTYPE_TGID) ?
+		&task->signal->leader_pid :
 		&task->signal->pids[type];
 }
 
@@ -460,16 +462,8 @@ pid_t __task_pid_nr_ns(struct task_struct *task, enum pid_type type,
 	rcu_read_lock();
 	if (!ns)
 		ns = task_active_pid_ns(current);
-	if (likely(pid_alive(task))) {
-		struct pid *pid;
-		if (type == PIDTYPE_PID)
-			pid = task_pid(task);
-		else if (type == __PIDTYPE_TGID)
-			pid = task_tgid(task);
-		else
-			pid = rcu_dereference(task->group_leader->pids[type].pid);
-		nr = pid_nr_ns(pid, ns);
-	}
+	if (likely(pid_alive(task)))
+		nr = pid_nr_ns(rcu_dereference(*task_pid_ptr(task, type)), ns);
 	rcu_read_unlock();
 
 	return nr;
