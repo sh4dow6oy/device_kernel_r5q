@@ -284,88 +284,6 @@ __be32 __skb_flow_get_ports(const struct sk_buff *skb, int thoff, u8 ip_proto,
 }
 EXPORT_SYMBOL(__skb_flow_get_ports);
 
-static bool icmp_has_id(u8 type)
-{
-	switch (type) {
-	case ICMP_ECHO:
-	case ICMP_ECHOREPLY:
-	case ICMP_TIMESTAMP:
-	case ICMP_TIMESTAMPREPLY:
-	case ICMPV6_ECHO_REQUEST:
-	case ICMPV6_ECHO_REPLY:
-		return true;
-	}
-
-	return false;
-}
-
-/**
- * skb_flow_get_icmp_tci - extract ICMP(6) Type, Code and Identifier fields
- * @skb: sk_buff to extract from
- * @key_icmp: struct flow_dissector_key_icmp to fill
- * @data: raw buffer pointer to the packet
- * @toff: offset to extract at
- * @hlen: packet header length
- */
-void skb_flow_get_icmp_tci(const struct sk_buff *skb,
-			   struct flow_dissector_key_icmp *key_icmp,
-			   void *data, int thoff, int hlen)
-{
-	struct icmphdr *ih, _ih;
-
-	ih = __skb_header_pointer(skb, thoff, sizeof(_ih), data, hlen, &_ih);
-	if (!ih)
-		return;
-
-	key_icmp->type = ih->type;
-	key_icmp->code = ih->code;
-
-	/* As we use 0 to signal that the Id field is not present,
-	 * avoid confusion with packets without such field
-	 */
-	if (icmp_has_id(ih->type))
-		key_icmp->id = ih->un.echo.id ? : 1;
-	else
-		key_icmp->id = 0;
-}
-EXPORT_SYMBOL(skb_flow_get_icmp_tci);
-
-/* If FLOW_DISSECTOR_KEY_ICMP is set, dissect an ICMP packet
- * using skb_flow_get_icmp_tci().
- */
-static void __skb_flow_dissect_icmp(const struct sk_buff *skb,
-				    struct flow_dissector *flow_dissector,
-				    void *target_container,
-				    void *data, int thoff, int hlen)
-{
-	struct flow_dissector_key_icmp *key_icmp;
-
-	if (!dissector_uses_key(flow_dissector, FLOW_DISSECTOR_KEY_ICMP))
-		return;
-
-	key_icmp = skb_flow_dissector_target(flow_dissector,
-					     FLOW_DISSECTOR_KEY_ICMP,
-					     target_container);
-
-	skb_flow_get_icmp_tci(skb, key_icmp, data, thoff, hlen);
-}
-
-void skb_flow_dissect_meta(const struct sk_buff *skb,
-			   struct flow_dissector *flow_dissector,
-			   void *target_container)
-{
-	struct flow_dissector_key_meta *meta;
-
-	if (!dissector_uses_key(flow_dissector, FLOW_DISSECTOR_KEY_META))
-		return;
-
-	meta = skb_flow_dissector_target(flow_dissector,
-					 FLOW_DISSECTOR_KEY_META,
-					 target_container);
-	meta->ingress_ifindex = skb->skb_iif;
-}
-EXPORT_SYMBOL(skb_flow_dissect_meta);
-
 static void
 skb_flow_dissect_set_enc_addr_type(enum flow_dissector_key_id type,
 				   struct flow_dissector *flow_dissector,
@@ -382,10 +300,10 @@ skb_flow_dissect_set_enc_addr_type(enum flow_dissector_key_id type,
 	ctrl->addr_type = type;
 }
 
-void
-skb_flow_dissect_tunnel_info(const struct sk_buff *skb,
-			     struct flow_dissector *flow_dissector,
-			     void *target_container)
+static void
+__skb_flow_dissect_tunnel_info(const struct sk_buff *skb,
+			       struct flow_dissector *flow_dissector,
+			       void *target_container)
 {
 	struct ip_tunnel_info *info;
 	struct ip_tunnel_key *key;
@@ -400,11 +318,7 @@ skb_flow_dissect_tunnel_info(const struct sk_buff *skb,
 	    !dissector_uses_key(flow_dissector,
 				FLOW_DISSECTOR_KEY_ENC_CONTROL) &&
 	    !dissector_uses_key(flow_dissector,
-				FLOW_DISSECTOR_KEY_ENC_PORTS) &&
-	    !dissector_uses_key(flow_dissector,
-				FLOW_DISSECTOR_KEY_ENC_IP) &&
-	    !dissector_uses_key(flow_dissector,
-				FLOW_DISSECTOR_KEY_ENC_OPTS))
+				FLOW_DISSECTOR_KEY_ENC_PORTS))
 		return;
 
 	info = skb_tunnel_info(skb);
@@ -464,33 +378,7 @@ skb_flow_dissect_tunnel_info(const struct sk_buff *skb,
 		tp->src = key->tp_src;
 		tp->dst = key->tp_dst;
 	}
-
-	if (dissector_uses_key(flow_dissector, FLOW_DISSECTOR_KEY_ENC_IP)) {
-		struct flow_dissector_key_ip *ip;
-
-		ip = skb_flow_dissector_target(flow_dissector,
-					       FLOW_DISSECTOR_KEY_ENC_IP,
-					       target_container);
-		ip->tos = key->tos;
-		ip->ttl = key->ttl;
-	}
-
-	if (dissector_uses_key(flow_dissector, FLOW_DISSECTOR_KEY_ENC_OPTS)) {
-		struct flow_dissector_key_enc_opts *enc_opt;
-
-		enc_opt = skb_flow_dissector_target(flow_dissector,
-						    FLOW_DISSECTOR_KEY_ENC_OPTS,
-						    target_container);
-
-		if (info->options_len) {
-			enc_opt->len = info->options_len;
-			ip_tunnel_info_opts_get(enc_opt->data, info);
-			enc_opt->dst_opt_type = info->key.tun_flags &
-						TUNNEL_OPTIONS_PRESENT;
-		}
-	}
 }
-EXPORT_SYMBOL(skb_flow_dissect_tunnel_info);
 
 static enum flow_dissect_ret
 __skb_flow_dissect_mpls(const struct sk_buff *skb,
@@ -1006,6 +894,9 @@ bool __skb_flow_dissect(const struct net *net,
 		}
 		rcu_read_unlock();
 	}
+
+	__skb_flow_dissect_tunnel_info(skb, flow_dissector,
+				       target_container);
 
 	if (dissector_uses_key(flow_dissector,
 			       FLOW_DISSECTOR_KEY_ETH_ADDRS)) {
