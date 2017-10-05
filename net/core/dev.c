@@ -1855,7 +1855,6 @@ static int call_netdevice_notifiers_info(unsigned long val,
 	int ret;
 
 	ASSERT_RTNL();
-	netdev_notifier_info_init(info, dev);
 
 	/* Run per-netns notifier block chain first, then run the global one.
 	 * Hopefully, one day, the global one is going to be removed after
