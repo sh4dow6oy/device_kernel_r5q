@@ -430,6 +430,7 @@ perf_ftrace_function_call(unsigned long ip, unsigned long parent_ip,
 {
 	struct perf_event *event;
 	struct ftrace_entry *entry;
+	struct perf_event *event;
 	struct hlist_head head;
 	struct pt_regs regs;
 	int rctx;
@@ -472,7 +473,7 @@ static int perf_ftrace_function_register(struct perf_event *event)
 {
 	struct ftrace_ops *ops = &event->ftrace_ops;
 
-	ops->flags   = FTRACE_OPS_FL_RCU;
+	ops->flags   |= FTRACE_OPS_FL_RCU;
 	ops->func    = perf_ftrace_function_call;
 	ops->private = (void *)(unsigned long)nr_cpu_ids;
 
