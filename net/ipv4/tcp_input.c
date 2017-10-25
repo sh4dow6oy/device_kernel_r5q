@@ -76,6 +76,8 @@
 #include <linux/ipsec.h>
 #include <asm/unaligned.h>
 #include <linux/errqueue.h>
+#include <linux/unaligned/access_ok.h>
+#include <linux/static_key.h>
 #include <linux/jump_label_ratelimit.h>
 #include <net/busy_poll.h>
 
@@ -4034,7 +4036,7 @@ static u16 tcp_parse_mss_option(const struct tcphdr *th, u16 user_mss)
 	return mss;
 }
 
-static bool smc_parse_options(const struct tcphdr *th,
+static void smc_parse_options(const struct tcphdr *th,
 			      struct tcp_options_received *opt_rx,
 			      const unsigned char *ptr,
 			      int opsize)
@@ -4043,13 +4045,10 @@ static bool smc_parse_options(const struct tcphdr *th,
 	if (static_branch_unlikely(&tcp_have_smc)) {
 		if (th->syn && !(opsize & 1) &&
 		    opsize >= TCPOLEN_EXP_SMC_BASE &&
-		    get_unaligned_be32(ptr) == TCPOPT_SMC_MAGIC) {
+		    get_unaligned_be32(ptr) == TCPOPT_SMC_MAGIC)
 			opt_rx->smc_ok = 1;
-			return true;
-		}
 	}
 #endif
-	return false;
 }
 
 /* Look for tcp options. Normally only called on SYN and SYNACK packets.
@@ -4173,13 +4172,9 @@ void tcp_parse_options(const struct net *net,
 					tcp_parse_fastopen_option(opsize -
 						TCPOLEN_EXP_FASTOPEN_BASE,
 						ptr + 2, th->syn, foc, true);
-					break;
-				}
-
-				if (smc_parse_options(th, opt_rx, ptr, opsize))
-					break;
-
-				opt_rx->saw_unknown = 1;
+				else
+					smc_parse_options(th, opt_rx, ptr,
+							  opsize);
 				break;
 
 			default:
@@ -6188,6 +6183,16 @@ static bool tcp_rcv_fastopen_synack(struct sock *sk, struct sk_buff *synack,
 	tcp_fastopen_add_skb(sk, synack);
 
 	return false;
+}
+
+static void smc_check_reset_syn(struct tcp_sock *tp)
+{
+#if IS_ENABLED(CONFIG_SMC)
+	if (static_branch_unlikely(&tcp_have_smc)) {
+		if (tp->syn_smc && !tp->rx_opt.smc_ok)
+			tp->syn_smc = 0;
+	}
+#endif
 }
 
 static void tcp_try_undo_spurious_syn(struct sock *sk)
