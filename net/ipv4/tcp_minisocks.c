@@ -618,10 +618,14 @@ struct sock *tcp_create_openreq_child(const struct sock *sk,
 		newtp->rx_opt.mss_clamp = req->mss;
 		tcp_ecn_openreq_child(newtp, req);
 		newtp->fastopen_req = NULL;
-		RCU_INIT_POINTER(newtp->fastopen_rsk, NULL);
-
-		bpf_skops_init_child(sk, newsk);
-		tcp_bpf_clone(sk, newsk);
+		newtp->fastopen_rsk = NULL;
+		newtp->syn_data_acked = 0;
+		newtp->rack.mstamp = 0;
+		newtp->rack.advanced = 0;
+		newtp->rack.reo_wnd_steps = 1;
+		newtp->rack.last_delivered = 0;
+		newtp->rack.reo_wnd_persist = 0;
+		newtp->rack.dsack_seen = 0;
 
 		tcp_bpf_clone(sk, newsk);
 
