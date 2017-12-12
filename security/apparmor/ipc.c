@@ -215,7 +215,6 @@ int aa_may_signal(struct aa_label *sender, struct aa_label *target, int sig)
 	DEFINE_AUDIT_DATA(sa, LSM_AUDIT_DATA_NONE, OP_SIGNAL);
 
 	aad(&sa)->signal = map_signal_num(sig);
-	aad(&sa)->unmappedsig = sig;
 	return xcheck_labels(sender, target, profile,
 			profile_signal_perm(profile, target, MAY_WRITE, &sa),
 			profile_signal_perm(profile, sender, MAY_READ, &sa));
