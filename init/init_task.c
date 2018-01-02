@@ -44,6 +44,12 @@ static struct sighand_struct init_sighand = {
 	.signalfd_wqh	= __WAIT_QUEUE_HEAD_INITIALIZER(init_sighand.signalfd_wqh),
 };
 
+/* Initial task structure */
+struct task_struct init_task
+#ifdef CONFIG_ARCH_TASK_STRUCT_ON_STACK
+	__init_task_data
+#endif
+	= INIT_TASK(init_task);
 EXPORT_SYMBOL(init_task);
 
 #ifdef CONFIG_SHADOW_CALL_STACK
