@@ -188,7 +188,7 @@ static bool is_axreg(u32 reg)
 	return reg == BPF_REG_0;
 }
 
-/* Add modifiers if 'reg' maps to x86-64 registers R8..R15 */
+/* add modifiers if 'reg' maps to x64 registers r8..r15 */
 static u8 add_1mod(u8 byte, u32 reg)
 {
 	if (is_ereg(reg))
@@ -863,8 +863,7 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image,
 			else if (is_ereg(dst_reg))
 				EMIT1(add_1mod(0x40, dst_reg));
 
-			/*
-			 * b3 holds 'normal' opcode, b2 short form only valid
+			/* b3 holds 'normal' opcode, b2 short form only valid
 			 * in case dst is eax/rax.
 			 */
 			switch (BPF_OP(insn->code)) {
