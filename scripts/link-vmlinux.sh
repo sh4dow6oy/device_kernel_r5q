@@ -55,16 +55,16 @@ info()
 #
 archive_builtin()
 {
-	info AR built-in.a
-	rm -f built-in.a;
-	${AR} rcsTP${KBUILD_ARFLAGS} built-in.a			\
+	info AR built-in.o
+	rm -f built-in.o;
+	${AR} rcsTP${KBUILD_ARFLAGS} built-in.o			\
 				${KBUILD_VMLINUX_INIT}		\
 				${KBUILD_VMLINUX_MAIN}
 
 	if [ -n "${CONFIG_LTO_CLANG}" ]; then
-		mv -f built-in.a built-in.a.tmp
-		${LLVM_AR} rcsT${KBUILD_ARFLAGS} built-in.a $(${AR} t built-in.a.tmp)
-		rm -f built-in.a.tmp
+		mv -f built-in.o built-in.o.tmp
+		${LLVM_AR} rcsT${KBUILD_ARFLAGS} built-in.o $(${AR} t built-in.o.tmp)
+		rm -f built-in.o.tmp
 	fi
 }
 
@@ -101,7 +101,7 @@ modpost_link()
 	local objects
 
 	objects="--whole-archive				\
-		built-in.a					\
+		built-in.o					\
 		--no-whole-archive				\
 		--start-group					\
 		${KBUILD_VMLINUX_LIBS}				\
@@ -150,7 +150,7 @@ vmlinux_link()
 
 		if [ -z "${CONFIG_LTO_CLANG}" ]; then
 			objects="--whole-archive		\
-				built-in.a			\
+				built-in.o			\
 				--no-whole-archive		\
 				--start-group			\
 				${KBUILD_VMLINUX_LIBS}		\
@@ -167,7 +167,7 @@ vmlinux_link()
 			-T ${lds} ${objects}
 	else
 		objects="-Wl,--whole-archive			\
-			built-in.a				\
+			built-in.o				\
 			-Wl,--no-whole-archive			\
 			-Wl,--start-group			\
 			${KBUILD_VMLINUX_LIBS}			\
