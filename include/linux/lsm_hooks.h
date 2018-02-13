@@ -1742,6 +1742,12 @@ union security_list_options {
 	int (*tun_dev_attach_queue)(void *security);
 	int (*tun_dev_attach)(struct sock *sk, void *security);
 	int (*tun_dev_open)(void *security);
+	int (*sctp_assoc_request)(struct sctp_endpoint *ep,
+				  struct sk_buff *skb);
+	int (*sctp_bind_connect)(struct sock *sk, int optname,
+				 struct sockaddr *address, int addrlen);
+	void (*sctp_sk_clone)(struct sctp_endpoint *ep, struct sock *sk,
+			      struct sock *newsk);
 #endif	/* CONFIG_SECURITY_NETWORK */
 
 #ifdef CONFIG_SECURITY_INFINIBAND
@@ -2004,6 +2010,9 @@ struct security_hook_heads {
 	struct hlist_head tun_dev_attach_queue;
 	struct hlist_head tun_dev_attach;
 	struct hlist_head tun_dev_open;
+	struct hlist_head sctp_assoc_request;
+	struct hlist_head sctp_bind_connect;
+	struct hlist_head sctp_sk_clone;
 #endif	/* CONFIG_SECURITY_NETWORK */
 #ifdef CONFIG_SECURITY_INFINIBAND
 	struct hlist_head ib_pkey_access;
