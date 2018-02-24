@@ -707,224 +707,66 @@ static void emit_mov_imm64(u8 **pprog, u32 dst_reg,
 	*pprog = prog;
 }
 
-static void emit_mov_reg(u8 **pprog, bool is64, u32 dst_reg, u32 src_reg)
+static void emit_mov_imm32(u8 **pprog, bool sign_propagate,
+			   u32 dst_reg, const u32 imm32)
 {
 	u8 *prog = *pprog;
+	u8 b1, b2, b3;
 	int cnt = 0;
 
-	if (is64) {
-		/* mov dst, src */
-		EMIT_mov(dst_reg, src_reg);
-	} else {
-		/* mov32 dst, src */
-		if (is_ereg(dst_reg) || is_ereg(src_reg))
-			EMIT1(add_2mod(0x40, dst_reg, src_reg));
-		EMIT2(0x89, add_2reg(0xC0, dst_reg, src_reg));
-	}
-
-	*pprog = prog;
-}
-
-/* LDX: dst_reg = *(u8*)(src_reg + off) */
-static void emit_ldx(u8 **pprog, u32 size, u32 dst_reg, u32 src_reg, int off)
-{
-	u8 *prog = *pprog;
-	int cnt = 0;
-
-	switch (size) {
-	case BPF_B:
-		/* Emit 'movzx rax, byte ptr [rax + off]' */
-		EMIT3(add_2mod(0x48, src_reg, dst_reg), 0x0F, 0xB6);
-		break;
-	case BPF_H:
-		/* Emit 'movzx rax, word ptr [rax + off]' */
-		EMIT3(add_2mod(0x48, src_reg, dst_reg), 0x0F, 0xB7);
-		break;
-	case BPF_W:
-		/* Emit 'mov eax, dword ptr [rax+0x14]' */
-		if (is_ereg(dst_reg) || is_ereg(src_reg))
-			EMIT2(add_2mod(0x40, src_reg, dst_reg), 0x8B);
-		else
-			EMIT1(0x8B);
-		break;
-	case BPF_DW:
-		/* Emit 'mov rax, qword ptr [rax+0x14]' */
-		EMIT2(add_2mod(0x48, src_reg, dst_reg), 0x8B);
-		break;
-	}
-	/*
-	 * If insn->off == 0 we can save one extra byte, but
-	 * special case of x86 R13 which always needs an offset
-	 * is not worth the hassle
+	/* optimization: if imm32 is positive, use 'mov %eax, imm32'
+	 * (which zero-extends imm32) to save 2 bytes.
 	 */
-	if (is_imm8(off))
-		EMIT2(add_2reg(0x40, src_reg, dst_reg), off);
-	else
-		EMIT1_off32(add_2reg(0x80, src_reg, dst_reg), off);
+	if (sign_propagate && (s32)imm32 < 0) {
+		/* 'mov %rax, imm32' sign extends imm32 */
+		b1 = add_1mod(0x48, dst_reg);
+		b2 = 0xC7;
+		b3 = 0xC0;
+		EMIT3_off32(b1, b2, add_1reg(b3, dst_reg), imm32);
+		goto done;
+	}
+
+	/* optimization: if imm32 is zero, use 'xor %eax, %eax'
+	 * to save 3 bytes.
+	 */
+	if (imm32 == 0) {
+		if (is_ereg(dst_reg))
+			EMIT1(add_2mod(0x40, dst_reg, dst_reg));
+		b2 = 0x31; /* xor */
+		b3 = 0xC0;
+		EMIT2(b2, add_2reg(b3, dst_reg, dst_reg));
+		goto done;
+	}
+
+	/* mov %eax, imm32 */
+	if (is_ereg(dst_reg))
+		EMIT1(add_1mod(0x40, dst_reg));
+	EMIT1_off32(add_1reg(0xB8, dst_reg), imm32);
+done:
 	*pprog = prog;
 }
 
-/* STX: *(u8*)(dst_reg + off) = src_reg */
-static void emit_stx(u8 **pprog, u32 size, u32 dst_reg, u32 src_reg, int off)
+static void emit_mov_imm64(u8 **pprog, u32 dst_reg,
+			   const u32 imm32_hi, const u32 imm32_lo)
 {
 	u8 *prog = *pprog;
 	int cnt = 0;
 
-	switch (size) {
-	case BPF_B:
-		/* Emit 'mov byte ptr [rax + off], al' */
-		if (is_ereg(dst_reg) || is_ereg(src_reg) ||
-		    /* We have to add extra byte for x86 SIL, DIL regs */
-		    src_reg == BPF_REG_1 || src_reg == BPF_REG_2)
-			EMIT2(add_2mod(0x40, dst_reg, src_reg), 0x88);
-		else
-			EMIT1(0x88);
-		break;
-	case BPF_H:
-		if (is_ereg(dst_reg) || is_ereg(src_reg))
-			EMIT3(0x66, add_2mod(0x40, dst_reg, src_reg), 0x89);
-		else
-			EMIT2(0x66, 0x89);
-		break;
-	case BPF_W:
-		if (is_ereg(dst_reg) || is_ereg(src_reg))
-			EMIT2(add_2mod(0x40, dst_reg, src_reg), 0x89);
-		else
-			EMIT1(0x89);
-		break;
-	case BPF_DW:
-		EMIT2(add_2mod(0x48, dst_reg, src_reg), 0x89);
-		break;
+	if (is_uimm32(((u64)imm32_hi << 32) | (u32)imm32_lo)) {
+		/* For emitting plain u32, where sign bit must not be
+		 * propagated LLVM tends to load imm64 over mov32
+		 * directly, so save couple of bytes by just doing
+		 * 'mov %eax, imm32' instead.
+		 */
+		emit_mov_imm32(&prog, false, dst_reg, imm32_lo);
+	} else {
+		/* movabsq %rax, imm64 */
+		EMIT2(add_1mod(0x48, dst_reg), add_1reg(0xB8, dst_reg));
+		EMIT(imm32_lo, 4);
+		EMIT(imm32_hi, 4);
 	}
-	if (is_imm8(off))
-		EMIT2(add_2reg(0x40, dst_reg, src_reg), off);
-	else
-		EMIT1_off32(add_2reg(0x80, dst_reg, src_reg), off);
+
 	*pprog = prog;
-}
-
-static int emit_patch(u8 **pprog, void *func, void *ip, u8 opcode)
-{
-	u8 *prog = *pprog;
-	int cnt = 0;
-	s64 offset;
-
-	offset = func - (ip + X86_PATCH_SIZE);
-	if (!is_simm32(offset)) {
-		pr_err("Target call %p is out of range\n", func);
-		return -EINVAL;
-	}
-	EMIT1_off32(opcode, offset);
-	*pprog = prog;
-	return 0;
-}
-
-static int emit_call(u8 **pprog, void *func, void *ip)
-{
-	return emit_patch(pprog, func, ip, 0xE8);
-}
-
-static int emit_jump(u8 **pprog, void *func, void *ip)
-{
-	return emit_patch(pprog, func, ip, 0xE9);
-}
-
-int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type t,
-		       void *old_addr, void *new_addr)
-{
-	int (*emit_patch_fn)(u8 **pprog, void *func, void *ip);
-	u8 old_insn[X86_PATCH_SIZE] = {};
-	u8 new_insn[X86_PATCH_SIZE] = {};
-	u8 *prog;
-	int ret;
-
-	if (!is_kernel_text((long)ip) &&
-	    !is_bpf_text_address((long)ip))
-		/* BPF poking in modules is not supported */
-		return -EINVAL;
-
-	switch (t) {
-	case BPF_MOD_NOP_TO_CALL ... BPF_MOD_CALL_TO_NOP:
-		emit_patch_fn = emit_call;
-		break;
-	case BPF_MOD_NOP_TO_JUMP ... BPF_MOD_JUMP_TO_NOP:
-		emit_patch_fn = emit_jump;
-		break;
-	default:
-		return -ENOTSUPP;
-	}
-
-	if (old_addr) {
-		prog = old_insn;
-		ret = emit_patch_fn(&prog, old_addr, (void *)ip);
-		if (ret)
-			return ret;
-	}
-	if (new_addr) {
-		prog = new_insn;
-		ret = emit_patch_fn(&prog, new_addr, (void *)ip);
-		if (ret)
-			return ret;
-	}
-
-	ret = -EBUSY;
-	mutex_lock(&text_mutex);
-	switch (t) {
-	case BPF_MOD_NOP_TO_CALL:
-	case BPF_MOD_NOP_TO_JUMP:
-		if (memcmp(ip, ideal_nops[NOP_ATOMIC5], X86_PATCH_SIZE))
-			goto out;
-		text_poke_bp(ip, new_insn, X86_PATCH_SIZE, NULL);
-		break;
-	case BPF_MOD_CALL_TO_CALL:
-	case BPF_MOD_JUMP_TO_JUMP:
-		if (memcmp(ip, old_insn, X86_PATCH_SIZE))
-			goto out;
-		text_poke_bp(ip, new_insn, X86_PATCH_SIZE, NULL);
-		break;
-	case BPF_MOD_CALL_TO_NOP:
-	case BPF_MOD_JUMP_TO_NOP:
-		if (memcmp(ip, old_insn, X86_PATCH_SIZE))
-			goto out;
-		text_poke_bp(ip, ideal_nops[NOP_ATOMIC5], X86_PATCH_SIZE,
-			     NULL);
-		break;
-	}
-	ret = 0;
-out:
-	mutex_unlock(&text_mutex);
-	return ret;
-}
-
-static bool ex_handler_bpf(const struct exception_table_entry *x,
-			   struct pt_regs *regs, int trapnr,
-			   unsigned long error_code, unsigned long fault_addr)
-{
-	u32 reg = x->fixup >> 8;
-
-	/* jump over faulting load and clear dest register */
-	*(unsigned long *)((void *)regs + reg) = 0;
-	regs->ip += x->fixup & 0xff;
-	return true;
-}
-
-static void detect_reg_usage(struct bpf_insn *insn, int insn_cnt,
-			     bool *regs_used, bool *tail_call_seen)
-{
-	int i;
-
-	for (i = 1; i <= insn_cnt; i++, insn++) {
-		if (insn->code == (BPF_JMP | BPF_TAIL_CALL))
-			*tail_call_seen = true;
-		if (insn->dst_reg == BPF_REG_6 || insn->src_reg == BPF_REG_6)
-			regs_used[0] = true;
-		if (insn->dst_reg == BPF_REG_7 || insn->src_reg == BPF_REG_7)
-			regs_used[1] = true;
-		if (insn->dst_reg == BPF_REG_8 || insn->src_reg == BPF_REG_8)
-			regs_used[2] = true;
-		if (insn->dst_reg == BPF_REG_9 || insn->src_reg == BPF_REG_9)
-			regs_used[3] = true;
-	}
 }
 
 static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image,
@@ -1155,7 +997,9 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image,
 			if (BPF_SRC(insn->code) == BPF_X)
 				emit_mov_reg(&prog, is64, BPF_REG_0, src_reg);
 			else
-				emit_mov_imm32(&prog, is64, BPF_REG_0, imm32);
+				/* mov rax, imm32 */
+				emit_mov_imm32(&prog, true,
+					       BPF_REG_0, imm32);
 
 			if (is64)
 				EMIT1(add_1mod(0x48, AUX_REG));
