@@ -236,19 +236,61 @@ struct jit_context {
 /* Number of bytes that will be skipped on tailcall */
 #define X86_TAIL_CALL_OFFSET	11
 
-static void push_callee_regs(u8 **pprog, bool *callee_regs_used)
+#define PROLOGUE_SIZE 37
+
+/* emit x64 prologue code for BPF program and check it's size.
+ * bpf_tail_call helper will skip it while jumping into another program
+ */
+static void emit_prologue(u8 **pprog, u32 stack_depth, bool ebpf_from_cbpf)
 {
 	u8 *prog = *pprog;
 	int cnt = 0;
 
-	if (callee_regs_used[0])
-		EMIT1(0x53);         /* push rbx */
-	if (callee_regs_used[1])
-		EMIT2(0x41, 0x55);   /* push r13 */
-	if (callee_regs_used[2])
-		EMIT2(0x41, 0x56);   /* push r14 */
-	if (callee_regs_used[3])
-		EMIT2(0x41, 0x57);   /* push r15 */
+	EMIT1(0x55); /* push rbp */
+	EMIT3(0x48, 0x89, 0xE5); /* mov rbp,rsp */
+
+	/* sub rsp, rounded_stack_depth + AUX_STACK_SPACE */
+	EMIT3_off32(0x48, 0x81, 0xEC,
+		    round_up(stack_depth, 8) + AUX_STACK_SPACE);
+
+	/* sub rbp, AUX_STACK_SPACE */
+	EMIT4(0x48, 0x83, 0xED, AUX_STACK_SPACE);
+
+	/* all classic BPF filters use R6(rbx) save it */
+
+	/* mov qword ptr [rbp+0],rbx */
+	EMIT4(0x48, 0x89, 0x5D, 0);
+
+	/* bpf_convert_filter() maps classic BPF register X to R7 and uses R8
+	 * as temporary, so all tcpdump filters need to spill/fill R7(r13) and
+	 * R8(r14). R9(r15) spill could be made conditional, but there is only
+	 * one 'bpf_error' return path out of helper functions inside bpf_jit.S
+	 * The overhead of extra spill is negligible for any filter other
+	 * than synthetic ones. Therefore not worth adding complexity.
+	 */
+
+	/* mov qword ptr [rbp+8],r13 */
+	EMIT4(0x4C, 0x89, 0x6D, 8);
+	/* mov qword ptr [rbp+16],r14 */
+	EMIT4(0x4C, 0x89, 0x75, 16);
+	/* mov qword ptr [rbp+24],r15 */
+	EMIT4(0x4C, 0x89, 0x7D, 24);
+
+	if (!ebpf_from_cbpf) {
+		/* Clear the tail call counter (tail_call_cnt): for eBPF tail
+		 * calls we need to reset the counter to 0. It's done in two
+		 * instructions, resetting rax register to 0, and moving it
+		 * to the counter location.
+		 */
+
+		/* xor eax, eax */
+		EMIT2(0x31, 0xc0);
+		/* mov qword ptr [rbp+32], rax */
+		EMIT4(0x48, 0x89, 0x45, 32);
+
+		BUILD_BUG_ON(cnt != PROLOGUE_SIZE);
+	}
+
 	*pprog = prog;
 }
 
@@ -899,8 +941,8 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image,
 	int proglen = 0;
 	u8 *prog = temp;
 
-	detect_reg_usage(insn, insn_cnt, callee_regs_used,
-			 &tail_call_seen);
+	emit_prologue(&prog, bpf_prog->aux->stack_depth,
+		      bpf_prog_was_classic(bpf_prog));
 
 	/* tail call's presence in current prog implies it is reachable */
 	tail_call_reachable |= tail_call_seen;
