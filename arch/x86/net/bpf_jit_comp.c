@@ -982,9 +982,6 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image,
 		case BPF_ALU | BPF_MUL | BPF_X:
 		case BPF_ALU64 | BPF_MUL | BPF_K:
 		case BPF_ALU64 | BPF_MUL | BPF_X:
-		{
-			bool is64 = BPF_CLASS(insn->code) == BPF_ALU64;
-
 			if (dst_reg != BPF_REG_0)
 				EMIT1(0x50); /* push rax */
 			if (dst_reg != BPF_REG_3)
