@@ -769,6 +769,24 @@ static void emit_mov_imm64(u8 **pprog, u32 dst_reg,
 	*pprog = prog;
 }
 
+static void emit_mov_reg(u8 **pprog, bool is64, u32 dst_reg, u32 src_reg)
+{
+	u8 *prog = *pprog;
+	int cnt = 0;
+
+	if (is64) {
+		/* mov dst, src */
+		EMIT_mov(dst_reg, src_reg);
+	} else {
+		/* mov32 dst, src */
+		if (is_ereg(dst_reg) || is_ereg(src_reg))
+			EMIT1(add_2mod(0x40, dst_reg, src_reg));
+		EMIT2(0x89, add_2reg(0xC0, dst_reg, src_reg));
+	}
+
+	*pprog = prog;
+}
+
 static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image,
 		  int oldproglen, struct jit_context *ctx)
 {
@@ -982,6 +1000,9 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image,
 		case BPF_ALU | BPF_MUL | BPF_X:
 		case BPF_ALU64 | BPF_MUL | BPF_K:
 		case BPF_ALU64 | BPF_MUL | BPF_X:
+		{
+			bool is64 = BPF_CLASS(insn->code) == BPF_ALU64;
+
 			if (dst_reg != BPF_REG_0)
 				EMIT1(0x50); /* push rax */
 			if (dst_reg != BPF_REG_3)
@@ -993,9 +1014,7 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image,
 			if (BPF_SRC(insn->code) == BPF_X)
 				emit_mov_reg(&prog, is64, BPF_REG_0, src_reg);
 			else
-				/* mov rax, imm32 */
-				emit_mov_imm32(&prog, true,
-					       BPF_REG_0, imm32);
+				emit_mov_imm32(&prog, is64, BPF_REG_0, imm32);
 
 			if (is64)
 				EMIT1(add_1mod(0x48, AUX_REG));
@@ -1013,7 +1032,7 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image,
 			}
 			break;
 		}
-			/* Shifts */
+			/* shifts */
 		case BPF_ALU | BPF_LSH | BPF_K:
 		case BPF_ALU | BPF_RSH | BPF_K:
 		case BPF_ALU | BPF_ARSH | BPF_K:
