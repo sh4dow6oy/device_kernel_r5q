@@ -13,13 +13,18 @@
 #include <linux/filter.h>
 #include <linux/if_vlan.h>
 #include <linux/bpf.h>
-#include <linux/memory.h>
-#include <linux/sort.h>
-#include <asm/extable.h>
+
 #include <asm/set_memory.h>
 #include <asm/nospec-branch.h>
-#include <asm/text-patching.h>
-#include <asm/asm-prototypes.h>
+
+/*
+ * assembly code in arch/x86/net/bpf_jit.S
+ */
+extern u8 sk_load_word[], sk_load_half[], sk_load_byte[];
+extern u8 sk_load_word_positive_offset[], sk_load_half_positive_offset[];
+extern u8 sk_load_byte_positive_offset[];
+extern u8 sk_load_word_negative_offset[], sk_load_half_negative_offset[];
+extern u8 sk_load_byte_negative_offset[];
 
 static u8 *emit_code(u8 *ptr, u32 bytes, unsigned int len)
 {
@@ -102,7 +107,10 @@ static int bpf_size_to_x86_bytes(int bpf_size)
 #define X86_JLE 0x7E
 #define X86_JG  0x7F
 
-/* Pick a register outside of BPF range for JIT internal work */
+#define CHOOSE_LOAD_FUNC(K, func) \
+	((int)K < 0 ? ((int)K >= SKF_LL_OFF ? func##_negative_offset : func) : func##_positive_offset)
+
+/* pick a register outside of BPF range for JIT internal work */
 #define AUX_REG (MAX_BPF_JIT_REG + 1)
 #define X86_REG_R9 (MAX_BPF_JIT_REG + 2)
 
