@@ -316,6 +316,75 @@ void scm_detach_fds_compat(struct msghdr *kmsg, struct scm_cookie *scm)
 	__scm_destroy(scm);
 }
 
+/* allocate a 64-bit sock_fprog on the user stack for duration of syscall. */
+struct sock_fprog __user *get_compat_bpf_fprog(char __user *optval)
+{
+	struct compat_sock_fprog __user *fprog32 = (struct compat_sock_fprog __user *)optval;
+	struct sock_fprog __user *kfprog = compat_alloc_user_space(sizeof(struct sock_fprog));
+	struct compat_sock_fprog f32;
+	struct sock_fprog f;
+
+	if (copy_from_user(&f32, fprog32, sizeof(*fprog32)))
+		return NULL;
+	memset(&f, 0, sizeof(f));
+	f.len = f32.len;
+	f.filter = compat_ptr(f32.filter);
+	if (copy_to_user(kfprog, &f, sizeof(struct sock_fprog)))
+		return NULL;
+
+	return kfprog;
+}
+EXPORT_SYMBOL_GPL(get_compat_bpf_fprog);
+
+static int do_set_attach_filter(struct socket *sock, int level, int optname,
+				char __user *optval, unsigned int optlen)
+{
+	struct sock_fprog __user *kfprog;
+
+	kfprog = get_compat_bpf_fprog(optval);
+	if (!kfprog)
+		return -EFAULT;
+
+	return sock_setsockopt(sock, level, optname, (char __user *)kfprog,
+			      sizeof(struct sock_fprog));
+}
+
+static int do_set_sock_timeout(struct socket *sock, int level,
+		int optname, char __user *optval, unsigned int optlen)
+{
+	struct compat_timeval __user *up = (struct compat_timeval __user *)optval;
+	struct timeval ktime;
+	mm_segment_t old_fs;
+	int err;
+
+	if (optlen < sizeof(*up))
+		return -EINVAL;
+	if (!access_ok(VERIFY_READ, up, sizeof(*up)) ||
+	    __get_user(ktime.tv_sec, &up->tv_sec) ||
+	    __get_user(ktime.tv_usec, &up->tv_usec))
+		return -EFAULT;
+	old_fs = get_fs();
+	set_fs(KERNEL_DS);
+	err = sock_setsockopt(sock, level, optname, (char *)&ktime, sizeof(ktime));
+	set_fs(old_fs);
+
+	return err;
+}
+
+static int compat_sock_setsockopt(struct socket *sock, int level, int optname,
+				char __user *optval, unsigned int optlen)
+{
+	if (optname == SO_ATTACH_FILTER ||
+	    optname == SO_ATTACH_REUSEPORT_CBPF)
+		return do_set_attach_filter(sock, level, optname,
+					    optval, optlen);
+	if (!COMPAT_USE_64BIT_TIME &&
+	    (optname == SO_RCVTIMEO || optname == SO_SNDTIMEO))
+		return do_set_sock_timeout(sock, level, optname, optval, optlen);
+
+	return sock_setsockopt(sock, level, optname, optval, optlen);
+}
+
 static int __compat_sys_setsockopt(int fd, int level, int optname,
 				   char __user *optval, unsigned int optlen)
 {
@@ -345,6 +414,12 @@ static int __compat_sys_setsockopt(int fd, int level, int optname,
 
 COMPAT_SYSCALL_DEFINE5(setsockopt, int, fd, int, level, int, optname,
 		       char __user *, optval, unsigned int, optlen)
+{
+	return __compat_sys_setsockopt(fd, level, optname, optval, optlen);
+}
+
+static int do_get_sock_timeout(struct socket *sock, int level, int optname,
+		char __user *optval, int __user *optlen)
 {
 	return __compat_sys_setsockopt(fd, level, optname, optval, optlen);
 }
