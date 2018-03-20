@@ -2844,7 +2844,7 @@ int security_get_bools(struct selinux_state *state,
 	struct policydb *policydb;
 	int i, rc;
 
-	if (!selinux_initialized(state)) {
+	if (!state->initialized) {
 		*len = 0;
 		*names = NULL;
 		*values = NULL;
@@ -3184,7 +3184,7 @@ int security_get_classes(struct selinux_state *state,
 	struct policydb *policydb = &state->ss->policydb;
 	int rc;
 
-	if (!selinux_initialized(state)) {
+	if (!state->initialized) {
 		*nclasses = 0;
 		*classes = NULL;
 		return 0;
