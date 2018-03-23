@@ -31,11 +31,7 @@ TRACE_EVENT(initcall_start,
 	TP_ARGS(func),
 
 	TP_STRUCT__entry(
-		/*
-		 * Use field_struct to avoid is_signed_type()
-		 * comparison of a function pointer
-		 */
-		__field_struct(initcall_t, func)
+		__field(initcall_t, func)
 	),
 
 	TP_fast_assign(
@@ -52,12 +48,8 @@ TRACE_EVENT(initcall_finish,
 	TP_ARGS(func, ret),
 
 	TP_STRUCT__entry(
-		/*
-		 * Use field_struct to avoid is_signed_type()
-		 * comparison of a function pointer
-		 */
-		__field_struct(initcall_t,	func)
-		__field(int,			ret)
+		__field(initcall_t,	func)
+		__field(int,		ret)
 	),
 
 	TP_fast_assign(

@@ -107,6 +107,9 @@
 #define CREATE_TRACE_POINTS
 #include <trace/events/initcall.h>
 
+#define CREATE_TRACE_POINTS
+#include <trace/events/initcall.h>
+
 static int kernel_init(void *);
 
 extern void init_IRQ(void);
