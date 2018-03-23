@@ -5742,8 +5742,11 @@ static int selinux_msg_queue_alloc_security(struct kern_ipc_perm *msq)
 	u32 sid = current_sid();
 	int rc;
 
-	isec = selinux_ipc(msq);
-	ipc_init_security(isec, SECCLASS_MSGQ);
+	rc = ipc_alloc_security(msq, SECCLASS_MSGQ);
+	if (rc)
+		return rc;
+
+	isec = msq->security;
 
 	ad.type = LSM_AUDIT_DATA_IPC;
 	ad.u.ipc_id = msq->key;
@@ -5751,7 +5754,16 @@ static int selinux_msg_queue_alloc_security(struct kern_ipc_perm *msq)
 	rc = avc_has_perm(&selinux_state,
 			  sid, isec->sid, SECCLASS_MSGQ,
 			  MSGQ__CREATE, &ad);
-	return rc;
+	if (rc) {
+		ipc_free_security(msq);
+		return rc;
+	}
+	return 0;
+}
+
+static void selinux_msg_queue_free_security(struct kern_ipc_perm *msq)
+{
+	ipc_free_security(msq);
 }
 
 static int selinux_msg_queue_associate(struct kern_ipc_perm *msq, int msqflg)
@@ -5760,7 +5772,7 @@ static int selinux_msg_queue_associate(struct kern_ipc_perm *msq, int msqflg)
 	struct common_audit_data ad;
 	u32 sid = current_sid();
 
-	isec = selinux_ipc(msq);
+	isec = msq->security;
 
 	ad.type = LSM_AUDIT_DATA_IPC;
 	ad.u.ipc_id = msq->key;
@@ -5808,8 +5820,8 @@ static int selinux_msg_queue_msgsnd(struct kern_ipc_perm *msq, struct msg_msg *m
 	u32 sid = current_sid();
 	int rc;
 
-	isec = selinux_ipc(msq);
-	msec = selinux_msg_msg(msg);
+	isec = msq->security;
+	msec = msg->security;
 
 	/*
 	 * First time through, need to assign label to the message
@@ -5856,8 +5868,8 @@ static int selinux_msg_queue_msgrcv(struct kern_ipc_perm *msq, struct msg_msg *m
 	u32 sid = task_sid(target);
 	int rc;
 
-	isec = selinux_ipc(msq);
-	msec = selinux_msg_msg(msg);
+	isec = msq->security;
+	msec = msg->security;
 
 	ad.type = LSM_AUDIT_DATA_IPC;
 	ad.u.ipc_id = msq->key;

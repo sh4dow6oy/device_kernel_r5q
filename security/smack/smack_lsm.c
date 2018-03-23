@@ -3148,6 +3148,19 @@ static int smack_msg_queue_alloc_security(struct kern_ipc_perm *msq)
 }
 
 /**
+ * smack_msg_free_security - Clear the security blob for msg
+ * @msq: the object
+ *
+ * Clears the blob pointer
+ */
+static void smack_msg_queue_free_security(struct kern_ipc_perm *msq)
+{
+	struct kern_ipc_perm *kisp = msq;
+
+	kisp->security = NULL;
+}
+
+/**
  * smack_of_msq - the smack pointer for the msq
  * @msq: the object
  *
