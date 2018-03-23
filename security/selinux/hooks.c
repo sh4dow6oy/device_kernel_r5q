@@ -5964,8 +5964,11 @@ static int selinux_sem_alloc_security(struct kern_ipc_perm *sma)
 	u32 sid = current_sid();
 	int rc;
 
-	isec = selinux_ipc(sma);
-	ipc_init_security(isec, SECCLASS_SEM);
+	rc = ipc_alloc_security(sma, SECCLASS_SEM);
+	if (rc)
+		return rc;
+
+	isec = sma->security;
 
 	ad.type = LSM_AUDIT_DATA_IPC;
 	ad.u.ipc_id = sma->key;
@@ -5973,7 +5976,16 @@ static int selinux_sem_alloc_security(struct kern_ipc_perm *sma)
 	rc = avc_has_perm(&selinux_state,
 			  sid, isec->sid, SECCLASS_SEM,
 			  SEM__CREATE, &ad);
-	return rc;
+	if (rc) {
+		ipc_free_security(sma);
+		return rc;
+	}
+	return 0;
+}
+
+static void selinux_sem_free_security(struct kern_ipc_perm *sma)
+{
+	ipc_free_security(sma);
 }
 
 static int selinux_sem_associate(struct kern_ipc_perm *sma, int semflg)
@@ -5982,7 +5994,7 @@ static int selinux_sem_associate(struct kern_ipc_perm *sma, int semflg)
 	struct common_audit_data ad;
 	u32 sid = current_sid();
 
-	isec = selinux_ipc(sma);
+	isec = sma->security;
 
 	ad.type = LSM_AUDIT_DATA_IPC;
 	ad.u.ipc_id = sma->key;
