@@ -5892,8 +5892,11 @@ static int selinux_shm_alloc_security(struct kern_ipc_perm *shp)
 	u32 sid = current_sid();
 	int rc;
 
-	isec = selinux_ipc(shp);
-	ipc_init_security(isec, SECCLASS_SHM);
+	rc = ipc_alloc_security(shp, SECCLASS_SHM);
+	if (rc)
+		return rc;
+
+	isec = shp->security;
 
 	ad.type = LSM_AUDIT_DATA_IPC;
 	ad.u.ipc_id = shp->key;
@@ -5901,7 +5904,16 @@ static int selinux_shm_alloc_security(struct kern_ipc_perm *shp)
 	rc = avc_has_perm(&selinux_state,
 			  sid, isec->sid, SECCLASS_SHM,
 			  SHM__CREATE, &ad);
-	return rc;
+	if (rc) {
+		ipc_free_security(shp);
+		return rc;
+	}
+	return 0;
+}
+
+static void selinux_shm_free_security(struct kern_ipc_perm *shp)
+{
+	ipc_free_security(shp);
 }
 
 static int selinux_shm_associate(struct kern_ipc_perm *shp, int shmflg)
@@ -5910,7 +5922,7 @@ static int selinux_shm_associate(struct kern_ipc_perm *shp, int shmflg)
 	struct common_audit_data ad;
 	u32 sid = current_sid();
 
-	isec = selinux_ipc(shp);
+	isec = shp->security;
 
 	ad.type = LSM_AUDIT_DATA_IPC;
 	ad.u.ipc_id = shp->key;
