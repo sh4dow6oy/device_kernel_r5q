@@ -18,7 +18,7 @@
 #include <asm/nospec-branch.h>
 
 /*
- * assembly code in arch/x86/net/bpf_jit.S
+ * Assembly code in arch/x86/net/bpf_jit.S
  */
 extern u8 sk_load_word[], sk_load_half[], sk_load_byte[];
 extern u8 sk_load_word_positive_offset[], sk_load_half_positive_offset[];
@@ -110,7 +110,7 @@ static int bpf_size_to_x86_bytes(int bpf_size)
 #define CHOOSE_LOAD_FUNC(K, func) \
 	((int)K < 0 ? ((int)K >= SKF_LL_OFF ? func##_negative_offset : func) : func##_positive_offset)
 
-/* pick a register outside of BPF range for JIT internal work */
+/* Pick a register outside of BPF range for JIT internal work */
 #define AUX_REG (MAX_BPF_JIT_REG + 1)
 #define X86_REG_R9 (MAX_BPF_JIT_REG + 2)
 
@@ -121,8 +121,8 @@ static int bpf_size_to_x86_bytes(int bpf_size)
  * register in load/store instructions, it always needs an
  * extra byte of encoding and is callee saved.
  *
- * x86-64 register R9 is not used by BPF programs, but can be used by BPF
- * trampoline. x86-64 register R10 is used for blinding (if enabled).
+ * R9  caches skb->len - skb->data_len
+ * R10 caches skb->data, and used for blinding (if enabled)
  */
 static const int reg2hex[] = {
 	[BPF_REG_0] = 0,  /* RAX */
@@ -138,20 +138,6 @@ static const int reg2hex[] = {
 	[BPF_REG_FP] = 5, /* RBP readonly */
 	[BPF_REG_AX] = 2, /* R10 temp register */
 	[AUX_REG] = 3,    /* R11 temp register */
-	[X86_REG_R9] = 1, /* R9 register, 6th function argument */
-};
-
-static const int reg2pt_regs[] = {
-	[BPF_REG_0] = offsetof(struct pt_regs, ax),
-	[BPF_REG_1] = offsetof(struct pt_regs, di),
-	[BPF_REG_2] = offsetof(struct pt_regs, si),
-	[BPF_REG_3] = offsetof(struct pt_regs, dx),
-	[BPF_REG_4] = offsetof(struct pt_regs, cx),
-	[BPF_REG_5] = offsetof(struct pt_regs, r8),
-	[BPF_REG_6] = offsetof(struct pt_regs, bx),
-	[BPF_REG_7] = offsetof(struct pt_regs, r13),
-	[BPF_REG_8] = offsetof(struct pt_regs, r14),
-	[BPF_REG_9] = offsetof(struct pt_regs, r15),
 };
 
 /*
@@ -188,7 +174,7 @@ static bool is_axreg(u32 reg)
 	return reg == BPF_REG_0;
 }
 
-/* add modifiers if 'reg' maps to x64 registers r8..r15 */
+/* Add modifiers if 'reg' maps to x86-64 registers R8..R15 */
 static u8 add_1mod(u8 byte, u32 reg)
 {
 	if (is_ereg(reg))
@@ -225,20 +211,22 @@ static void jit_fill_hole(void *area, unsigned int size)
 
 struct jit_context {
 	int cleanup_addr; /* Epilogue code offset */
+	bool seen_ld_abs;
+	bool seen_ax_reg;
 };
 
 /* Maximum number of bytes emitted while JITing one eBPF insn */
 #define BPF_MAX_INSN_SIZE	128
 #define BPF_INSN_SAFETY		64
 
-/* Number of bytes emit_patch() needs to generate instructions */
-#define X86_PATCH_SIZE		5
-/* Number of bytes that will be skipped on tailcall */
-#define X86_TAIL_CALL_OFFSET	11
+#define AUX_STACK_SPACE \
+	(32 /* Space for RBX, R13, R14, R15 */ + \
+	  8 /* Space for skb_copy_bits() buffer */)
 
 #define PROLOGUE_SIZE 37
 
-/* emit x64 prologue code for BPF program and check it's size.
+/*
+ * Emit x86-64 prologue code for BPF program and check its size.
  * bpf_tail_call helper will skip it while jumping into another program
  */
 static void emit_prologue(u8 **pprog, u32 stack_depth, bool ebpf_from_cbpf)
@@ -246,8 +234,11 @@ static void emit_prologue(u8 **pprog, u32 stack_depth, bool ebpf_from_cbpf)
 	u8 *prog = *pprog;
 	int cnt = 0;
 
-	EMIT1(0x55); /* push rbp */
-	EMIT3(0x48, 0x89, 0xE5); /* mov rbp,rsp */
+	/* push rbp */
+	EMIT1(0x55);
+
+	/* mov rbp,rsp */
+	EMIT3(0x48, 0x89, 0xE5);
 
 	/* sub rsp, rounded_stack_depth + AUX_STACK_SPACE */
 	EMIT3_off32(0x48, 0x81, 0xEC,
@@ -256,14 +247,15 @@ static void emit_prologue(u8 **pprog, u32 stack_depth, bool ebpf_from_cbpf)
 	/* sub rbp, AUX_STACK_SPACE */
 	EMIT4(0x48, 0x83, 0xED, AUX_STACK_SPACE);
 
-	/* all classic BPF filters use R6(rbx) save it */
+	/* All classic BPF filters use R6(rbx) save it */
 
 	/* mov qword ptr [rbp+0],rbx */
 	EMIT4(0x48, 0x89, 0x5D, 0);
 
-	/* bpf_convert_filter() maps classic BPF register X to R7 and uses R8
-	 * as temporary, so all tcpdump filters need to spill/fill R7(r13) and
-	 * R8(r14). R9(r15) spill could be made conditional, but there is only
+	/*
+	 * bpf_convert_filter() maps classic BPF register X to R7 and uses R8
+	 * as temporary, so all tcpdump filters need to spill/fill R7(R13) and
+	 * R8(R14). R9(R15) spill could be made conditional, but there is only
 	 * one 'bpf_error' return path out of helper functions inside bpf_jit.S
 	 * The overhead of extra spill is negligible for any filter other
 	 * than synthetic ones. Therefore not worth adding complexity.
@@ -277,9 +269,10 @@ static void emit_prologue(u8 **pprog, u32 stack_depth, bool ebpf_from_cbpf)
 	EMIT4(0x4C, 0x89, 0x7D, 24);
 
 	if (!ebpf_from_cbpf) {
-		/* Clear the tail call counter (tail_call_cnt): for eBPF tail
+		/*
+		 * Clear the tail call counter (tail_call_cnt): for eBPF tail
 		 * calls we need to reset the counter to 0. It's done in two
-		 * instructions, resetting rax register to 0, and moving it
+		 * instructions, resetting RAX register to 0, and moving it
 		 * to the counter location.
 		 */
 
@@ -292,153 +285,6 @@ static void emit_prologue(u8 **pprog, u32 stack_depth, bool ebpf_from_cbpf)
 	}
 
 	*pprog = prog;
-}
-
-static void pop_callee_regs(u8 **pprog, bool *callee_regs_used)
-{
-	u8 *prog = *pprog;
-	int cnt = 0;
-
-	if (callee_regs_used[3])
-		EMIT2(0x41, 0x5F);   /* pop r15 */
-	if (callee_regs_used[2])
-		EMIT2(0x41, 0x5E);   /* pop r14 */
-	if (callee_regs_used[1])
-		EMIT2(0x41, 0x5D);   /* pop r13 */
-	if (callee_regs_used[0])
-		EMIT1(0x5B);         /* pop rbx */
-	*pprog = prog;
-}
-
-/*
- * Emit x86-64 prologue code for BPF program.
- * bpf_tail_call helper will skip the first X86_TAIL_CALL_OFFSET bytes
- * while jumping to another program
- */
-static void emit_prologue(u8 **pprog, u32 stack_depth, bool ebpf_from_cbpf,
-			  bool tail_call_reachable, bool is_subprog)
-{
-	u8 *prog = *pprog;
-	int cnt = X86_PATCH_SIZE;
-
-	/* BPF trampoline can be made to work without these nops,
-	 * but let's waste 5 bytes for now and optimize later
-	 */
-	memcpy(prog, ideal_nops[NOP_ATOMIC5], cnt);
-	prog += cnt;
-	if (!ebpf_from_cbpf) {
-		if (tail_call_reachable && !is_subprog)
-			EMIT2(0x31, 0xC0); /* xor eax, eax */
-		else
-			EMIT2(0x66, 0x90); /* nop2 */
-	}
-	EMIT1(0x55);             /* push rbp */
-	EMIT3(0x48, 0x89, 0xE5); /* mov rbp, rsp */
-	/* sub rsp, rounded_stack_depth */
-	EMIT3_off32(0x48, 0x81, 0xEC, round_up(stack_depth, 8));
-	if (tail_call_reachable)
-		EMIT1(0x50);         /* push rax */
-	*pprog = prog;
-}
-
-static int emit_patch(u8 **pprog, void *func, void *ip, u8 opcode)
-{
-	u8 *prog = *pprog;
-	int cnt = 0;
-	s64 offset;
-
-	offset = func - (ip + X86_PATCH_SIZE);
-	if (!is_simm32(offset)) {
-		pr_err("Target call %p is out of range\n", func);
-		return -ERANGE;
-	}
-	EMIT1_off32(opcode, offset);
-	*pprog = prog;
-	return 0;
-}
-
-static int emit_call(u8 **pprog, void *func, void *ip)
-{
-	return emit_patch(pprog, func, ip, 0xE8);
-}
-
-static int emit_jump(u8 **pprog, void *func, void *ip)
-{
-	return emit_patch(pprog, func, ip, 0xE9);
-}
-
-static int __bpf_arch_text_poke(void *ip, enum bpf_text_poke_type t,
-				void *old_addr, void *new_addr,
-				const bool text_live)
-{
-	const u8 *nop_insn = ideal_nops[NOP_ATOMIC5];
-	u8 old_insn[X86_PATCH_SIZE];
-	u8 new_insn[X86_PATCH_SIZE];
-	u8 *prog;
-	int ret;
-
-	memcpy(old_insn, nop_insn, X86_PATCH_SIZE);
-	if (old_addr) {
-		prog = old_insn;
-		ret = t == BPF_MOD_CALL ?
-		      emit_call(&prog, old_addr, ip) :
-		      emit_jump(&prog, old_addr, ip);
-		if (ret)
-			return ret;
-	}
-
-	memcpy(new_insn, nop_insn, X86_PATCH_SIZE);
-	if (new_addr) {
-		prog = new_insn;
-		ret = t == BPF_MOD_CALL ?
-		      emit_call(&prog, new_addr, ip) :
-		      emit_jump(&prog, new_addr, ip);
-		if (ret)
-			return ret;
-	}
-
-	ret = -EBUSY;
-	mutex_lock(&text_mutex);
-	if (memcmp(ip, old_insn, X86_PATCH_SIZE))
-		goto out;
-	ret = 1;
-	if (memcmp(ip, new_insn, X86_PATCH_SIZE)) {
-		if (text_live)
-			text_poke_bp(ip, new_insn, X86_PATCH_SIZE, NULL);
-		else
-			memcpy(ip, new_insn, X86_PATCH_SIZE);
-		ret = 0;
-	}
-out:
-	mutex_unlock(&text_mutex);
-	return ret;
-}
-
-int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type t,
-		       void *old_addr, void *new_addr)
-{
-	if (!is_kernel_text((long)ip) &&
-	    !is_bpf_text_address((long)ip))
-		/* BPF poking in modules is not supported */
-		return -EINVAL;
-
-	return __bpf_arch_text_poke(ip, t, old_addr, new_addr, true);
-}
-
-static int get_pop_bytes(bool *callee_regs_used)
-{
-	int bytes = 0;
-
-	if (callee_regs_used[3])
-		bytes += 2;
-	if (callee_regs_used[2])
-		bytes += 2;
-	if (callee_regs_used[1])
-		bytes += 2;
-	if (callee_regs_used[0])
-		bytes += 1;
-
-	return bytes;
 }
 
 /*
@@ -466,15 +312,6 @@ static void emit_bpf_tail_call_indirect(u8 **pprog, bool *callee_regs_used,
 	int off3 = 16;
 	int cnt = 0;
 
-	/* count the additional bytes used for popping callee regs from stack
-	 * that need to be taken into account for each of the offsets that
-	 * are used for bailing out of the tail call
-	 */
-	pop_bytes = get_pop_bytes(callee_regs_used);
-	off1 += pop_bytes;
-	off2 += pop_bytes;
-	off3 += pop_bytes;
-
 	/*
 	 * rdi - pointer to ctx
 	 * rsi - pointer to bpf_array
@@ -488,7 +325,7 @@ static void emit_bpf_tail_call_indirect(u8 **pprog, bool *callee_regs_used,
 	EMIT2(0x89, 0xD2);                        /* mov edx, edx */
 	EMIT3(0x39, 0x56,                         /* cmp dword ptr [rsi + 16], edx */
 	      offsetof(struct bpf_array, map.max_entries));
-#define OFFSET1 (off1 + RETPOLINE_RCX_BPF_JIT_SIZE) /* Number of bytes to jump */
+#define OFFSET1 (41 + RETPOLINE_RAX_BPF_JIT_SIZE) /* Number of bytes to jump */
 	EMIT2(X86_JBE, OFFSET1);                  /* jbe out */
 
 	/*
@@ -525,10 +362,10 @@ static void emit_bpf_tail_call_indirect(u8 **pprog, bool *callee_regs_used,
 	/* goto *(prog->bpf_func + X86_TAIL_CALL_OFFSET); */
 	EMIT4(0x48, 0x8B, 0x49,                   /* mov rcx, qword ptr [rcx + 32] */
 	      offsetof(struct bpf_prog, bpf_func));
-	EMIT4(0x48, 0x83, 0xC1,                   /* add rcx, X86_TAIL_CALL_OFFSET */
-	      X86_TAIL_CALL_OFFSET);
+	EMIT4(0x48, 0x83, 0xC0, PROLOGUE_SIZE);   /* add rax, prologue_size */
+
 	/*
-	 * Now we're ready to jump into next BPF program
+	 * Wow we're ready to jump into next BPF program
 	 * rdi == ctx (1st arg)
 	 * rcx == prog->bpf_func + X86_TAIL_CALL_OFFSET
 	 */
@@ -689,20 +526,12 @@ static void emit_mov_imm64(u8 **pprog, u32 dst_reg,
 	u8 *prog = *pprog;
 	int cnt = 0;
 
-	if (is_uimm32(((u64)imm32_hi << 32) | (u32)imm32_lo)) {
-		/*
-		 * For emitting plain u32, where sign bit must not be
-		 * propagated LLVM tends to load imm64 over mov32
-		 * directly, so save couple of bytes by just doing
-		 * 'mov %eax, imm32' instead.
-		 */
-		emit_mov_imm32(&prog, false, dst_reg, imm32_lo);
-	} else {
-		/* movabsq %rax, imm64 */
-		EMIT2(add_1mod(0x48, dst_reg), add_1reg(0xB8, dst_reg));
-		EMIT(imm32_lo, 4);
-		EMIT(imm32_hi, 4);
-	}
+	/*
+	 * r9d = skb->len - skb->data_len (headlen)
+	 * r10 = skb->data
+	 */
+	/* mov %r9d, off32(%rdi) */
+	EMIT3_off32(0x44, 0x8b, 0x8f, offsetof(struct sk_buff, len));
 
 	*pprog = prog;
 }
@@ -714,7 +543,8 @@ static void emit_mov_imm32(u8 **pprog, bool sign_propagate,
 	u8 b1, b2, b3;
 	int cnt = 0;
 
-	/* optimization: if imm32 is positive, use 'mov %eax, imm32'
+	/*
+	 * Optimization: if imm32 is positive, use 'mov %eax, imm32'
 	 * (which zero-extends imm32) to save 2 bytes.
 	 */
 	if (sign_propagate && (s32)imm32 < 0) {
@@ -726,7 +556,8 @@ static void emit_mov_imm32(u8 **pprog, bool sign_propagate,
 		goto done;
 	}
 
-	/* optimization: if imm32 is zero, use 'xor %eax, %eax'
+	/*
+	 * Optimization: if imm32 is zero, use 'xor %eax, %eax'
 	 * to save 3 bytes.
 	 */
 	if (imm32 == 0) {
@@ -753,7 +584,8 @@ static void emit_mov_imm64(u8 **pprog, u32 dst_reg,
 	int cnt = 0;
 
 	if (is_uimm32(((u64)imm32_hi << 32) | (u32)imm32_lo)) {
-		/* For emitting plain u32, where sign bit must not be
+		/*
+		 * For emitting plain u32, where sign bit must not be
 		 * propagated LLVM tends to load imm64 over mov32
 		 * directly, so save couple of bytes by just doing
 		 * 'mov %eax, imm32' instead.
@@ -881,7 +713,8 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image,
 			else if (is_ereg(dst_reg))
 				EMIT1(add_1mod(0x40, dst_reg));
 
-			/* b3 holds 'normal' opcode, b2 short form only valid
+			/*
+			 * b3 holds 'normal' opcode, b2 short form only valid
 			 * in case dst is eax/rax.
 			 */
 			switch (BPF_OP(insn->code)) {
@@ -1032,7 +865,7 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image,
 			}
 			break;
 		}
-			/* shifts */
+			/* Shifts */
 		case BPF_ALU | BPF_LSH | BPF_K:
 		case BPF_ALU | BPF_RSH | BPF_K:
 		case BPF_ALU | BPF_ARSH | BPF_K:
@@ -1190,6 +1023,12 @@ st:			if (is_imm8(insn->off))
 
 			/* STX: *(u8*)(dst_reg + off) = src_reg */
 		case BPF_STX | BPF_MEM | BPF_B:
+			/* Emit 'mov byte ptr [rax + off], al' */
+			if (is_ereg(dst_reg) || is_ereg_8l(src_reg))
+				EMIT2(add_2mod(0x40, dst_reg, src_reg), 0x88);
+			else
+				EMIT1(0x88);
+			goto stx;
 		case BPF_STX | BPF_MEM | BPF_H:
 		case BPF_STX | BPF_MEM | BPF_W:
 		case BPF_STX | BPF_MEM | BPF_DW:
@@ -1198,56 +1037,33 @@ st:			if (is_imm8(insn->off))
 
 			/* LDX: dst_reg = *(u8*)(src_reg + off) */
 		case BPF_LDX | BPF_MEM | BPF_B:
-		case BPF_LDX | BPF_PROBE_MEM | BPF_B:
+			/* Emit 'movzx rax, byte ptr [rax + off]' */
+			EMIT3(add_2mod(0x48, src_reg, dst_reg), 0x0F, 0xB6);
+			goto ldx;
 		case BPF_LDX | BPF_MEM | BPF_H:
-		case BPF_LDX | BPF_PROBE_MEM | BPF_H:
+			/* Emit 'movzx rax, word ptr [rax + off]' */
+			EMIT3(add_2mod(0x48, src_reg, dst_reg), 0x0F, 0xB7);
+			goto ldx;
 		case BPF_LDX | BPF_MEM | BPF_W:
-		case BPF_LDX | BPF_PROBE_MEM | BPF_W:
+			/* Emit 'mov eax, dword ptr [rax+0x14]' */
+			if (is_ereg(dst_reg) || is_ereg(src_reg))
+				EMIT2(add_2mod(0x40, src_reg, dst_reg), 0x8B);
+			else
+				EMIT1(0x8B);
+			goto ldx;
 		case BPF_LDX | BPF_MEM | BPF_DW:
-		case BPF_LDX | BPF_PROBE_MEM | BPF_DW:
-			emit_ldx(&prog, BPF_SIZE(insn->code), dst_reg, src_reg, insn->off);
-			if (BPF_MODE(insn->code) == BPF_PROBE_MEM) {
-				struct exception_table_entry *ex;
-				u8 *_insn = image + proglen;
-				s64 delta;
-
-				if (!bpf_prog->aux->extable)
-					break;
-
-				if (excnt >= bpf_prog->aux->num_exentries) {
-					pr_err("ex gen bug\n");
-					return -EFAULT;
-				}
-				ex = &bpf_prog->aux->extable[excnt++];
-
-				delta = _insn - (u8 *)&ex->insn;
-				if (!is_simm32(delta)) {
-					pr_err("extable->insn doesn't fit into 32-bit\n");
-					return -EFAULT;
-				}
-				ex->insn = delta;
-
-				delta = (u8 *)ex_handler_bpf - (u8 *)&ex->handler;
-				if (!is_simm32(delta)) {
-					pr_err("extable->handler doesn't fit into 32-bit\n");
-					return -EFAULT;
-				}
-				ex->handler = delta;
-
-				if (dst_reg > BPF_REG_9) {
-					pr_err("verifier error\n");
-					return -EFAULT;
-				}
-				/*
-				 * Compute size of x86 insn and its target dest x86 register.
-				 * ex_handler_bpf() will use lower 8 bits to adjust
-				 * pt_regs->ip to jump over this x86 instruction
-				 * and upper bits to figure out which pt_regs to zero out.
-				 * End result: x86 insn "mov rbx, qword ptr [rax+0x14]"
-				 * of 4 bytes will be ignored and rbx will be zero inited.
-				 */
-				ex->fixup = (prog - temp) | (reg2pt_regs[dst_reg] << 8);
-			}
+			/* Emit 'mov rax, qword ptr [rax+0x14]' */
+			EMIT2(add_2mod(0x48, src_reg, dst_reg), 0x8B);
+ldx:			/*
+			 * If insn->off == 0 we can save one extra byte, but
+			 * special case of x86 R13 which always needs an offset
+			 * is not worth the hassle
+			 */
+			if (is_imm8(insn->off))
+				EMIT2(add_2reg(0x40, src_reg, dst_reg), insn->off);
+			else
+				EMIT1_off32(add_2reg(0x80, src_reg, dst_reg),
+					    insn->off);
 			break;
 
 			/* STX XADD: lock *(u32*)(dst_reg + off) += src_reg */
@@ -1270,14 +1086,36 @@ xadd:			if (is_imm8(insn->off))
 			/* call */
 		case BPF_JMP | BPF_CALL:
 			func = (u8 *) __bpf_call_base + imm32;
-			if (tail_call_reachable) {
-				EMIT3_off32(0x48, 0x8B, 0x85,
-					    -(bpf_prog->aux->stack_depth + 8));
-				if (!imm32 || emit_call(&prog, func, image + addrs[i - 1] + 7))
-					return -EINVAL;
-			} else {
-				if (!imm32 || emit_call(&prog, func, image + addrs[i - 1]))
-					return -EINVAL;
+			jmp_offset = func - (image + addrs[i]);
+			if (seen_ld_abs) {
+				reload_skb_data = bpf_helper_changes_pkt_data(func);
+				if (reload_skb_data) {
+					EMIT1(0x57); /* push %rdi */
+					jmp_offset += 22; /* pop, mov, sub, mov */
+				} else {
+					EMIT2(0x41, 0x52); /* push %r10 */
+					EMIT2(0x41, 0x51); /* push %r9 */
+					/*
+					 * We need to adjust jmp offset, since
+					 * pop %r9, pop %r10 take 4 bytes after call insn
+					 */
+					jmp_offset += 4;
+				}
+			}
+			if (!imm32 || !is_simm32(jmp_offset)) {
+				pr_err("unsupported BPF func %d addr %p image %p\n",
+				       imm32, func, image);
+				return -EINVAL;
+			}
+			EMIT1_off32(0xE8, jmp_offset);
+			if (seen_ld_abs) {
+				if (reload_skb_data) {
+					EMIT1(0x5F); /* pop %rdi */
+					emit_load_skb_data_hlen(&prog);
+				} else {
+					EMIT2(0x41, 0x59); /* pop %r9 */
+					EMIT2(0x41, 0x5A); /* pop %r10 */
+				}
 			}
 			break;
 
@@ -1454,6 +1292,60 @@ emit_jmp:
 				return -EFAULT;
 			}
 			break;
+
+		case BPF_LD | BPF_IND | BPF_W:
+			func = sk_load_word;
+			goto common_load;
+		case BPF_LD | BPF_ABS | BPF_W:
+			func = CHOOSE_LOAD_FUNC(imm32, sk_load_word);
+common_load:
+			ctx->seen_ld_abs = seen_ld_abs = true;
+			jmp_offset = func - (image + addrs[i]);
+			if (!func || !is_simm32(jmp_offset)) {
+				pr_err("unsupported BPF func %d addr %p image %p\n",
+				       imm32, func, image);
+				return -EINVAL;
+			}
+			if (BPF_MODE(insn->code) == BPF_ABS) {
+				/* mov %esi, imm32 */
+				EMIT1_off32(0xBE, imm32);
+			} else {
+				/* mov %rsi, src_reg */
+				EMIT_mov(BPF_REG_2, src_reg);
+				if (imm32) {
+					if (is_imm8(imm32))
+						/* add %esi, imm8 */
+						EMIT3(0x83, 0xC6, imm32);
+					else
+						/* add %esi, imm32 */
+						EMIT2_off32(0x81, 0xC6, imm32);
+				}
+			}
+			/*
+			 * skb pointer is in R6 (%rbx), it will be copied into
+			 * %rdi if skb_copy_bits() call is necessary.
+			 * sk_load_* helpers also use %r10 and %r9d.
+			 * See bpf_jit.S
+			 */
+			if (seen_ax_reg)
+				/* r10 = skb->data, mov %r10, off32(%rbx) */
+				EMIT3_off32(0x4c, 0x8b, 0x93,
+					    offsetof(struct sk_buff, data));
+			EMIT1_off32(0xE8, jmp_offset); /* call */
+			break;
+
+		case BPF_LD | BPF_IND | BPF_H:
+			func = sk_load_half;
+			goto common_load;
+		case BPF_LD | BPF_ABS | BPF_H:
+			func = CHOOSE_LOAD_FUNC(imm32, sk_load_half);
+			goto common_load;
+		case BPF_LD | BPF_IND | BPF_B:
+			func = sk_load_byte;
+			goto common_load;
+		case BPF_LD | BPF_ABS | BPF_B:
+			func = CHOOSE_LOAD_FUNC(imm32, sk_load_byte);
+			goto common_load;
 
 		case BPF_JMP | BPF_EXIT:
 			if (seen_exit) {
