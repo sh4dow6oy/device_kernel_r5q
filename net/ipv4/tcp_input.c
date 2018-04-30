@@ -128,91 +128,22 @@ int sysctl_tcp_invalid_ratelimit __read_mostly = HZ/2;
 #define REXMIT_NEW	2 /* FRTO-style transmit of unsent/new packets */
 
 #if IS_ENABLED(CONFIG_TLS_DEVICE)
-static DEFINE_STATIC_KEY_DEFERRED_FALSE(clean_acked_data_enabled, HZ);
+static DEFINE_STATIC_KEY_FALSE(clean_acked_data_enabled);
 
 void clean_acked_data_enable(struct inet_connection_sock *icsk,
 			     void (*cad)(struct sock *sk, u32 ack_seq))
 {
 	icsk->icsk_clean_acked = cad;
-	static_branch_inc(&clean_acked_data_enabled.key);
+	static_branch_inc(&clean_acked_data_enabled);
 }
 EXPORT_SYMBOL_GPL(clean_acked_data_enable);
 
 void clean_acked_data_disable(struct inet_connection_sock *icsk)
 {
-	static_branch_slow_dec_deferred(&clean_acked_data_enabled);
+	static_branch_dec(&clean_acked_data_enabled);
 	icsk->icsk_clean_acked = NULL;
 }
 EXPORT_SYMBOL_GPL(clean_acked_data_disable);
-
-void clean_acked_data_flush(void)
-{
-	static_key_deferred_flush(&clean_acked_data_enabled);
-}
-EXPORT_SYMBOL_GPL(clean_acked_data_flush);
-#endif
-
-#ifdef CONFIG_CGROUP_BPF
-static void bpf_skops_parse_hdr(struct sock *sk, struct sk_buff *skb)
-{
-	bool unknown_opt = tcp_sk(sk)->rx_opt.saw_unknown &&
-		BPF_SOCK_OPS_TEST_FLAG(tcp_sk(sk),
-				       BPF_SOCK_OPS_PARSE_UNKNOWN_HDR_OPT_CB_FLAG);
-	bool parse_all_opt = BPF_SOCK_OPS_TEST_FLAG(tcp_sk(sk),
-						    BPF_SOCK_OPS_PARSE_ALL_HDR_OPT_CB_FLAG);
-	struct bpf_sock_ops_kern sock_ops;
-
-	if (likely(!unknown_opt && !parse_all_opt))
-		return;
-
-	/* The skb will be handled in the
-	 * bpf_skops_established() or
-	 * bpf_skops_write_hdr_opt().
-	 */
-	switch (sk->sk_state) {
-	case TCP_SYN_RECV:
-	case TCP_SYN_SENT:
-	case TCP_LISTEN:
-		return;
-	}
-
-	sock_owned_by_me(sk);
-
-	memset(&sock_ops, 0, offsetof(struct bpf_sock_ops_kern, temp));
-	sock_ops.op = BPF_SOCK_OPS_PARSE_HDR_OPT_CB;
-	sock_ops.is_fullsock = 1;
-	sock_ops.sk = sk;
-	bpf_skops_init_skb(&sock_ops, skb, tcp_hdrlen(skb));
-
-	BPF_CGROUP_RUN_PROG_SOCK_OPS(&sock_ops);
-}
-
-static void bpf_skops_established(struct sock *sk, int bpf_op,
-				  struct sk_buff *skb)
-{
-	struct bpf_sock_ops_kern sock_ops;
-
-	sock_owned_by_me(sk);
-
-	memset(&sock_ops, 0, offsetof(struct bpf_sock_ops_kern, temp));
-	sock_ops.op = bpf_op;
-	sock_ops.is_fullsock = 1;
-	sock_ops.sk = sk;
-	/* sk with TCP_REPAIR_ON does not have skb in tcp_finish_connect */
-	if (skb)
-		bpf_skops_init_skb(&sock_ops, skb, tcp_hdrlen(skb));
-
-	BPF_CGROUP_RUN_PROG_SOCK_OPS(&sock_ops);
-}
-#else
-static void bpf_skops_parse_hdr(struct sock *sk, struct sk_buff *skb)
-{
-}
-
-static void bpf_skops_established(struct sock *sk, int bpf_op,
-				  struct sk_buff *skb)
-{
-}
 #endif
 
 static void tcp_gro_dev_warn(struct sock *sk, const struct sk_buff *skb,
@@ -3887,7 +3818,7 @@ static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 		icsk->icsk_retransmits = 0;
 
 #if IS_ENABLED(CONFIG_TLS_DEVICE)
-		if (static_branch_unlikely(&clean_acked_data_enabled.key))
+		if (static_branch_unlikely(&clean_acked_data_enabled))
 			if (icsk->icsk_clean_acked)
 				icsk->icsk_clean_acked(sk, ack);
 #endif
