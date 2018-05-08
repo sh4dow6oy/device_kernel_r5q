@@ -4726,12 +4726,7 @@ another_round:
 skip_taps:
 #ifdef CONFIG_NET_INGRESS
 	if (static_branch_unlikely(&ingress_needed_key)) {
-		bool another = false;
-
-		skb = sch_handle_ingress(skb, &pt_prev, &ret, orig_dev,
-					 &another);
-		if (another)
-			goto another_round;
+		skb = sch_handle_ingress(skb, &pt_prev, &ret, orig_dev);
 		if (!skb)
 			goto out;
 
