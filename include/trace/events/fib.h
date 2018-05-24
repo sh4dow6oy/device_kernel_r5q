@@ -32,6 +32,7 @@ TRACE_EVENT(fib_table_lookup,
 		__array(	__u8,	saddr,	4	)
 		__field(	u16,	sport		)
 		__field(	u16,	dport		)
+		__field(	u8,	proto		)
 		__dynamic_array(char,  name,   IFNAMSIZ )
 	),
 
@@ -63,16 +64,13 @@ TRACE_EVENT(fib_table_lookup,
 		}
 
 		if (nh) {
-			struct net_device *dev;
-
 			p32 = (__be32 *) __entry->saddr;
 			*p32 = nh->nh_saddr;
 
 			p32 = (__be32 *) __entry->gw;
-			*p32 = nh->fib_nh_gw4;
+			*p32 = nh->nh_gw;
 
-			dev = nh->fib_nh_dev;
-			__assign_str(name, dev ? dev->name : "-");
+			__assign_str(name, nh->nh_dev ? nh->nh_dev->name : "-");
 		} else {
 			p32 = (__be32 *) __entry->saddr;
 			*p32 = 0;
@@ -89,6 +87,41 @@ TRACE_EVENT(fib_table_lookup,
 		  __entry->src, __entry->sport, __entry->dst, __entry->dport,
 		  __entry->tos, __entry->scope, __entry->flags,
 		  __get_str(name), __entry->gw, __entry->saddr, __entry->err)
+);
+
+TRACE_EVENT(fib_validate_source,
+
+	TP_PROTO(const struct net_device *dev, const struct flowi4 *flp),
+
+	TP_ARGS(dev, flp),
+
+	TP_STRUCT__entry(
+		__string(	name,	dev->name	)
+		__field(	int,	oif		)
+		__field(	int,	iif		)
+		__field(	__u8,	tos		)
+		__array(	__u8,	src,	4	)
+		__array(	__u8,	dst,	4	)
+	),
+
+	TP_fast_assign(
+		__be32 *p32;
+
+		__assign_str(name, dev ? dev->name : "not set");
+		__entry->oif = flp->flowi4_oif;
+		__entry->iif = flp->flowi4_iif;
+		__entry->tos = flp->flowi4_tos;
+
+		p32 = (__be32 *) __entry->src;
+		*p32 = flp->saddr;
+
+		p32 = (__be32 *) __entry->dst;
+		*p32 = flp->daddr;
+	),
+
+	TP_printk("dev %s oif %d iif %d tos %d src %pI4 dst %pI4",
+		  __get_str(name), __entry->oif, __entry->iif, __entry->tos,
+		  __entry->src, __entry->dst)
 );
 #endif /* _TRACE_FIB_H */
 
