@@ -1210,18 +1210,6 @@ struct netdev_net_notifier {
  *	that got dropped are freed/returned via xdp_return_frame().
  *	Returns negative number, means general error invoking ndo, meaning
  *	no frames were xmit'ed and core-caller will free all frames.
- * int (*ndo_xsk_wakeup)(struct net_device *dev, u32 queue_id, u32 flags);
- *      This function is used to wake up the softirq, ksoftirqd or kthread
- *	responsible for sending and/or receiving packets on a specific
- *	queue id bound to an AF_XDP socket. The flags field specifies if
- *	only RX, only Tx, or both should be woken up using the flags
- *	XDP_WAKEUP_RX and XDP_WAKEUP_TX.
- * int (*ndo_tunnel_ctl)(struct net_device *dev, struct ip_tunnel_parm *p,
- *			 int cmd);
- *	Add, change, delete or get information on an IPv4 tunnel.
- * struct net_device *(*ndo_get_peer_dev)(struct net_device *dev);
- *	If a device is paired with a peer device, return the peer instance.
- *	The caller must be under RCU read context.
  */
 struct net_device_ops {
 	int			(*ndo_init)(struct net_device *dev);
@@ -1408,12 +1396,6 @@ struct net_device_ops {
 	int			(*ndo_xdp_xmit)(struct net_device *dev, int n,
 						struct xdp_frame **xdp,
 						u32 flags);
-	int			(*ndo_xsk_wakeup)(struct net_device *dev,
-						  u32 queue_id, u32 flags);
-
-	int			(*ndo_tunnel_ctl)(struct net_device *dev,
-						  struct ip_tunnel_parm *p, int cmd);
-	struct net_device *	(*ndo_get_peer_dev)(struct net_device *dev);
 };
 
 /**
