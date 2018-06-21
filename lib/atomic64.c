@@ -178,18 +178,16 @@ long long atomic64_xchg(atomic64_t *v, long long new)
 }
 EXPORT_SYMBOL(atomic64_xchg);
 
-bool atomic64_add_unless(atomic64_t *v, long long a, long long u)
+long long atomic64_fetch_add_unless(atomic64_t *v, long long a, long long u)
 {
 	unsigned long flags;
 	raw_spinlock_t *lock = lock_addr(v);
-	bool ret = false;
+	long long val;
 
 	raw_spin_lock_irqsave(lock, flags);
 	val = v->counter;
 	if (val != u)
 		v->counter += a;
-		ret = true;
-	}
 	raw_spin_unlock_irqrestore(lock, flags);
 
 	return val;
