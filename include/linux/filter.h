@@ -548,7 +548,8 @@ struct sock_fprog_kern {
 
 struct bpf_binary_header {
 	u32 pages;
-	u8 image[] __aligned(BPF_IMAGE_ALIGNMENT);
+	/* Some arches need word alignment for their instructions */
+	u8 image[] __aligned(4);
 };
 
 struct bpf_prog {
