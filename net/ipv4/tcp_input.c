@@ -76,9 +76,6 @@
 #include <linux/ipsec.h>
 #include <asm/unaligned.h>
 #include <linux/errqueue.h>
-#include <linux/unaligned/access_ok.h>
-#include <linux/static_key.h>
-#include <linux/jump_label_ratelimit.h>
 #include <net/busy_poll.h>
 
 int sysctl_tcp_fack __read_mostly;
