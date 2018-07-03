@@ -1149,10 +1149,6 @@ set_rcvbuf:
 		}
 		break;
 
-	case SO_BINDTOIFINDEX:
-		ret = sock_bindtoindex_locked(sk, val);
-		break;
-
 	default:
 		ret = -ENOPROTOOPT;
 		break;
@@ -1210,8 +1206,7 @@ static int sk_getsockopt(struct sock *sk, int level, int optname,
 		int val;
 		u64 val64;
 		struct linger ling;
-		struct old_timeval32 tm32;
-		struct __kernel_old_timeval tm;
+		struct timeval tm;
 		struct sock_txtime txtime;
 	} v;
 
@@ -1495,10 +1490,6 @@ static int sk_getsockopt(struct sock *sk, int level, int optname,
 		v.txtime.clockid = sk->sk_clockid;
 		v.txtime.flags |= sk->sk_txtime_deadline_mode ?
 				  SOF_TXTIME_DEADLINE_MODE : 0;
-		break;
-
-	case SO_BINDTOIFINDEX:
-		v.val = sk->sk_bound_dev_if;
 		break;
 
 	default:
