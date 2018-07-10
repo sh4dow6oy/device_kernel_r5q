@@ -1879,7 +1879,7 @@ static int smack_file_receive(struct file *file)
  */
 static int smack_file_open(struct file *file)
 {
-	struct task_smack *tsp = smack_cred(file->f_cred);
+	struct task_smack *tsp = file->f_cred->security;
 	struct inode *inode = file_inode(file);
 	struct smk_audit_info ad;
 	int rc;
