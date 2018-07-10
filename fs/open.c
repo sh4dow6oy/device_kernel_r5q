@@ -776,7 +776,7 @@ static int do_dentry_open(struct file *f,
 		goto cleanup_all;
 	}
 
-	error = security_file_open(f);
+	error = security_file_open(f, f->f_cred);
 	if (error)
 		goto cleanup_all;
 
