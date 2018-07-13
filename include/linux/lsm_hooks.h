@@ -1619,6 +1619,7 @@ union security_list_options {
 	int (*kernel_act_as)(struct cred *new, u32 secid);
 	int (*kernel_create_files_as)(struct cred *new, struct inode *inode);
 	int (*kernel_module_request)(char *kmod_name);
+	int (*kernel_load_data)(enum kernel_load_data_id id);
 	int (*kernel_read_file)(struct file *file, enum kernel_read_file_id id);
 	int (*kernel_post_read_file)(struct file *file, char *buf, loff_t size,
 				     enum kernel_read_file_id id);
@@ -1912,6 +1913,7 @@ struct security_hook_heads {
 	struct hlist_head cred_getsecid;
 	struct hlist_head kernel_act_as;
 	struct hlist_head kernel_create_files_as;
+	struct hlist_head kernel_load_data;
 	struct hlist_head kernel_read_file;
 	struct hlist_head kernel_post_read_file;
 	struct hlist_head kernel_module_request;
