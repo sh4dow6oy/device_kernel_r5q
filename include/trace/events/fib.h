@@ -32,7 +32,6 @@ TRACE_EVENT(fib_table_lookup,
 		__array(	__u8,	saddr,	4	)
 		__field(	u16,	sport		)
 		__field(	u16,	dport		)
-		__field(	u8,	proto		)
 		__dynamic_array(char,  name,   IFNAMSIZ )
 	),
 
