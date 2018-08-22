@@ -69,14 +69,17 @@ static __initdata bool debug;
 static bool __init is_enabled(struct lsm_info *lsm)
 {
 	int ret;
-	initcall_t *call;
-	call = __security_initcall_start;
+	initcall_t call;
+	initcall_entry_t *ce;
+
+	ce = __security_initcall_start;
 	trace_initcall_level("security");
-	while (call < __security_initcall_end) {
-		trace_initcall_start((*call));
-		ret = (*call) ();
-		trace_initcall_finish((*call), ret);
-		call++;
+	while (ce < __security_initcall_end) {
+		call = initcall_from_entry(ce);
+		trace_initcall_start(call);
+		ret = call();
+		trace_initcall_finish(call, ret);
+		ce++;
 	}
 }
 
