@@ -120,57 +120,6 @@ static int skb_nsg(struct sk_buff *skb, int offset, int len)
         return __skb_nsg(skb, offset, len, 0);
 }
 
-static void tls_decrypt_done(struct crypto_async_request *req, int err)
-{
-	struct aead_request *aead_req = (struct aead_request *)req;
-	struct scatterlist *sgout = aead_req->dst;
-	struct scatterlist *sgin = aead_req->src;
-	struct tls_sw_context_rx *ctx;
-	struct tls_context *tls_ctx;
-	struct scatterlist *sg;
-	struct sk_buff *skb;
-	unsigned int pages;
-	int pending;
-
-	skb = (struct sk_buff *)req->data;
-	tls_ctx = tls_get_ctx(skb->sk);
-	ctx = tls_sw_ctx_rx(tls_ctx);
-
-	/* Propagate if there was an err */
-	if (err) {
-		ctx->async_wait.err = err;
-		tls_err_abort(skb->sk, err);
-	} else {
-		struct strp_msg *rxm = strp_msg(skb);
-
-		rxm->offset += tls_ctx->rx.prepend_size;
-		rxm->full_len -= tls_ctx->rx.overhead_size;
-	}
-
-	/* After using skb->sk to propagate sk through crypto async callback
-	 * we need to NULL it again.
-	 */
-	skb->sk = NULL;
-
-
-	/* Free the destination pages if skb was not decrypted inplace */
-	if (sgout != sgin) {
-		/* Skip the first S/G entry as it points to AAD */
-		for_each_sg(sg_next(sgout), sg, UINT_MAX, pages) {
-			if (!sg)
-				break;
-			put_page(sg_page(sg));
-		}
-	}
-
-	kfree(aead_req);
-
-	pending = atomic_dec_return(&ctx->decrypt_pending);
-
-	if (!pending && READ_ONCE(ctx->async_notify))
-		complete(&ctx->async_wait.completion);
-}
-
 static int tls_do_decryption(struct sock *sk,
 			     struct sk_buff *skb,
 			     struct scatterlist *sgin,
