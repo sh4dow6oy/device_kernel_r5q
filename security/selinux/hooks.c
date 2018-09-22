@@ -1893,8 +1893,8 @@ static int may_create(struct inode *dir,
 	if (rc)
 		return rc;
 
-	rc = selinux_determine_inode_label(tsec, dir, &dentry->d_name, tclass,
-					   &newsid);
+	rc = selinux_determine_inode_label(selinux_cred(current_cred()), dir,
+					   &dentry->d_name, tclass, &newsid);
 	if (rc)
 		return rc;
 
@@ -2991,7 +2991,8 @@ static int selinux_inode_init_security(struct inode *inode, struct inode *dir,
 	sid = tsec->sid;
 	newsid = tsec->create_sid;
 
-	rc = selinux_determine_inode_label(tsec, dir, qstr,
+	rc = selinux_determine_inode_label(selinux_cred(current_cred()),
+		dir, qstr,
 		inode_mode_to_security_class(inode->i_mode),
 		&newsid);
 	if (rc)
@@ -4037,7 +4038,7 @@ static int selinux_cred_alloc_blank(struct cred *cred, gfp_t gfp)
  */
 static void selinux_cred_free(struct cred *cred)
 {
-	struct task_security_struct *tsec = cred->security;
+	struct task_security_struct *tsec = selinux_cred(cred);
 
 	kfree(tsec);
 }
@@ -4051,7 +4052,13 @@ static int selinux_cred_prepare(struct cred *new, const struct cred *old,
 	const struct task_security_struct *old_tsec = selinux_cred(old);
 	struct task_security_struct *tsec = selinux_cred(new);
 
-	*tsec = *old_tsec;
+	old_tsec = selinux_cred(old);
+
+	tsec = kmemdup(old_tsec, sizeof(struct task_security_struct), gfp);
+	if (!tsec)
+		return -ENOMEM;
+
+	new->security = tsec;
 	return 0;
 }
 
