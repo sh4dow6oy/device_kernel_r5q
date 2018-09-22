@@ -332,6 +332,60 @@ static void inode_free_security(struct inode *inode)
 		list_del_init(&isec->list);
 		spin_unlock(&sbsec->isec_lock);
 	}
+
+	/*
+	 * The inode may still be referenced in a path walk and
+	 * a call to selinux_inode_permission() can be made
+	 * after inode_free_security() is called. Ideally, the VFS
+	 * wouldn't do this, but fixing that is a much harder
+	 * job. For now, simply free the i_security via RCU, and
+	 * leave the current inode->i_security pointer intact.
+	 * The inode will be freed after the RCU grace period too.
+	 */
+	call_rcu(&isec->rcu, inode_free_rcu);
+}
+
+static int file_alloc_security(struct file *file)
+{
+	struct file_security_struct *fsec;
+	u32 sid = current_sid();
+
+	fsec = kmem_cache_zalloc(file_security_cache, GFP_KERNEL);
+	if (!fsec)
+		return -ENOMEM;
+
+	fsec->sid = sid;
+	fsec->fown_sid = sid;
+	file->f_security = fsec;
+
+	return 0;
+}
+
+static void file_free_security(struct file *file)
+{
+	struct file_security_struct *fsec = selinux_file(file);
+	file->f_security = NULL;
+	kmem_cache_free(file_security_cache, fsec);
+}
+
+static int superblock_alloc_security(struct super_block *sb)
+{
+	struct superblock_security_struct *sbsec;
+
+	sbsec = kzalloc(sizeof(struct superblock_security_struct), GFP_KERNEL);
+	if (!sbsec)
+		return -ENOMEM;
+
+	mutex_init(&sbsec->lock);
+	INIT_LIST_HEAD(&sbsec->isec_head);
+	spin_lock_init(&sbsec->isec_lock);
+	sbsec->sb = sb;
+	sbsec->sid = SECINITSID_UNLABELED;
+	sbsec->def_sid = SECINITSID_FILE;
+	sbsec->mntpoint_sid = SECINITSID_UNLABELED;
+	sb->s_security = sbsec;
+
+	return 0;
 }
 
 static void superblock_free_security(struct super_block *sb)
