@@ -1853,7 +1853,7 @@ int security_getprocattr(struct task_struct *p, const char *lsm, char *name,
 			continue;
 		return hp->hook.getprocattr(p, name, value);
 	}
-	return LSM_RET_DEFAULT(getprocattr);
+	return -EINVAL;
 }
 
 int security_setprocattr(const char *lsm, const char *name, void *value,
@@ -1866,7 +1866,7 @@ int security_setprocattr(const char *lsm, const char *name, void *value,
 			continue;
 		return hp->hook.setprocattr(name, value, size);
 	}
-	return LSM_RET_DEFAULT(setprocattr);
+	return -EINVAL;
 }
 
 int security_netlink_send(struct sock *sk, struct sk_buff *skb)
