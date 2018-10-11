@@ -44,36 +44,12 @@ static ATOMIC_NOTIFIER_HEAD(lsm_notifier_chain);
 static struct kmem_cache *lsm_file_cache;
 static struct kmem_cache *lsm_inode_cache;
 
-char *lsm_names;
-static struct lsm_blob_sizes blob_sizes __lsm_ro_after_init;
-
-/* Boot-time LSM user choice */
-static __initdata const char *chosen_lsm_order;
-static __initdata const char *chosen_major_lsm;
-
-static __initconst const char * const builtin_lsm_order = CONFIG_LSM;
-
-/* Ordered list of LSMs to initialize. */
-static __initdata struct lsm_info **ordered_lsms;
-static __initdata struct lsm_info *exclusive;
-
-static __initdata bool debug;
-#define init_debug(...)						\
-	do {							\
-		if (debug)					\
-			pr_info(__VA_ARGS__);			\
-	} while (0)
-
-static bool __init is_enabled(struct lsm_info *lsm)
+static void __init major_lsm_init(void)
 {
-	initcall_t call;
-	initcall_entry_t *ce;
+	struct lsm_info *lsm;
 
-	ce = __start_lsm_info;
-	while (ce < __end_lsm_info) {
-		call = initcall_from_entry(ce);
-		call();
-		ce++;
+	for (lsm = __start_lsm_info; lsm < __end_lsm_info; lsm++) {
+		lsm->init();
 	}
 }
 
@@ -324,8 +300,10 @@ int __init security_init(void)
 	 */
 	capability_add_hooks();
 
-	/* Load LSMs in specified order. */
-	ordered_lsm_init();
+	/*
+	 * Load all the remaining security modules.
+	 */
+	major_lsm_init();
 
 	return 0;
 }
