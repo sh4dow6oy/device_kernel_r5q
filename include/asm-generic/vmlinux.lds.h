@@ -910,6 +910,17 @@
 		KEEP(*(.con_initcall.init))				\
 		VMLINUX_SYMBOL(__con_initcall_end) = .;
 
+#define SECURITY_INITCALL						\
+		VMLINUX_SYMBOL(__security_initcall_start) = .;		\
+		KEEP(*(.security_initcall.init))			\
+		VMLINUX_SYMBOL(__security_initcall_end) = .;
+
+/* Older linker script style for security init. */
+#define SECURITY_INIT							\
+	.security_initcall.init : AT(ADDR(.security_initcall.init) - LOAD_OFFSET) { \
+		SECURITY_INITCALL					\
+	}
+
 #ifdef CONFIG_BLK_DEV_INITRD
 #define INIT_RAM_FS							\
 	. = ALIGN(4);							\
