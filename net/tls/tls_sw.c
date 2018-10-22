@@ -1545,7 +1545,7 @@ int tls_sw_recvmsg(struct sock *sk,
 	bool cmsg = false;
 	int target, err = 0;
 	long timeo;
-	bool is_kvec = msg->msg_iter.type & ITER_KVEC;
+	bool is_kvec = iov_iter_is_kvec(&msg->msg_iter);
 	int num_async = 0;
 
 	flags |= nonblock;
