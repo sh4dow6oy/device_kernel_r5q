@@ -206,6 +206,7 @@ static void cred_init_security(void)
 	struct cred *cred = (struct cred *) current->real_cred;
 	struct task_security_struct *tsec;
 
+	lsm_early_cred(cred);
 	tsec = selinux_cred(cred);
 	tsec->osid = tsec->sid = SECINITSID_KERNEL;
 }
@@ -4019,31 +4020,6 @@ static int selinux_task_alloc(struct task_struct *task,
 }
 
 /*
- * allocate the SELinux part of blank credentials
- */
-static int selinux_cred_alloc_blank(struct cred *cred, gfp_t gfp)
-{
-	struct task_security_struct *tsec;
-
-	tsec = kzalloc(sizeof(struct task_security_struct), gfp);
-	if (!tsec)
-		return -ENOMEM;
-
-	cred->security = tsec;
-	return 0;
-}
-
-/*
- * detach and free the LSM part of a set of credentials
- */
-static void selinux_cred_free(struct cred *cred)
-{
-	struct task_security_struct *tsec = selinux_cred(cred);
-
-	kfree(tsec);
-}
-
-/*
  * prepare a new set of credentials for modification
  */
 static int selinux_cred_prepare(struct cred *new, const struct cred *old,
@@ -4052,13 +4028,7 @@ static int selinux_cred_prepare(struct cred *new, const struct cred *old,
 	const struct task_security_struct *old_tsec = selinux_cred(old);
 	struct task_security_struct *tsec = selinux_cred(new);
 
-	old_tsec = selinux_cred(old);
-
-	tsec = kmemdup(old_tsec, sizeof(struct task_security_struct), gfp);
-	if (!tsec)
-		return -ENOMEM;
-
-	new->security = tsec;
+	*tsec = *old_tsec;
 	return 0;
 }
 
@@ -6736,27 +6706,8 @@ static int selinux_perf_event_write(struct perf_event *event)
 
 struct lsm_blob_sizes selinux_blob_sizes __lsm_ro_after_init = {
 	.lbs_cred = sizeof(struct task_security_struct),
-	.lbs_file = sizeof(struct file_security_struct),
-	.lbs_inode = sizeof(struct inode_security_struct),
-	.lbs_ipc = sizeof(struct ipc_security_struct),
-	.lbs_msg_msg = sizeof(struct msg_security_struct),
 };
 
-/*
- * IMPORTANT NOTE: When adding new hooks, please be careful to keep this order:
- * 1. any hooks that don't belong to (2.) or (3.) below,
- * 2. hooks that both access structures allocated by other hooks, and allocate
- *    structures that can be later accessed by other hooks (mostly "cloning"
- *    hooks),
- * 3. hooks that only allocate structures that can be later accessed by other
- *    hooks ("allocating" hooks).
- *
- * Please follow block comment delimiters in the list to keep this order.
- *
- * This ordering is needed for SELinux runtime disable to work at least somewhat
- * safely. Breaking the ordering rules above might lead to NULL pointer derefs
- * when disabling SELinux at runtime.
- */
 static struct security_hook_list selinux_hooks[] __lsm_ro_after_init = {
 	LSM_HOOK_INIT(binder_set_context_mgr, selinux_binder_set_context_mgr),
 	LSM_HOOK_INIT(binder_transaction, selinux_binder_transaction),
@@ -7078,6 +7029,7 @@ DEFINE_LSM(selinux) = {
 	.name = "selinux",
 	.flags = LSM_FLAG_LEGACY_MAJOR | LSM_FLAG_EXCLUSIVE,
 	.enabled = &selinux_enabled,
+	.blobs = &selinux_blob_sizes,
 	.init = selinux_init,
 };
 

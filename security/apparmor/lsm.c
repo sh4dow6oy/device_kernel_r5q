@@ -755,8 +755,6 @@ static int apparmor_task_kill(struct task_struct *target, struct siginfo *info,
  */
 struct lsm_blob_sizes apparmor_blob_sizes __lsm_ro_after_init = {
 	.lbs_cred = sizeof(struct aa_task_ctx *),
-	.lbs_file = sizeof(struct aa_file_ctx),
-	.lbs_task = sizeof(struct aa_task_ctx),
 };
 
 static struct security_hook_list apparmor_hooks[] __lsm_ro_after_init = {
@@ -1055,6 +1053,7 @@ static int __init set_init_ctx(void)
 	if (!ctx)
 		return -ENOMEM;
 
+	lsm_early_cred(cred);
 	set_cred_label(cred, aa_get_label(ns_unconfined(root_ns)));
 	task_ctx(current) = ctx;
 
@@ -1202,5 +1201,6 @@ DEFINE_LSM(apparmor) = {
 	.name = "apparmor",
 	.flags = LSM_FLAG_LEGACY_MAJOR | LSM_FLAG_EXCLUSIVE,
 	.enabled = &apparmor_enabled,
+	.blobs = &apparmor_blob_sizes,
 	.init = apparmor_init,
 };

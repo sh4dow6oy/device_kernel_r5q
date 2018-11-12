@@ -42,6 +42,8 @@ struct security_hook_heads security_hook_heads __lsm_ro_after_init;
 static ATOMIC_NOTIFIER_HEAD(lsm_notifier_chain);
 
 char *lsm_names;
+static struct lsm_blob_sizes blob_sizes __lsm_ro_after_init;
+
 /* Boot-time LSM user choice */
 static __initdata const char *chosen_lsm_order;
 static __initdata const char *chosen_major_lsm;
@@ -140,6 +142,25 @@ static bool __init lsm_allowed(struct lsm_info *lsm)
 	return true;
 }
 
+static void __init lsm_set_blob_size(int *need, int *lbs)
+{
+	int offset;
+
+	if (*need > 0) {
+		offset = *lbs;
+		*lbs += *need;
+		*need = offset;
+	}
+}
+
+static void __init lsm_set_blob_sizes(struct lsm_blob_sizes *needed)
+{
+	if (!needed)
+		return;
+
+	lsm_set_blob_size(&needed->lbs_cred, &blob_sizes.lbs_cred);
+}
+
 /* Prepare LSM for initialization. */
 static void __init prepare_lsm(struct lsm_info *lsm)
 {
@@ -154,6 +175,8 @@ static void __init prepare_lsm(struct lsm_info *lsm)
 			exclusive = lsm;
 			init_debug("exclusive chosen: %s\n", lsm->name);
 		}
+
+		lsm_set_blob_sizes(lsm->blobs);
 	}
 }
 
@@ -255,6 +278,8 @@ static void __init ordered_lsm_init(void)
 
 	for (lsm = ordered_lsms; *lsm; lsm++)
 		prepare_lsm(*lsm);
+
+	init_debug("cred blob size     = %d\n", blob_sizes.lbs_cred);
 
 	for (lsm = ordered_lsms; *lsm; lsm++)
 		initialize_lsm(*lsm);
@@ -414,153 +439,20 @@ static int lsm_cred_alloc(struct cred *cred, gfp_t gfp)
  * lsm_early_cred - during initialization allocate a composite cred blob
  * @cred: the cred that needs a blob
  *
- * Allocate the cred blob for all the modules
+ * Allocate the cred blob for all the modules if it's not already there
  */
-static void __init lsm_early_cred(struct cred *cred)
+void __init lsm_early_cred(struct cred *cred)
 {
-	int rc = lsm_cred_alloc(cred, GFP_KERNEL);
+	int rc;
 
+	if (cred == NULL)
+		panic("%s: NULL cred.\n", __func__);
+	if (cred->security != NULL)
+		return;
+	rc = lsm_cred_alloc(cred, GFP_KERNEL);
 	if (rc)
 		panic("%s: Early cred alloc failed.\n", __func__);
 }
-
-/**
- * lsm_file_alloc - allocate a composite file blob
- * @file: the file that needs a blob
- *
- * Allocate the file blob for all the modules
- *
- * Returns 0, or -ENOMEM if memory can't be allocated.
- */
-static int lsm_file_alloc(struct file *file)
-{
-	if (!lsm_file_cache) {
-		file->f_security = NULL;
-		return 0;
-	}
-
-	file->f_security = kmem_cache_zalloc(lsm_file_cache, GFP_KERNEL);
-	if (file->f_security == NULL)
-		return -ENOMEM;
-	return 0;
-}
-
-/**
- * lsm_inode_alloc - allocate a composite inode blob
- * @inode: the inode that needs a blob
- *
- * Allocate the inode blob for all the modules
- *
- * Returns 0, or -ENOMEM if memory can't be allocated.
- */
-int lsm_inode_alloc(struct inode *inode)
-{
-	if (!lsm_inode_cache) {
-		inode->i_security = NULL;
-		return 0;
-	}
-
-	inode->i_security = kmem_cache_zalloc(lsm_inode_cache, GFP_NOFS);
-	if (inode->i_security == NULL)
-		return -ENOMEM;
-	return 0;
-}
-
-/**
- * lsm_task_alloc - allocate a composite task blob
- * @task: the task that needs a blob
- *
- * Allocate the task blob for all the modules
- *
- * Returns 0, or -ENOMEM if memory can't be allocated.
- */
-int lsm_task_alloc(struct task_struct *task)
-{
-	if (blob_sizes.lbs_task == 0) {
-		task->security = NULL;
-		return 0;
-	}
-
-	task->security = kzalloc(blob_sizes.lbs_task, GFP_KERNEL);
-	if (task->security == NULL)
-		return -ENOMEM;
-	return 0;
-}
-
-/**
- * lsm_ipc_alloc - allocate a composite ipc blob
- * @kip: the ipc that needs a blob
- *
- * Allocate the ipc blob for all the modules
- *
- * Returns 0, or -ENOMEM if memory can't be allocated.
- */
-int lsm_ipc_alloc(struct kern_ipc_perm *kip)
-{
-	if (blob_sizes.lbs_ipc == 0) {
-		kip->security = NULL;
-		return 0;
-	}
-
-	kip->security = kzalloc(blob_sizes.lbs_ipc, GFP_KERNEL);
-	if (kip->security == NULL)
-		return -ENOMEM;
-	return 0;
-}
-
-/**
- * lsm_msg_msg_alloc - allocate a composite msg_msg blob
- * @mp: the msg_msg that needs a blob
- *
- * Allocate the ipc blob for all the modules
- *
- * Returns 0, or -ENOMEM if memory can't be allocated.
- */
-int lsm_msg_msg_alloc(struct msg_msg *mp)
-{
-	if (blob_sizes.lbs_msg_msg == 0) {
-		mp->security = NULL;
-		return 0;
-	}
-
-	mp->security = kzalloc(blob_sizes.lbs_msg_msg, GFP_KERNEL);
-	if (mp->security == NULL)
-		return -ENOMEM;
-	return 0;
-}
-
-/**
- * lsm_early_task - during initialization allocate a composite task blob
- * @task: the task that needs a blob
- *
- * Allocate the task blob for all the modules
- */
-static void __init lsm_early_task(struct task_struct *task)
-{
-	int rc = lsm_task_alloc(task);
-
-	if (rc)
-		panic("%s: Early task alloc failed.\n", __func__);
-}
-
-/*
- * The default value of the LSM hook is defined in linux/lsm_hook_defs.h and
- * can be accessed with:
- *
- *	LSM_RET_DEFAULT(<hook_name>)
- *
- * The macros below define static constants for the default value of each
- * LSM hook.
- */
-#define LSM_RET_DEFAULT(NAME) (NAME##_default)
-#define DECLARE_LSM_RET_DEFAULT_void(DEFAULT, NAME)
-#define DECLARE_LSM_RET_DEFAULT_int(DEFAULT, NAME) \
-	static const int LSM_RET_DEFAULT(NAME) = (DEFAULT);
-#define LSM_HOOK(RET, DEFAULT, NAME, ...) \
-	DECLARE_LSM_RET_DEFAULT_##RET(DEFAULT, NAME)
-
-#include <linux/lsm_hook_defs.h>
-#undef LSM_HOOK
 
 /*
  * The default value of the LSM hook is defined in linux/lsm_hook_defs.h and
@@ -1467,7 +1359,7 @@ int security_cred_alloc_blank(struct cred *cred, gfp_t gfp)
 		return rc;
 
 	rc = call_int_hook(cred_alloc_blank, 0, cred, gfp);
-	if (unlikely(rc))
+	if (rc)
 		security_cred_free(cred);
 	return rc;
 }
@@ -1495,7 +1387,7 @@ int security_prepare_creds(struct cred *new, const struct cred *old, gfp_t gfp)
 		return rc;
 
 	rc = call_int_hook(cred_prepare, 0, new, old, gfp);
-	if (unlikely(rc))
+	if (rc)
 		security_cred_free(new);
 	return rc;
 }

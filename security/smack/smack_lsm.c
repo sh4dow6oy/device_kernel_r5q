@@ -1945,7 +1945,7 @@ static int smack_cred_prepare(struct cred *new, const struct cred *old,
 			      gfp_t gfp)
 {
 	struct task_smack *old_tsp = smack_cred(old);
-	struct task_smack *new_tsp;
+	struct task_smack *new_tsp = smack_cred(new);
 	int rc;
 
 	init_task_smack(new_tsp, old_tsp->smk_task, old_tsp->smk_task);
@@ -4570,10 +4570,6 @@ static int smack_inode_getsecctx(struct inode *inode, void **ctx, u32 *ctxlen)
 
 struct lsm_blob_sizes smack_blob_sizes __lsm_ro_after_init = {
 	.lbs_cred = sizeof(struct task_smack),
-	.lbs_file = sizeof(struct smack_known *),
-	.lbs_inode = sizeof(struct inode_smack),
-	.lbs_ipc = sizeof(struct smack_known *),
-	.lbs_msg_msg = sizeof(struct smack_known *),
 };
 
 static struct security_hook_list smack_hooks[] __lsm_ro_after_init = {
@@ -4752,6 +4748,8 @@ static __init int smack_init(void)
 	if (!smack_inode_cache)
 		return -ENOMEM;
 
+	lsm_early_cred(cred);
+
 	/*
 	 * Set the security state for the initial task.
 	 */
@@ -4788,5 +4786,6 @@ static __init int smack_init(void)
 DEFINE_LSM(smack) = {
 	.name = "smack",
 	.flags = LSM_FLAG_LEGACY_MAJOR | LSM_FLAG_EXCLUSIVE,
+	.blobs = &smack_blob_sizes,
 	.init = smack_init,
 };

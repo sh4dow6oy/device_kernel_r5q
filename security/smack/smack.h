@@ -360,7 +360,7 @@ extern struct hlist_head smack_known_hash[SMACK_HASH_SLOTS];
 
 static inline struct task_smack *smack_cred(const struct cred *cred)
 {
-	return cred->security;
+	return cred->security + smack_blob_sizes.lbs_cred;
 }
 
 /*
