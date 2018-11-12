@@ -144,6 +144,8 @@ static int __init checkreqprot_setup(char *str)
 }
 __setup("checkreqprot=", checkreqprot_setup);
 
+static struct kmem_cache *sel_inode_cache;
+
 /**
  * selinux_secmark_enabled - Check to see if SECMARK is currently enabled
  *
@@ -347,25 +349,13 @@ static void inode_free_security(struct inode *inode)
 
 static int file_alloc_security(struct file *file)
 {
-	struct file_security_struct *fsec;
+	struct file_security_struct *fsec = selinux_file(file);
 	u32 sid = current_sid();
-
-	fsec = kmem_cache_zalloc(file_security_cache, GFP_KERNEL);
-	if (!fsec)
-		return -ENOMEM;
 
 	fsec->sid = sid;
 	fsec->fown_sid = sid;
-	file->f_security = fsec;
 
 	return 0;
-}
-
-static void file_free_security(struct file *file)
-{
-	struct file_security_struct *fsec = selinux_file(file);
-	file->f_security = NULL;
-	kmem_cache_free(file_security_cache, fsec);
 }
 
 static int superblock_alloc_security(struct super_block *sb)
@@ -3711,12 +3701,6 @@ static int selinux_file_alloc_security(struct file *file)
 	struct file_security_struct *fsec = selinux_file(file);
 	u32 sid = current_sid();
 
-	fsec->sid = sid;
-	fsec->fown_sid = sid;
-
-	return 0;
-}
-
 /*
  * Check whether a task has the ioctl permission and cmd
  * operation to an inode.
@@ -6760,6 +6744,7 @@ static int selinux_perf_event_write(struct perf_event *event)
 
 struct lsm_blob_sizes selinux_blob_sizes __lsm_ro_after_init = {
 	.lbs_cred = sizeof(struct task_security_struct),
+	.lbs_file = sizeof(struct file_security_struct),
 };
 
 static struct security_hook_list selinux_hooks[] __lsm_ro_after_init = {
@@ -7035,6 +7020,9 @@ static __init int selinux_init(void)
 
 	default_noexec = !(VM_DATA_DEFAULT_FLAGS & VM_EXEC);
 
+	sel_inode_cache = kmem_cache_create("selinux_inode_security",
+					    sizeof(struct inode_security_struct),
+					    0, SLAB_PANIC, NULL);
 	avc_init();
 
 	avtab_cache_init();
