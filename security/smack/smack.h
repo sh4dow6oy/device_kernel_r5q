@@ -369,6 +369,11 @@ static inline struct smack_known **smack_file(const struct file *file)
 				       smack_blob_sizes.lbs_file);
 }
 
+static inline struct inode_smack *smack_inode(const struct inode *inode)
+{
+	return inode->i_security;
+}
+
 /*
  * Is the directory transmuting?
  */
