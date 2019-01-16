@@ -445,6 +445,7 @@ static void tcp_fastopen_synack_timer(struct sock *sk, struct request_sock *req)
 	int max_retries = icsk->icsk_syn_retries ? :
 	    sock_net(sk)->ipv4.sysctl_tcp_synack_retries + 1; /* add one more retry for fastopen */
 	struct tcp_sock *tp = tcp_sk(sk);
+	struct request_sock *req;
 
 	req->rsk_ops->syn_ack_timeout(req);
 
