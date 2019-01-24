@@ -33,11 +33,6 @@
 
 static DEFINE_PER_CPU(struct list_head, xskmap_flush_list);
 
-static struct xdp_sock *xdp_sk(struct sock *sk)
-{
-	return (struct xdp_sock *)sk;
-}
-
 bool xsk_is_setup_for_bpf_map(struct xdp_sock *xs)
 {
 	return READ_ONCE(xs->rx) &&  READ_ONCE(xs->umem) &&
