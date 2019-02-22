@@ -62,6 +62,16 @@ out_unlock:
 	return ret;
 }
 
+static struct kernfs_iattrs *kernfs_iattrs(struct kernfs_node *kn)
+{
+	return __kernfs_iattrs(kn, 1);
+}
+
+static struct kernfs_iattrs *kernfs_iattrs_noalloc(struct kernfs_node *kn)
+{
+	return __kernfs_iattrs(kn, 0);
+}
+
 int __kernfs_setattr(struct kernfs_node *kn, const struct iattr *iattr)
 {
 	struct kernfs_iattrs *attrs;
@@ -287,7 +297,7 @@ static int kernfs_node_xattr_get(const struct xattr_handler *handler,
 	const char *name = xattr_full_name(handler, suffix);
 	struct kernfs_iattrs *attrs;
 
-	attrs = kernfs_iattrs(kn);
+	attrs = kernfs_iattrs_noalloc(kn);
 	if (!attrs)
 		return -ENODATA;
 
