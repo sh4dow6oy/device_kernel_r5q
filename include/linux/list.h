@@ -752,9 +752,9 @@ static inline void hlist_add_before(struct hlist_node *n,
 static inline void hlist_add_behind(struct hlist_node *n,
 				    struct hlist_node *prev)
 {
-	WRITE_ONCE(n->next, prev->next);
-	WRITE_ONCE(prev->next, n);
-	WRITE_ONCE(n->pprev, &prev->next);
+	n->next = prev->next;
+	prev->next = n;
+	n->pprev = &prev->next;
 
 	if (n->next)
 		WRITE_ONCE(n->next->pprev, &n->next);
