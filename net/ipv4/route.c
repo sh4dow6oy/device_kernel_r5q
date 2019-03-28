@@ -1594,8 +1594,8 @@ static void rt_set_nexthop(struct rtable *rt, __be32 daddr,
 		struct fib_nh *nh = &FIB_RES_NH(*res);
 
 		if (nh->fib_nh_gw4 && nh->fib_nh_scope == RT_SCOPE_LINK) {
-			rt->rt_gw4 = nh->fib_nh_gw4;
-			rt->rt_gw_family = AF_INET;
+			rt->rt_gateway = nh->fib_nh_gw4;
+			rt->rt_uses_gateway = 1;
 		}
 		dst_init_metrics(&rt->dst, fi->fib_metrics->metrics, true);
 		if (fi->fib_metrics != &dst_default_metrics) {
