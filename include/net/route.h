@@ -62,10 +62,7 @@ struct rtable {
 	int			rt_iif;
 
 	/* Info on neighbour */
-	union {
-		__be32      rt_gw4;
-		struct in6_addr rt_gw6;
-	};
+	__be32			rt_gw4;
 
 	/* Miscellaneous cached information */
 	u32			rt_mtu_locked:1,

@@ -455,9 +455,13 @@ static struct neighbour *ipv4_neigh_lookup(const struct dst_entry *dst,
 {
 	const struct rtable *rt = container_of(dst, struct rtable, dst);
 	struct net_device *dev = dst->dev;
+	const __be32 *pkey = daddr;
 	struct neighbour *n;
 
-	rcu_read_lock_bh();
+	if (rt->rt_gw_family == AF_INET)
+		pkey = (const __be32 *) &rt->rt_gw4;
+	else if (skb)
+		pkey = &ip_hdr(skb)->daddr;
 
 	if (likely(rt->rt_gw_family == AF_INET)) {
 		n = ip_neigh_gw4(dev, rt->rt_gw4);
@@ -1594,8 +1598,8 @@ static void rt_set_nexthop(struct rtable *rt, __be32 daddr,
 		struct fib_nh *nh = &FIB_RES_NH(*res);
 
 		if (nh->fib_nh_gw4 && nh->fib_nh_scope == RT_SCOPE_LINK) {
-			rt->rt_gateway = nh->fib_nh_gw4;
-			rt->rt_uses_gateway = 1;
+			rt->rt_gw4 = nh->fib_nh_gw4;
+			rt->rt_gw_family = AF_INET;
 		}
 		dst_init_metrics(&rt->dst, fi->fib_metrics->metrics, true);
 		if (fi->fib_metrics != &dst_default_metrics) {
