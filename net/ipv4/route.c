@@ -455,13 +455,9 @@ static struct neighbour *ipv4_neigh_lookup(const struct dst_entry *dst,
 {
 	const struct rtable *rt = container_of(dst, struct rtable, dst);
 	struct net_device *dev = dst->dev;
-	const __be32 *pkey = daddr;
 	struct neighbour *n;
 
-	if (rt->rt_gw_family == AF_INET)
-		pkey = (const __be32 *) &rt->rt_gw4;
-	else if (skb)
-		pkey = &ip_hdr(skb)->daddr;
+	rcu_read_lock_bh();
 
 	if (likely(rt->rt_gw_family == AF_INET)) {
 		n = ip_neigh_gw4(dev, rt->rt_gw4);

@@ -613,7 +613,8 @@ static int vrf_finish_output(struct net *net, struct sock *sk, struct sk_buff *s
 	neigh = ip_neigh_for_gw(rt, skb, &is_v6gw);
 	if (!IS_ERR(neigh)) {
 		sock_confirm_neigh(skb, neigh);
-		ret = neigh_output(neigh, skb, false);
+		/* if crossing protocols, can not use the cached header */
+		ret = neigh_output(neigh, skb, is_v6gw);
 		rcu_read_unlock_bh();
 		return ret;
 	}
