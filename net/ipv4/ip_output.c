@@ -231,8 +231,8 @@ static int ip_finish_output2(struct net *net, struct sock *sk, struct sk_buff *s
 		int res;
 
 		sock_confirm_neigh(skb, neigh);
-		/* if crossing protocols, can not use the cached header */
-		res = neigh_output(neigh, skb, is_v6gw);
+		res = neigh_output(neigh, skb, false);
+
 		rcu_read_unlock_bh();
 		return res;
 	}
