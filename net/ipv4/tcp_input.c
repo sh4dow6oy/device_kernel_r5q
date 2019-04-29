@@ -6683,7 +6683,9 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 			tcp_synack_rtt_meas(sk, req);
 
 		if (req) {
-			tcp_rcv_synrecv_state_fastopen(sk);
+			tcp_try_undo_loss(sk, false);
+			inet_csk(sk)->icsk_retransmits = 0;
+			reqsk_fastopen_remove(sk, req, false);
 		} else {
 			tcp_try_undo_spurious_syn(sk);
 			tp->retrans_stamp = 0;
@@ -6740,9 +6742,18 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 	case TCP_FIN_WAIT1: {
 		int tmo;
 
-		if (req)
-			tcp_rcv_synrecv_state_fastopen(sk);
-
+		/* If we enter the TCP_FIN_WAIT1 state and we are a
+		 * Fast Open socket and this is the first acceptable
+		 * ACK we have received, this would have acknowledged
+		 * our SYNACK so stop the SYNACK timer.
+		 */
+		if (req) {
+			tcp_try_undo_loss(sk, false);
+			inet_csk(sk)->icsk_retransmits = 0;
+			/* We no longer need the request sock. */
+			reqsk_fastopen_remove(sk, req, false);
+			tcp_rearm_rto(sk);
+		}
 		if (tp->snd_una != tp->write_seq)
 			break;
 
