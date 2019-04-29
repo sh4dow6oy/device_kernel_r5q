@@ -586,10 +586,11 @@ struct sock *tcp_create_openreq_child(const struct sock *sk,
 			newtp->rx_opt.ts_recent_stamp = 0;
 			newtp->tcp_header_len = sizeof(struct tcphdr);
 		}
-#ifdef CONFIG_MPTCP
-		if (ireq->saw_mpc)
-			newtp->tcp_header_len += MPTCP_SUB_LEN_DSM_ALIGN;
-#endif
+		if (req->num_timeout) {
+			newtp->undo_marker = treq->snt_isn;
+			newtp->retrans_stamp = div_u64(treq->snt_synack,
+						       USEC_PER_SEC / TCP_TS_HZ);
+		}
 		newtp->tsoffset = treq->ts_off;
 #ifdef CONFIG_TCP_MD5SIG
 		newtp->md5sig_info = NULL;	/*XXX*/
