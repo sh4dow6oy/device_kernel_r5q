@@ -6167,16 +6167,6 @@ static bool tcp_rcv_fastopen_synack(struct sock *sk, struct sk_buff *synack,
 	return false;
 }
 
-static void smc_check_reset_syn(struct tcp_sock *tp)
-{
-#if IS_ENABLED(CONFIG_SMC)
-	if (static_branch_unlikely(&tcp_have_smc)) {
-		if (tp->syn_smc && !tp->rx_opt.smc_ok)
-			tp->syn_smc = 0;
-	}
-#endif
-}
-
 static void tcp_try_undo_spurious_syn(struct sock *sk)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
