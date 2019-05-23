@@ -967,6 +967,12 @@ struct send_signal_irq_work {
 	enum pid_type type;
 };
 
+struct send_signal_irq_work {
+	struct irq_work irq_work;
+	struct task_struct *task;
+	u32 sig;
+};
+
 static DEFINE_PER_CPU(struct send_signal_irq_work, send_signal_work);
 
 static void do_bpf_send_signal(struct irq_work *entry)
@@ -974,10 +980,10 @@ static void do_bpf_send_signal(struct irq_work *entry)
 	struct send_signal_irq_work *work;
 
 	work = container_of(entry, struct send_signal_irq_work, irq_work);
-	group_send_sig_info(work->sig, SEND_SIG_PRIV, work->task, work->type);
+	group_send_sig_info(work->sig, SEND_SIG_PRIV, work->task, PIDTYPE_TGID);
 }
 
-static int bpf_send_signal_common(u32 sig, enum pid_type type)
+BPF_CALL_1(bpf_send_signal, u32, sig)
 {
 	struct send_signal_irq_work *work = NULL;
 
@@ -992,19 +998,10 @@ static int bpf_send_signal_common(u32 sig, enum pid_type type)
 		return -EPERM;
 	if (unlikely(!nmi_uaccess_okay()))
 		return -EPERM;
-	/* Task should not be pid=1 to avoid kernel panic. */
-	if (unlikely(is_global_init(current)))
-		return -EPERM;
 
-	if (preempt_count() != 0 || irqs_disabled()) {
-		/* Do an early check on signal validity. Otherwise,
-		 * the error is lost in deferred irq_work.
-		 */
-		if (unlikely(!valid_signal(sig)))
-			return -EINVAL;
-
+	if (in_nmi()) {
 		work = this_cpu_ptr(&send_signal_work);
-		if (atomic_read(&work->irq_work.flags) & IRQ_WORK_BUSY)
+		if (work->irq_work.flags & IRQ_WORK_BUSY)
 			return -EBUSY;
 
 		/* Add the current task, which is the target of sending signal,
@@ -1013,17 +1010,11 @@ static int bpf_send_signal_common(u32 sig, enum pid_type type)
 		 */
 		work->task = current;
 		work->sig = sig;
-		work->type = type;
 		irq_work_queue(&work->irq_work);
 		return 0;
 	}
 
-	return group_send_sig_info(sig, SEND_SIG_PRIV, current, type);
-}
-
-BPF_CALL_1(bpf_send_signal, u32, sig)
-{
-	return bpf_send_signal_common(sig, PIDTYPE_TGID);
+	return group_send_sig_info(sig, SEND_SIG_PRIV, current, PIDTYPE_TGID);
 }
 
 static const struct bpf_func_proto bpf_send_signal_proto = {
@@ -1033,132 +1024,8 @@ static const struct bpf_func_proto bpf_send_signal_proto = {
 	.arg1_type	= ARG_ANYTHING,
 };
 
-BPF_CALL_1(bpf_send_signal_thread, u32, sig)
-{
-	return bpf_send_signal_common(sig, PIDTYPE_PID);
-}
-
-static const struct bpf_func_proto bpf_send_signal_thread_proto = {
-	.func		= bpf_send_signal_thread,
-	.gpl_only	= false,
-	.ret_type	= RET_INTEGER,
-	.arg1_type	= ARG_ANYTHING,
-};
-
-BPF_CALL_3(bpf_d_path, struct path *, path, char *, buf, u32, sz)
-{
-	long len;
-	char *p;
-
-	if (!sz)
-		return 0;
-
-	p = d_path(path, buf, sz);
-	if (IS_ERR(p)) {
-		len = PTR_ERR(p);
-	} else {
-		len = buf + sz - p;
-		memmove(buf, p, len);
-	}
-
-	return len;
-}
-
-BTF_SET_START(btf_allowlist_d_path)
-#ifdef CONFIG_SECURITY
-BTF_ID(func, security_file_permission)
-BTF_ID(func, security_inode_getattr)
-BTF_ID(func, security_file_open)
-#endif
-#ifdef CONFIG_SECURITY_PATH
-BTF_ID(func, security_path_truncate)
-#endif
-BTF_ID(func, vfs_truncate)
-BTF_ID(func, vfs_fallocate)
-BTF_ID(func, dentry_open)
-BTF_ID(func, vfs_getattr)
-BTF_ID(func, filp_close)
-BTF_SET_END(btf_allowlist_d_path)
-
-static bool bpf_d_path_allowed(const struct bpf_prog *prog)
-{
-	return btf_id_set_contains(&btf_allowlist_d_path, prog->aux->attach_btf_id);
-}
-
-BTF_ID_LIST_SINGLE(bpf_d_path_btf_ids, struct, path)
-
-static const struct bpf_func_proto bpf_d_path_proto = {
-	.func		= bpf_d_path,
-	.gpl_only	= false,
-	.ret_type	= RET_INTEGER,
-	.arg1_type	= ARG_PTR_TO_BTF_ID,
-	.arg1_btf_id	= &bpf_d_path_btf_ids[0],
-	.arg2_type	= ARG_PTR_TO_MEM,
-	.arg3_type	= ARG_CONST_SIZE_OR_ZERO,
-	.allowed	= bpf_d_path_allowed,
-};
-
-#define BTF_F_ALL	(BTF_F_COMPACT  | BTF_F_NONAME | \
-			 BTF_F_PTR_RAW | BTF_F_ZERO)
-
-static int bpf_btf_printf_prepare(struct btf_ptr *ptr, u32 btf_ptr_size,
-				  u64 flags, const struct btf **btf,
-				  s32 *btf_id)
-{
-	const struct btf_type *t;
-
-	if (unlikely(flags & ~(BTF_F_ALL)))
-		return -EINVAL;
-
-	if (btf_ptr_size != sizeof(struct btf_ptr))
-		return -EINVAL;
-
-	*btf = bpf_get_btf_vmlinux();
-
-	if (IS_ERR_OR_NULL(*btf))
-		return PTR_ERR(*btf);
-
-	if (ptr->type_id > 0)
-		*btf_id = ptr->type_id;
-	else
-		return -EINVAL;
-
-	if (*btf_id > 0)
-		t = btf_type_by_id(*btf, *btf_id);
-	if (*btf_id <= 0 || !t)
-		return -ENOENT;
-
-	return 0;
-}
-
-BPF_CALL_5(bpf_snprintf_btf, char *, str, u32, str_size, struct btf_ptr *, ptr,
-	   u32, btf_ptr_size, u64, flags)
-{
-	const struct btf *btf;
-	s32 btf_id;
-	int ret;
-
-	ret = bpf_btf_printf_prepare(ptr, btf_ptr_size, flags, &btf, &btf_id);
-	if (ret)
-		return ret;
-
-	return btf_type_snprintf_show(btf, btf_id, ptr->ptr, str, str_size,
-				      flags);
-}
-
-const struct bpf_func_proto bpf_snprintf_btf_proto = {
-	.func		= bpf_snprintf_btf,
-	.gpl_only	= false,
-	.ret_type	= RET_INTEGER,
-	.arg1_type	= ARG_PTR_TO_MEM,
-	.arg2_type	= ARG_CONST_SIZE,
-	.arg3_type	= ARG_PTR_TO_MEM,
-	.arg4_type	= ARG_CONST_SIZE,
-	.arg5_type	= ARG_ANYTHING,
-};
-
-const struct bpf_func_proto *
-bpf_tracing_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
+static const struct bpf_func_proto *
+tracing_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
 	switch (func_id) {
 	case BPF_FUNC_map_lookup_elem:
@@ -1218,6 +1085,8 @@ bpf_tracing_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 	case BPF_FUNC_get_current_cgroup_id:
 		return &bpf_get_current_cgroup_id_proto;
 #endif
+	case BPF_FUNC_send_signal:
+		return &bpf_send_signal_proto;
 	default:
 		return NULL;
 	}
