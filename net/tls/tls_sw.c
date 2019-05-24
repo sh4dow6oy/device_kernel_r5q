@@ -1603,7 +1603,7 @@ int tls_sw_recvmsg(struct sock *sk,
 	len = len - copied;
 	timeo = sock_rcvtimeo(sk, flags & MSG_DONTWAIT);
 
-	do {
+	while (len && (decrypted + copied < target || ctx->recv_pkt)) {
 		bool retain_skb = false;
 		bool async = false;
 		bool zc = false;
@@ -1704,11 +1704,6 @@ pick_next_record:
 			if (ctx->control != TLS_RECORD_TYPE_DATA)
 				goto recv_end;
 		} else {
-			break;
-		}
-
-		/* If we have a new message from strparser, continue now. */
-		if (decrypted + copied >= target && !ctx->recv_pkt)
 			break;
 		}
 	}
