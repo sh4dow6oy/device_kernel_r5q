@@ -1799,7 +1799,6 @@ static __latent_entropy struct task_struct *copy_process(
 {
 	int pidfd = -1, retval;
 	struct task_struct *p;
-	u64 clone_flags = args->flags;
 	struct file *pidfile = NULL;
 
 	if ((clone_flags & (CLONE_NEWNS|CLONE_FS)) == (CLONE_NEWNS|CLONE_FS))
@@ -2078,7 +2077,7 @@ static __latent_entropy struct task_struct *copy_process(
 		}
 		get_pid(pid);	/* held by pidfile now */
 
-		retval = put_user(pidfd, args->pidfd);
+		retval = put_user(pidfd, parent_tidptr);
 		if (retval)
 			goto bad_fork_put_pidfd;
 	}
