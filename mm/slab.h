@@ -380,9 +380,8 @@ static inline struct kmem_cache *cache_from_obj(struct kmem_cache *s, void *x)
 	    !unlikely(s->flags & SLAB_CONSISTENCY_CHECKS))
 		return s;
 
-	page = virt_to_head_page(x);
-	cachep = page->slab_cache;
-	WARN_ONCE(!slab_equal_or_root(cachep, s),
+	cachep = virt_to_cache(x);
+	WARN_ONCE(cachep && !slab_equal_or_root(cachep, s),
 		  "%s: Wrong slab cache. %s but object is from %s\n",
 		  __func__, s->name, cachep->name);
 	return cachep;
