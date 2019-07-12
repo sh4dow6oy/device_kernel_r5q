@@ -4503,10 +4503,6 @@ size_t __ksize(const void *objp)
 
 	c = virt_to_cache(objp);
 	size = c ? c->object_size : 0;
-	/* We assume that ksize callers could use the whole allocated area,
-	 * so we need to unpoison this area.
-	 */
-	kasan_unpoison_shadow(objp, size);
 
 	return size;
 }
