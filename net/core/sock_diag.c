@@ -18,6 +18,7 @@ static const struct sock_diag_handler *sock_diag_handlers[AF_MAX];
 static int (*inet_rcv_compat)(struct sk_buff *skb, struct nlmsghdr *nlh);
 static DEFINE_MUTEX(sock_diag_table_mutex);
 static struct workqueue_struct *broadcast_wq;
+static atomic64_t cookie_gen;
 
 DEFINE_COOKIE(sock_cookie);
 
@@ -28,7 +29,7 @@ u64 __sock_gen_cookie(struct sock *sk)
 
 		if (res)
 			return res;
-		res = gen_cookie_next(&sock_cookie);
+		res = atomic64_inc_return(&cookie_gen);
 		atomic64_cmpxchg(&sk->sk_cookie, 0, res);
 	}
 }
