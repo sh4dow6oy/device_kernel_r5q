@@ -2927,7 +2927,7 @@ static void tcp_process_loss(struct sock *sk, int flag, bool is_dupack,
 	struct tcp_sock *tp = tcp_sk(sk);
 	bool recovered = !before(tp->snd_una, tp->high_seq);
 
-	if ((flag & FLAG_SND_UNA_ADVANCED || tp->fastopen_rsk) &&
+	if ((flag & FLAG_SND_UNA_ADVANCED || rcu_access_pointer(tp->fastopen_rsk)) &&
 	    tcp_try_undo_loss(sk, false))
 		return;
 
@@ -6546,13 +6546,17 @@ reset_and_undo:
 
 static void tcp_rcv_synrecv_state_fastopen(struct sock *sk)
 {
+	struct request_sock *req;
+
 	tcp_try_undo_loss(sk, false);
 	inet_csk(sk)->icsk_retransmits = 0;
 
 	/* Once we leave TCP_SYN_RECV or TCP_FIN_WAIT_1,
 	 * we no longer need req so release it.
 	 */
-	reqsk_fastopen_remove(sk, tcp_sk(sk)->fastopen_rsk, false);
+	req = rcu_dereference_protected(tcp_sk(sk)->fastopen_rsk,
+					lockdep_sock_is_held(sk));
+	reqsk_fastopen_remove(sk, req, false);
 
 	/* Re-arm the timer because data may have been sent out.
 	 * This is similar to the regular data transmission case

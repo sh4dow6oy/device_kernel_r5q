@@ -464,7 +464,7 @@ struct tcp_sock {
 	 * socket. Used to retransmit SYNACKs etc.
 	 */
 	struct request_sock __rcu *fastopen_rsk;
-	struct saved_syn *saved_syn;
+	u32	*saved_syn;
 };
 
 enum tsq_enum {
