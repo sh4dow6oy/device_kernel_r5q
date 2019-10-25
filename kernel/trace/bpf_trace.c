@@ -1683,6 +1683,8 @@ static bool tracing_prog_is_valid_access(int off, int size,
 		return false;
 	if (off % size != 0)
 		return false;
+	if (!prog->aux->attach_btf_id)
+		return true;
 	return btf_ctx_access(off, size, type, prog, info);
 }
 
