@@ -284,6 +284,25 @@ __be32 __skb_flow_get_ports(const struct sk_buff *skb, int thoff, u8 ip_proto,
 }
 EXPORT_SYMBOL(__skb_flow_get_ports);
 
+/* If FLOW_DISSECTOR_KEY_ICMP is set, get the Type and Code from an ICMP packet
+ * using skb_flow_get_be16().
+ */
+static void __skb_flow_dissect_icmp(const struct sk_buff *skb,
+				    struct flow_dissector *flow_dissector,
+				    void *target_container,
+				    void *data, int thoff, int hlen)
+{
+	struct flow_dissector_key_icmp *key_icmp;
+
+	if (!dissector_uses_key(flow_dissector, FLOW_DISSECTOR_KEY_ICMP))
+		return;
+
+	key_icmp = skb_flow_dissector_target(flow_dissector,
+					     FLOW_DISSECTOR_KEY_ICMP,
+					     target_container);
+	key_icmp->icmp = skb_flow_get_be16(skb, thoff, data, hlen);
+}
+
 void skb_flow_dissect_meta(const struct sk_buff *skb,
 			   struct flow_dissector *flow_dissector,
 			   void *target_container)
