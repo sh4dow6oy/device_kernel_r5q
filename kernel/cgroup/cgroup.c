@@ -2006,7 +2006,7 @@ int cgroup_setup_root(struct cgroup_root *root, u16 ss_mask)
 		goto exit_root_id;
 	}
 	root_cgrp->kn = root->kf_root->kn;
-	WARN_ON_ONCE(cgroup_ino(root_cgrp) != 1);
+	WARN_ON_ONCE(cgroup_id(root_cgrp) != 1);
 	root_cgrp->ancestor_ids[0] = cgroup_id(root_cgrp);
 
 	ret = css_populate_dir(&root_cgrp->self);
@@ -3466,22 +3466,22 @@ static int cgroup_stat_show(struct seq_file *seq, void *v)
 #ifdef CONFIG_PSI
 static int cgroup_io_pressure_show(struct seq_file *seq, void *v)
 {
-	struct cgroup *cgroup = seq_css(seq)->cgroup;
-	struct psi_group *psi = cgroup->id == 1 ? &psi_system : &cgroup->psi;
+	struct cgroup *cgrp = seq_css(seq)->cgroup;
+	struct psi_group *psi = cgroup_id(cgrp) == 1 ? &psi_system : &cgrp->psi;
 
 	return psi_show(seq, psi, PSI_IO);
 }
 static int cgroup_memory_pressure_show(struct seq_file *seq, void *v)
 {
-	struct cgroup *cgroup = seq_css(seq)->cgroup;
-	struct psi_group *psi = cgroup->id == 1 ? &psi_system : &cgroup->psi;
+	struct cgroup *cgrp = seq_css(seq)->cgroup;
+	struct psi_group *psi = cgroup_id(cgrp) == 1 ? &psi_system : &cgrp->psi;
 
 	return psi_show(seq, psi, PSI_MEM);
 }
 static int cgroup_cpu_pressure_show(struct seq_file *seq, void *v)
 {
-	struct cgroup *cgroup = seq_css(seq)->cgroup;
-	struct psi_group *psi = cgroup->id == 1 ? &psi_system : &cgroup->psi;
+	struct cgroup *cgrp = seq_css(seq)->cgroup;
+	struct psi_group *psi = cgroup_id(cgrp) == 1 ? &psi_system : &cgrp->psi;
 
 	return psi_show(seq, psi, PSI_CPU);
 }
@@ -5146,28 +5146,9 @@ static struct cgroup *cgroup_create(struct cgroup *parent, const char *name,
 	cgrp->self.parent = &parent->self;
 	cgrp->root = root;
 	cgrp->level = level;
-
-	if (cgrp->root == &cgrp_dfl_root) {
-		ret = cgroup_bpf_inherit(cgrp);
-		if (ret)
-			goto out_kernfs_remove;
-	}
-
-	/*
-	 * New cgroup inherits effective freeze counter, and
-	 * if the parent has to be frozen, the child has too.
-	 */
-	cgrp->freezer.e_freeze = parent->freezer.e_freeze;
-	if (cgrp->freezer.e_freeze) {
-		/*
-		 * Set the CGRP_FREEZE flag, so when a process will be
-		 * attached to the child cgroup, it will become frozen.
-		 * At this point the new cgroup is unpopulated, so we can
-		 * consider it frozen immediately.
-		 */
-		set_bit(CGRP_FREEZE, &cgrp->flags);
-		set_bit(CGRP_FROZEN, &cgrp->flags);
-	}
+	ret = cgroup_bpf_inherit(cgrp);
+	if (ret)
+		goto out_kernfs_remove;
 
 	/*
 	 * New cgroup inherits effective freeze counter, and
