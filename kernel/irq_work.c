@@ -37,7 +37,7 @@ static bool irq_work_claim(struct irq_work *work)
 	flags = atomic_read(&work->flags) & ~IRQ_WORK_PENDING;
 	for (;;) {
 		nflags = flags | IRQ_WORK_CLAIMED;
-		oflags = cmpxchg(&work->flags, flags, nflags);
+		oflags = atomic_cmpxchg(&work->flags, flags, nflags);
 		if (oflags == flags)
 			break;
 		if (oflags & IRQ_WORK_PENDING)
@@ -60,7 +60,7 @@ void __weak arch_irq_work_raise(void)
 static void __irq_work_queue_local(struct irq_work *work)
 {
 	/* If the work is "lazy", handle it from next tick if any */
-	if (work->flags & IRQ_WORK_LAZY) {
+	if (atomic_read(&work->flags) & IRQ_WORK_LAZY) {
 		if (llist_add(&work->llnode, this_cpu_ptr(&lazy_list)) &&
 		    tick_nohz_tick_stopped())
 			arch_irq_work_raise();
@@ -142,7 +142,7 @@ static void irq_work_run_list(struct llist_head *list)
 {
 	struct irq_work *work, *tmp;
 	struct llist_node *llnode;
-	unsigned long flags;
+	int flags;
 
 	BUG_ON(!irqs_disabled());
 
