@@ -181,24 +181,54 @@ struct pid *alloc_pid(struct pid_namespace *ns, pid_t *set_tid,
 	pid->level = ns->level;
 
 	for (i = ns->level; i >= 0; i--) {
-		int pid_min = 1;
+		int tid = 0;
+
+		if (set_tid_size) {
+			tid = set_tid[ns->level - i];
+
+			retval = -EINVAL;
+			if (tid < 1 || tid >= pid_max)
+				goto out_free;
+			/*
+			 * Also fail if a PID != 1 is requested and
+			 * no PID 1 exists.
+			 */
+			if (tid != 1 && !tmp->child_reaper)
+				goto out_free;
+			retval = -EPERM;
+			if (!ns_capable(tmp->user_ns, CAP_SYS_ADMIN))
+				goto out_free;
+			set_tid_size--;
+		}
 
 		idr_preload(GFP_KERNEL);
 		spin_lock_irq(&pidmap_lock);
 
-		/*
-		 * init really needs pid 1, but after reaching the maximum
-		 * wrap back to RESERVED_PIDS
-		 */
-		if (idr_get_cursor(&tmp->idr) > RESERVED_PIDS)
-			pid_min = RESERVED_PIDS;
+		if (tid) {
+			nr = idr_alloc(&tmp->idr, NULL, tid,
+				       tid + 1, GFP_ATOMIC);
+			/*
+			 * If ENOSPC is returned it means that the PID is
+			 * alreay in use. Return EEXIST in that case.
+			 */
+			if (nr == -ENOSPC)
+				nr = -EEXIST;
+		} else {
+			int pid_min = 1;
+			/*
+			 * init really needs pid 1, but after reaching the
+			 * maximum wrap back to RESERVED_PIDS
+			 */
+			if (idr_get_cursor(&tmp->idr) > RESERVED_PIDS)
+				pid_min = RESERVED_PIDS;
 
-		/*
-		 * Store a null pointer so find_pid_ns does not find
-		 * a partially initialized PID (see below).
-		 */
-		nr = idr_alloc_cyclic(&tmp->idr, NULL, pid_min,
-				      pid_max, GFP_ATOMIC);
+			/*
+			 * Store a null pointer so find_pid_ns does not find
+			 * a partially initialized PID (see below).
+			 */
+			nr = idr_alloc_cyclic(&tmp->idr, NULL, pid_min,
+					      pid_max, GFP_ATOMIC);
+		}
 		spin_unlock_irq(&pidmap_lock);
 		idr_preload_end();
 
