@@ -33,6 +33,11 @@
 
 static DEFINE_PER_CPU(struct list_head, xskmap_flush_list);
 
+static struct xdp_sock *xdp_sk(struct sock *sk)
+{
+	return (struct xdp_sock *)sk;
+}
+
 bool xsk_is_setup_for_bpf_map(struct xdp_sock *xs)
 {
 	return READ_ONCE(xs->rx) &&  READ_ONCE(xs->umem) &&
@@ -138,11 +143,9 @@ int xsk_generic_rcv(struct xdp_sock *xs, struct xdp_buff *xdp)
 	return err;
 }
 
-int __xsk_map_redirect(struct bpf_map *map, struct xdp_buff *xdp,
-		       struct xdp_sock *xs)
+int __xsk_map_redirect(struct xdp_sock *xs, struct xdp_buff *xdp)
 {
-	struct xsk_map *m = container_of(map, struct xsk_map, map);
-	struct list_head *flush_list = this_cpu_ptr(m->flush_list);
+	struct list_head *flush_list = this_cpu_ptr(&xskmap_flush_list);
 	int err;
 
 	err = xsk_rcv(xs, xdp);
@@ -155,10 +158,9 @@ int __xsk_map_redirect(struct bpf_map *map, struct xdp_buff *xdp,
 	return 0;
 }
 
-void __xsk_map_flush(struct bpf_map *map)
+void __xsk_map_flush(void)
 {
-	struct xsk_map *m = container_of(map, struct xsk_map, map);
-	struct list_head *flush_list = this_cpu_ptr(m->flush_list);
+	struct list_head *flush_list = this_cpu_ptr(&xskmap_flush_list);
 	struct xdp_sock *xs, *tmp;
 
 	list_for_each_entry_safe(xs, tmp, flush_list, flush_node) {
