@@ -1275,7 +1275,7 @@ int security_sidtab_hash_stats(struct selinux_state *state, char *page)
 {
 	int rc;
 
-	if (!selinux_initialized(state)) {
+	if (!state->initialized) {
 		pr_err("SELinux: %s:  called before initial load_policy\n",
 		       __func__);
 		return -EINVAL;
