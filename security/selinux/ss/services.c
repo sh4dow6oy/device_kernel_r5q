@@ -1275,7 +1275,7 @@ int security_sidtab_hash_stats(struct selinux_state *state, char *page)
 {
 	int rc;
 
-	if (!state->initialized) {
+	if (!selinux_initialized(state)) {
 		pr_err("SELinux: %s:  called before initial load_policy\n",
 		       __func__);
 		return -EINVAL;
@@ -2844,7 +2844,7 @@ int security_get_bools(struct selinux_state *state,
 	struct policydb *policydb;
 	int i, rc;
 
-	if (!state->initialized) {
+	if (!selinux_initialized(state)) {
 		*len = 0;
 		*names = NULL;
 		*values = NULL;
@@ -3184,7 +3184,7 @@ int security_get_classes(struct selinux_state *state,
 	struct policydb *policydb = &state->ss->policydb;
 	int rc;
 
-	if (!state->initialized) {
+	if (!selinux_initialized(state)) {
 		*nclasses = 0;
 		*classes = NULL;
 		return 0;
