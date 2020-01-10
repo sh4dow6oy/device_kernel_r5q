@@ -235,24 +235,6 @@ static inline u32 task_sid(const struct task_struct *task)
 	return sid;
 }
 
-/* Allocate and free functions for each kind of security blob. */
-
-static int inode_alloc_security(struct inode *inode)
-{
-	struct inode_security_struct *isec = selinux_inode(inode);
-	u32 sid = current_sid();
-
-	spin_lock_init(&isec->lock);
-	INIT_LIST_HEAD(&isec->list);
-	isec->inode = inode;
-	isec->sid = SECINITSID_UNLABELED;
-	isec->sclass = SECCLASS_FILE;
-	isec->task_sid = sid;
-	isec->initialized = LABEL_INVALID;
-
-	return 0;
-}
-
 static int inode_doinit_with_dentry(struct inode *inode, struct dentry *opt_dentry);
 
 /*
@@ -350,37 +332,6 @@ static void inode_free_security(struct inode *inode)
 		list_del_init(&isec->list);
 		spin_unlock(&sbsec->isec_lock);
 	}
-}
-
-static int file_alloc_security(struct file *file)
-{
-	struct file_security_struct *fsec = selinux_file(file);
-	u32 sid = current_sid();
-
-	fsec->sid = sid;
-	fsec->fown_sid = sid;
-
-	return 0;
-}
-
-static int superblock_alloc_security(struct super_block *sb)
-{
-	struct superblock_security_struct *sbsec;
-
-	sbsec = kzalloc(sizeof(struct superblock_security_struct), GFP_KERNEL);
-	if (!sbsec)
-		return -ENOMEM;
-
-	mutex_init(&sbsec->lock);
-	INIT_LIST_HEAD(&sbsec->isec_head);
-	spin_lock_init(&sbsec->isec_lock);
-	sbsec->sb = sb;
-	sbsec->sid = SECINITSID_UNLABELED;
-	sbsec->def_sid = SECINITSID_FILE;
-	sbsec->mntpoint_sid = SECINITSID_UNLABELED;
-	sb->s_security = sbsec;
-
-	return 0;
 }
 
 static void superblock_free_security(struct super_block *sb)
@@ -3705,6 +3656,12 @@ static int selinux_file_alloc_security(struct file *file)
 {
 	struct file_security_struct *fsec = selinux_file(file);
 	u32 sid = current_sid();
+
+	fsec->sid = sid;
+	fsec->fown_sid = sid;
+
+	return 0;
+}
 
 /*
  * Check whether a task has the ioctl permission and cmd
