@@ -24,7 +24,7 @@
  * wake-preempt) as that likely will touch the same data, increases
  * cache locality.
  */
-#define SCHED_FEAT_LAST_BUDDY 1
+SCHED_FEAT(LAST_BUDDY, true)
 
 /*
  * Consider buddies to be cache hot, decreases the likelyness of a
