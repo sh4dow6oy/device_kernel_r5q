@@ -557,12 +557,10 @@ int sock_map_update_elem_sys(struct bpf_map *map, void *key, void *value,
 	}
 
 	sock_map_sk_acquire(sk);
-	if (!sock_map_sk_state_allowed(sk))
+	if (sk->sk_state != TCP_ESTABLISHED)
 		ret = -EOPNOTSUPP;
-	else if (map->map_type == BPF_MAP_TYPE_SOCKMAP)
-		ret = sock_map_update_common(map, *(u32 *)key, sk, flags);
 	else
-		ret = sock_hash_update_common(map, key, sk, flags);
+		ret = sock_map_update_common(map, idx, sk, flags);
 	sock_map_sk_release(sk);
 out:
 	fput(sock->file);
@@ -902,6 +900,38 @@ out_unlock:
 	sk_psock_put(sk, psock);
 out_free:
 	sk_psock_free_link(link);
+	return ret;
+}
+
+static int sock_hash_update_elem(struct bpf_map *map, void *key,
+				 void *value, u64 flags)
+{
+	u32 ufd = *(u32 *)value;
+	struct socket *sock;
+	struct sock *sk;
+	int ret;
+
+	sock = sockfd_lookup(ufd, &ret);
+	if (!sock)
+		return ret;
+	sk = sock->sk;
+	if (!sk) {
+		ret = -EINVAL;
+		goto out;
+	}
+	if (!sock_map_sk_is_suitable(sk)) {
+		ret = -EOPNOTSUPP;
+		goto out;
+	}
+
+	sock_map_sk_acquire(sk);
+	if (sk->sk_state != TCP_ESTABLISHED)
+		ret = -EOPNOTSUPP;
+	else
+		ret = sock_hash_update_common(map, key, sk, flags);
+	sock_map_sk_release(sk);
+out:
+	fput(sock->file);
 	return ret;
 }
 
