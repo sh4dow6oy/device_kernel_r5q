@@ -525,11 +525,13 @@ static bool sock_map_sk_state_allowed(const struct sock *sk)
 	return (1 << sk->sk_state) & (TCPF_ESTABLISHED | TCPF_LISTEN);
 }
 
-static int sock_hash_update_common(struct bpf_map *map, void *key,
-				   struct sock *sk, u64 flags);
+static bool sock_map_redirect_allowed(const struct sock *sk)
+{
+	return sk->sk_state != TCP_LISTEN;
+}
 
-int sock_map_update_elem_sys(struct bpf_map *map, void *key, void *value,
-			     u64 flags)
+static int sock_map_update_elem(struct bpf_map *map, void *key,
+				void *value, u64 flags)
 {
 	struct socket *sock;
 	struct sock *sk;
@@ -557,7 +559,7 @@ int sock_map_update_elem_sys(struct bpf_map *map, void *key, void *value,
 	}
 
 	sock_map_sk_acquire(sk);
-	if (sk->sk_state != TCP_ESTABLISHED)
+	if (!sock_map_sk_state_allowed(sk))
 		ret = -EOPNOTSUPP;
 	else
 		ret = sock_map_update_common(map, idx, sk, flags);
@@ -925,7 +927,7 @@ static int sock_hash_update_elem(struct bpf_map *map, void *key,
 	}
 
 	sock_map_sk_acquire(sk);
-	if (sk->sk_state != TCP_ESTABLISHED)
+	if (!sock_map_sk_state_allowed(sk))
 		ret = -EOPNOTSUPP;
 	else
 		ret = sock_hash_update_common(map, key, sk, flags);
