@@ -73,7 +73,7 @@ struct bpf_insn {
 /* Key of an a BPF_MAP_TYPE_LPM_TRIE entry */
 struct bpf_lpm_trie_key {
 	__u32	prefixlen;	/* up to 32 for AF_INET, 128 for AF_INET6 */
-	__u8	data[0];	/* Arbitrary size */
+	__u8	data[];	/* Arbitrary size */
 };
 
 struct bpf_cgroup_storage_key {
@@ -314,10 +314,12 @@ enum bpf_attach_type {
 #define BPF_PSEUDO_CALL		1
 
 /* flags for BPF_MAP_UPDATE_ELEM command */
-#define BPF_ANY		0 /* create new element or update existing */
-#define BPF_NOEXIST	1 /* create new element if it didn't exist */
-#define BPF_EXIST	2 /* update existing element */
-#define BPF_F_LOCK	4 /* spin_lock-ed map_lookup/map_update */
+enum {
+	BPF_ANY		= 0, /* create new element or update existing */
+	BPF_NOEXIST	= 1, /* create new element if it didn't exist */
+	BPF_EXIST	= 2, /* update existing element */
+	BPF_F_LOCK	= 4, /* spin_lock-ed map_lookup/map_update */
+};
 
 /* flags for BPF_MAP_CREATE command */
 enum {
@@ -351,75 +353,7 @@ enum {
 
 /* Enable memory-mapping BPF map */
 	BPF_F_MMAPABLE		= (1U << 10),
-
-/* Share perf_event among processes */
-	BPF_F_PRESERVE_ELEMS	= (1U << 11),
-
-/* Create a map that is suitable to be an inner map with dynamic max entries */
-	BPF_F_INNER_MAP		= (1U << 12),
 };
-
-/* Flags for BPF_PROG_QUERY. */
-
-/* Query effective (directly attached + inherited from ancestor cgroups)
- * programs that will be executed for events within a cgroup.
- * attach_flags with this flag are returned only for directly attached programs.
- */
-#define BPF_F_QUERY_EFFECTIVE	(1U << 0)
-
-/* Flags for BPF_PROG_TEST_RUN */
-
-/* If set, run the test on the cpu specified by bpf_attr.test.cpu */
-#define BPF_F_TEST_RUN_ON_CPU	(1U << 0)
-
-/* type for BPF_ENABLE_STATS */
-enum bpf_stats_type {
-	/* enabled run_time_ns and run_cnt */
-	BPF_STATS_RUN_TIME = 0,
-};
-
-enum bpf_stack_build_id_status {
-	/* user space need an empty entry to identify end of a trace */
-	BPF_STACK_BUILD_ID_EMPTY = 0,
-	/* with valid build_id and offset */
-	BPF_STACK_BUILD_ID_VALID = 1,
-	/* couldn't get build_id, fallback to ip */
-	BPF_STACK_BUILD_ID_IP = 2,
-};
-
-#define BPF_BUILD_ID_SIZE 20
-struct bpf_stack_build_id {
-	__s32		status;
-	unsigned char	build_id[BPF_BUILD_ID_SIZE];
-	union {
-		__u64	offset;
-		__u64	ip;
-	};
-};
-
-#define BPF_OBJ_NAME_LEN 16U
-
-#define BPF_OBJ_NAME_LEN 16U
-
-/* Flags for accessing BPF object from syscall side. */
-#define BPF_F_RDONLY		(1U << 3)
-#define BPF_F_WRONLY		(1U << 4)
-
-/* Flag for stack_map, store build_id+offset instead of pointer */
-#define BPF_F_STACK_BUILD_ID	(1U << 5)
-
-/* Zero-initialize hash function seed. This should only be used for testing. */
-#define BPF_F_ZERO_SEED		(1U << 6)
-
-/* Flags for accessing BPF object from program side. */
-#define BPF_F_RDONLY_PROG	(1U << 7)
-#define BPF_F_WRONLY_PROG	(1U << 8)
-
-/* Clone map from listener for newly accepted socket */
-#define BPF_F_CLONE		(1U << 9)
-
-/* Enable memory-mapping BPF map */
-#define BPF_F_MMAPABLE		(1U << 10)
 
 /* Flags for BPF_PROG_QUERY. */
 
@@ -447,6 +381,8 @@ struct bpf_stack_build_id {
 		__u64	ip;
 	};
 };
+
+#define BPF_OBJ_NAME_LEN 16U
 
 union bpf_attr {
 	struct { /* anonymous struct used by BPF_MAP_CREATE command */
@@ -3150,24 +3086,29 @@ enum {
 };
 
 /* flags for both BPF_FUNC_get_stackid and BPF_FUNC_get_stack. */
-#define BPF_F_SKIP_FIELD_MASK		0xffULL
-#define BPF_F_USER_STACK		(1ULL << 8)
+enum {
+	BPF_F_SKIP_FIELD_MASK		= 0xffULL,
+	BPF_F_USER_STACK		= (1ULL << 8),
 /* flags used by BPF_FUNC_get_stackid only. */
-#define BPF_F_FAST_STACK_CMP		(1ULL << 9)
-#define BPF_F_REUSE_STACKID		(1ULL << 10)
+	BPF_F_FAST_STACK_CMP		= (1ULL << 9),
+	BPF_F_REUSE_STACKID		= (1ULL << 10),
 /* flags used by BPF_FUNC_get_stack only. */
-#define BPF_F_USER_BUILD_ID		(1ULL << 11)
+	BPF_F_USER_BUILD_ID		= (1ULL << 11),
+};
 
 /* BPF_FUNC_skb_set_tunnel_key flags. */
-#define BPF_F_ZERO_CSUM_TX		(1ULL << 1)
-#define BPF_F_DONT_FRAGMENT		(1ULL << 2)
-#define BPF_F_SEQ_NUMBER		(1ULL << 3)
+enum {
+	BPF_F_ZERO_CSUM_TX		= (1ULL << 1),
+	BPF_F_DONT_FRAGMENT		= (1ULL << 2),
+	BPF_F_SEQ_NUMBER		= (1ULL << 3),
+};
 
 /* BPF_FUNC_perf_event_output, BPF_FUNC_perf_event_read and
  * BPF_FUNC_perf_event_read_value flags.
  */
-#define BPF_F_INDEX_MASK		0xffffffffULL
-#define BPF_F_CURRENT_CPU		BPF_F_INDEX_MASK
+enum {
+	BPF_F_INDEX_MASK		= 0xffffffffULL,
+	BPF_F_CURRENT_CPU		= BPF_F_INDEX_MASK,
 /* BPF_FUNC_perf_event_output for sk_buff input context. */
 	BPF_F_CTXLEN_MASK		= (0xfffffULL << 32),
 };
@@ -3177,14 +3118,6 @@ enum {
 	BPF_F_CURRENT_NETNS		= (-1L),
 };
 
-/* BPF_FUNC_csum_level level values. */
-enum {
-	BPF_CSUM_LEVEL_QUERY,
-	BPF_CSUM_LEVEL_INC,
-	BPF_CSUM_LEVEL_DEC,
-	BPF_CSUM_LEVEL_RESET,
-};
-
 /* BPF_FUNC_skb_adjust_room flags. */
 enum {
 	BPF_F_ADJ_ROOM_FIXED_GSO	= (1ULL << 0),
@@ -3192,7 +3125,6 @@ enum {
 	BPF_F_ADJ_ROOM_ENCAP_L3_IPV6	= (1ULL << 2),
 	BPF_F_ADJ_ROOM_ENCAP_L4_GRE	= (1ULL << 3),
 	BPF_F_ADJ_ROOM_ENCAP_L4_UDP	= (1ULL << 4),
-	BPF_F_ADJ_ROOM_NO_CSUM_RESET	= (1ULL << 5),
 };
 
 enum {
@@ -3209,65 +3141,15 @@ enum {
 	BPF_F_SYSCTL_BASE_NAME		= (1ULL << 0),
 };
 
-/* BPF_FUNC_<kernel_obj>_storage_get flags */
+/* BPF_FUNC_sk_storage_get flags */
 enum {
-	BPF_LOCAL_STORAGE_GET_F_CREATE	= (1ULL << 0),
-	/* BPF_SK_STORAGE_GET_F_CREATE is only kept for backward compatibility
-	 * and BPF_LOCAL_STORAGE_GET_F_CREATE must be used instead.
-	 */
-	BPF_SK_STORAGE_GET_F_CREATE  = BPF_LOCAL_STORAGE_GET_F_CREATE,
+	BPF_SK_STORAGE_GET_F_CREATE	= (1ULL << 0),
 };
 
 /* BPF_FUNC_read_branch_records flags. */
 enum {
 	BPF_F_GET_BRANCH_RECORDS_SIZE	= (1ULL << 0),
 };
-
-/* BPF_FUNC_bpf_ringbuf_commit, BPF_FUNC_bpf_ringbuf_discard, and
- * BPF_FUNC_bpf_ringbuf_output flags.
- */
-enum {
-	BPF_RB_NO_WAKEUP		= (1ULL << 0),
-	BPF_RB_FORCE_WAKEUP		= (1ULL << 1),
-};
-
-/* BPF_FUNC_bpf_ringbuf_query flags */
-enum {
-	BPF_RB_AVAIL_DATA = 0,
-	BPF_RB_RING_SIZE = 1,
-	BPF_RB_CONS_POS = 2,
-	BPF_RB_PROD_POS = 3,
-};
-
-/* BPF ring buffer constants */
-enum {
-	BPF_RINGBUF_BUSY_BIT		= (1U << 31),
-	BPF_RINGBUF_DISCARD_BIT		= (1U << 30),
-	BPF_RINGBUF_HDR_SZ		= 8,
-};
-
-/* Current network namespace */
-#define BPF_F_CURRENT_NETNS		(-1L)
-
-/* BPF_FUNC_skb_adjust_room flags. */
-#define BPF_F_ADJ_ROOM_FIXED_GSO	(1ULL << 0)
-
-#define BPF_ADJ_ROOM_ENCAP_L2_MASK	0xff
-#define BPF_ADJ_ROOM_ENCAP_L2_SHIFT	56
-
-#define BPF_F_ADJ_ROOM_ENCAP_L3_IPV4	(1ULL << 1)
-#define BPF_F_ADJ_ROOM_ENCAP_L3_IPV6	(1ULL << 2)
-#define BPF_F_ADJ_ROOM_ENCAP_L4_GRE	(1ULL << 3)
-#define BPF_F_ADJ_ROOM_ENCAP_L4_UDP	(1ULL << 4)
-#define BPF_F_ADJ_ROOM_ENCAP_L2(len)	(((__u64)len & \
-					  BPF_ADJ_ROOM_ENCAP_L2_MASK) \
-					 << BPF_ADJ_ROOM_ENCAP_L2_SHIFT)
-
-/* BPF_FUNC_sysctl_get_name flags. */
-#define BPF_F_SYSCTL_BASE_NAME		(1ULL << 0)
-
-/* BPF_FUNC_sk_storage_get flags */
-#define BPF_SK_STORAGE_GET_F_CREATE	(1ULL << 0)
 
 /* Mode for BPF_FUNC_skb_adjust_room helper. */
 enum bpf_adj_room_mode {
@@ -3686,13 +3568,14 @@ struct bpf_sock_ops {
 };
 
 /* Definitions for bpf_sock_ops_cb_flags */
-#define BPF_SOCK_OPS_RTO_CB_FLAG	(1<<0)
-#define BPF_SOCK_OPS_RETRANS_CB_FLAG	(1<<1)
-#define BPF_SOCK_OPS_STATE_CB_FLAG	(1<<2)
-#define BPF_SOCK_OPS_RTT_CB_FLAG	(1<<3)
-#define BPF_SOCK_OPS_ALL_CB_FLAGS       0xF		/* Mask of all currently
-							 * supported cb flags
-							 */
+enum {
+	BPF_SOCK_OPS_RTO_CB_FLAG	= (1<<0),
+	BPF_SOCK_OPS_RETRANS_CB_FLAG	= (1<<1),
+	BPF_SOCK_OPS_STATE_CB_FLAG	= (1<<2),
+	BPF_SOCK_OPS_RTT_CB_FLAG	= (1<<3),
+/* Mask of all currently supported cb flags */
+	BPF_SOCK_OPS_ALL_CB_FLAGS       = 0xF,
+};
 
 /* List of known BPF sock_ops operators.
  * New entries can only be added at the end
@@ -3771,88 +3654,9 @@ enum {
 	BPF_TCP_MAX_STATES	/* Leave at the end! */
 };
 
-/* List of TCP states. There is a build check in net/ipv4/tcp.c to detect
- * changes between the TCP and BPF versions. Ideally this should never happen.
- * If it does, we need to add code to convert them before calling
- * the BPF sock_ops function.
- */
-enum {
-	BPF_TCP_ESTABLISHED = 1,
-	BPF_TCP_SYN_SENT,
-	BPF_TCP_SYN_RECV,
-	BPF_TCP_FIN_WAIT1,
-	BPF_TCP_FIN_WAIT2,
-	BPF_TCP_TIME_WAIT,
-	BPF_TCP_CLOSE,
-	BPF_TCP_CLOSE_WAIT,
-	BPF_TCP_LAST_ACK,
-	BPF_TCP_LISTEN,
-	BPF_TCP_CLOSING,	/* Now a valid state */
-	BPF_TCP_NEW_SYN_RECV,
-
-	BPF_TCP_MAX_STATES	/* Leave at the end! */
-};
-
 enum {
 	TCP_BPF_IW		= 1001,	/* Set TCP initial congestion window */
 	TCP_BPF_SNDCWND_CLAMP	= 1002,	/* Set sndcwnd_clamp */
-	TCP_BPF_DELACK_MAX	= 1003, /* Max delay ack in usecs */
-	TCP_BPF_RTO_MIN		= 1004, /* Min delay ack in usecs */
-	/* Copy the SYN pkt to optval
-	 *
-	 * BPF_PROG_TYPE_SOCK_OPS only.  It is similar to the
-	 * bpf_getsockopt(TCP_SAVED_SYN) but it does not limit
-	 * to only getting from the saved_syn.  It can either get the
-	 * syn packet from:
-	 *
-	 * 1. the just-received SYN packet (only available when writing the
-	 *    SYNACK).  It will be useful when it is not necessary to
-	 *    save the SYN packet for latter use.  It is also the only way
-	 *    to get the SYN during syncookie mode because the syn
-	 *    packet cannot be saved during syncookie.
-	 *
-	 * OR
-	 *
-	 * 2. the earlier saved syn which was done by
-	 *    bpf_setsockopt(TCP_SAVE_SYN).
-	 *
-	 * The bpf_getsockopt(TCP_BPF_SYN*) option will hide where the
-	 * SYN packet is obtained.
-	 *
-	 * If the bpf-prog does not need the IP[46] header,  the
-	 * bpf-prog can avoid parsing the IP header by using
-	 * TCP_BPF_SYN.  Otherwise, the bpf-prog can get both
-	 * IP[46] and TCP header by using TCP_BPF_SYN_IP.
-	 *
-	 *      >0: Total number of bytes copied
-	 * -ENOSPC: Not enough space in optval. Only optlen number of
-	 *          bytes is copied.
-	 * -ENOENT: The SYN skb is not available now and the earlier SYN pkt
-	 *	    is not saved by setsockopt(TCP_SAVE_SYN).
-	 */
-	TCP_BPF_SYN		= 1005, /* Copy the TCP header */
-	TCP_BPF_SYN_IP		= 1006, /* Copy the IP[46] and TCP header */
-	TCP_BPF_SYN_MAC         = 1007, /* Copy the MAC, IP[46], and TCP header */
-};
-
-enum {
-	BPF_LOAD_HDR_OPT_TCP_SYN = (1ULL << 0),
-};
-
-/* args[0] value during BPF_SOCK_OPS_HDR_OPT_LEN_CB and
- * BPF_SOCK_OPS_WRITE_HDR_OPT_CB.
- */
-enum {
-	BPF_WRITE_HDR_TCP_CURRENT_MSS = 1,	/* Kernel is finding the
-						 * total option spaces
-						 * required for an established
-						 * sk in order to calculate the
-						 * MSS.  No skb is actually
-						 * sent.
-						 */
-	BPF_WRITE_HDR_TCP_SYNACK_COOKIE = 2,	/* Kernel is in syncookie mode
-						 * when sending a SYN.
-						 */
 };
 
 struct bpf_perf_event_value {
@@ -3952,16 +3756,6 @@ struct bpf_fib_lookup {
 	__u8	dmac[6];     /* ETH_ALEN */
 };
 
-struct bpf_redir_neigh {
-	/* network family for lookup (AF_INET, AF_INET6) */
-	__u32 nh_family;
-	/* network address of nexthop; skips fib lookup to find gateway */
-	union {
-		__be32		ipv4_nh;
-		__u32		ipv6_nh[4];  /* in6_addr; network order */
-	};
-};
-
 enum bpf_task_fd_type {
 	BPF_FD_TYPE_RAW_TRACEPOINT,	/* tp name */
 	BPF_FD_TYPE_TRACEPOINT,		/* tp name */
@@ -3976,223 +3770,6 @@ enum {
 	BPF_FLOW_DISSECTOR_F_STOP_AT_FLOW_LABEL		= (1U << 1),
 	BPF_FLOW_DISSECTOR_F_STOP_AT_ENCAP		= (1U << 2),
 };
-
-struct bpf_flow_keys {
-	__u16	nhoff;
-	__u16	thoff;
-	__u16	addr_proto;			/* ETH_P_* of valid addrs */
-	__u8	is_frag;
-	__u8	is_first_frag;
-	__u8	is_encap;
-	__u8	ip_proto;
-	__be16	n_proto;
-	__be16	sport;
-	__be16	dport;
-	union {
-		struct {
-			__be32	ipv4_src;
-			__be32	ipv4_dst;
-		};
-		struct {
-			__u32	ipv6_src[4];	/* in6_addr; network order */
-			__u32	ipv6_dst[4];	/* in6_addr; network order */
-		};
-	};
-	__u32	flags;
-	__be32	flow_label;
-};
-
-struct bpf_func_info {
-	__u32	insn_off;
-	__u32	type_id;
-};
-
-#define BPF_LINE_INFO_LINE_NUM(line_col)	((line_col) >> 10)
-#define BPF_LINE_INFO_LINE_COL(line_col)	((line_col) & 0x3ff)
-
-struct bpf_line_info {
-	__u32	insn_off;
-	__u32	file_name_off;
-	__u32	line_off;
-	__u32	line_col;
-};
-
-struct bpf_spin_lock {
-	__u32	val;
-};
-
-struct bpf_sysctl {
-	__u32	write;		/* Sysctl is being read (= 0) or written (= 1).
-				 * Allows 1,2,4-byte read, but no write.
-				 */
-	__u32	file_pos;	/* Sysctl file position to read from, write to.
-				 * Allows 1,2,4-byte read an 4-byte write.
-				 */
-};
-
-struct bpf_sockopt {
-	__bpf_md_ptr(struct bpf_sock *, sk);
-	__bpf_md_ptr(void *, optval);
-	__bpf_md_ptr(void *, optval_end);
-
-	__s32	level;
-	__s32	optname;
-	__s32	optlen;
-	__s32	retval;
-};
-
-struct bpf_pidns_info {
-	__u32 pid;
-	__u32 tgid;
-};
-
-/* User accessible data for SK_LOOKUP programs. Add new fields at the end. */
-struct bpf_sk_lookup {
-	__bpf_md_ptr(struct bpf_sock *, sk); /* Selected socket */
-
-	__u32 family;		/* Protocol family (AF_INET, AF_INET6) */
-	__u32 protocol;		/* IP protocol (IPPROTO_TCP, IPPROTO_UDP) */
-	__u32 remote_ip4;	/* Network byte order */
-	__u32 remote_ip6[4];	/* Network byte order */
-	__u32 remote_port;	/* Network byte order */
-	__u32 local_ip4;	/* Network byte order */
-	__u32 local_ip6[4];	/* Network byte order */
-	__u32 local_port;	/* Host byte order */
-};
-
-/*
- * struct btf_ptr is used for typed pointer representation; the
- * type id is used to render the pointer data as the appropriate type
- * via the bpf_snprintf_btf() helper described above.  A flags field -
- * potentially to specify additional details about the BTF pointer
- * (rather than its mode of display) - is included for future use.
- * Display flags - BTF_F_* - are passed to bpf_snprintf_btf separately.
- */
-struct btf_ptr {
-	void *ptr;
-	__u32 type_id;
-	__u32 flags;		/* BTF ptr flags; unused at present. */
-};
-
-/*
- * Flags to control bpf_snprintf_btf() behaviour.
- *     - BTF_F_COMPACT: no formatting around type information
- *     - BTF_F_NONAME: no struct/union member names/types
- *     - BTF_F_PTR_RAW: show raw (unobfuscated) pointer values;
- *       equivalent to %px.
- *     - BTF_F_ZERO: show zero-valued struct/union members; they
- *       are not displayed by default
- */
-enum {
-	BTF_F_COMPACT	=	(1ULL << 0),
-	BTF_F_NONAME	=	(1ULL << 1),
-	BTF_F_PTR_RAW	=	(1ULL << 2),
-	BTF_F_ZERO	=	(1ULL << 3),
-};
-
-struct bpf_perf_event_value {
-	__u64 counter;
-	__u64 enabled;
-	__u64 running;
-};
-
-#define BPF_DEVCG_ACC_MKNOD	(1ULL << 0)
-#define BPF_DEVCG_ACC_READ	(1ULL << 1)
-#define BPF_DEVCG_ACC_WRITE	(1ULL << 2)
-
-#define BPF_DEVCG_DEV_BLOCK	(1ULL << 0)
-#define BPF_DEVCG_DEV_CHAR	(1ULL << 1)
-
-struct bpf_cgroup_dev_ctx {
-	/* access_type encoded as (BPF_DEVCG_ACC_* << 16) | BPF_DEVCG_DEV_* */
-	__u32 access_type;
-	__u32 major;
-	__u32 minor;
-};
-
-struct bpf_raw_tracepoint_args {
-	__u64 args[0];
-};
-
-/* DIRECT:  Skip the FIB rules and go to FIB table associated with device
- * OUTPUT:  Do lookup from egress perspective; default is ingress
- */
-#define BPF_FIB_LOOKUP_DIRECT  (1U << 0)
-#define BPF_FIB_LOOKUP_OUTPUT  (1U << 1)
-
-enum {
-	BPF_FIB_LKUP_RET_SUCCESS,      /* lookup successful */
-	BPF_FIB_LKUP_RET_BLACKHOLE,    /* dest is blackholed; can be dropped */
-	BPF_FIB_LKUP_RET_UNREACHABLE,  /* dest is unreachable; can be dropped */
-	BPF_FIB_LKUP_RET_PROHIBIT,     /* dest not allowed; can be dropped */
-	BPF_FIB_LKUP_RET_NOT_FWDED,    /* packet is not forwarded */
-	BPF_FIB_LKUP_RET_FWD_DISABLED, /* fwding is not enabled on ingress */
-	BPF_FIB_LKUP_RET_UNSUPP_LWT,   /* fwd requires encapsulation */
-	BPF_FIB_LKUP_RET_NO_NEIGH,     /* no neighbor entry for nh */
-	BPF_FIB_LKUP_RET_FRAG_NEEDED,  /* fragmentation required to fwd */
-};
-
-struct bpf_fib_lookup {
-	/* input:  network family for lookup (AF_INET, AF_INET6)
-	 * output: network family of egress nexthop
-	 */
-	__u8	family;
-
-	/* set if lookup is to consider L4 data - e.g., FIB rules */
-	__u8	l4_protocol;
-	__be16	sport;
-	__be16	dport;
-
-	/* total length of packet from network header - used for MTU check */
-	__u16	tot_len;
-
-	/* input: L3 device index for lookup
-	 * output: device index from FIB lookup
-	 */
-	__u32	ifindex;
-
-	union {
-		/* inputs to lookup */
-		__u8	tos;		/* AF_INET  */
-		__be32	flowinfo;	/* AF_INET6, flow_label + priority */
-
-		/* output: metric of fib result (IPv4/IPv6 only) */
-		__u32	rt_metric;
-	};
-
-	union {
-		__be32		ipv4_src;
-		__u32		ipv6_src[4];  /* in6_addr; network order */
-	};
-
-	/* input to bpf_fib_lookup, ipv{4,6}_dst is destination address in
-	 * network header. output: bpf_fib_lookup sets to gateway address
-	 * if FIB lookup returns gateway route
-	 */
-	union {
-		__be32		ipv4_dst;
-		__u32		ipv6_dst[4];  /* in6_addr; network order */
-	};
-
-	/* output */
-	__be16	h_vlan_proto;
-	__be16	h_vlan_TCI;
-	__u8	smac[6];     /* ETH_ALEN */
-	__u8	dmac[6];     /* ETH_ALEN */
-};
-
-enum bpf_task_fd_type {
-	BPF_FD_TYPE_RAW_TRACEPOINT,	/* tp name */
-	BPF_FD_TYPE_TRACEPOINT,		/* tp name */
-	BPF_FD_TYPE_KPROBE,		/* (symbol + offset) or addr */
-	BPF_FD_TYPE_KRETPROBE,		/* (symbol + offset) or addr */
-	BPF_FD_TYPE_UPROBE,		/* filename + offset */
-	BPF_FD_TYPE_URETPROBE,		/* filename + offset */
-};
-
-#define BPF_FLOW_DISSECTOR_F_PARSE_1ST_FRAG		(1U << 0)
-#define BPF_FLOW_DISSECTOR_F_STOP_AT_FLOW_LABEL		(1U << 1)
-#define BPF_FLOW_DISSECTOR_F_STOP_AT_ENCAP		(1U << 2)
 
 struct bpf_flow_keys {
 	__u16	nhoff;
