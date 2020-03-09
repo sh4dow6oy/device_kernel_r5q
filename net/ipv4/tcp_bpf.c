@@ -575,6 +575,14 @@ static int __init tcp_bpf_v4_build_proto(void)
 }
 core_initcall(tcp_bpf_v4_build_proto);
 
+static void tcp_bpf_update_sk_prot(struct sock *sk, struct sk_psock *psock)
+{
+	int family = sk->sk_family == AF_INET6 ? TCP_BPF_IPV6 : TCP_BPF_IPV4;
+	int config = psock->progs.msg_parser   ? TCP_BPF_TX   : TCP_BPF_BASE;
+
+	sk_psock_update_proto(sk, psock, &tcp_bpf_prots[family][config]);
+}
+
 static int tcp_bpf_assert_proto_ops(struct proto *ops)
 {
 	/* In order to avoid retpoline, we make assumptions when we call
@@ -594,8 +602,11 @@ struct proto *tcp_bpf_get_proto(struct sock *sk, struct sk_psock *psock)
 	if (!psock->sk_proto) {
 		struct proto *ops = READ_ONCE(sk->sk_prot);
 
-		if (tcp_bpf_assert_proto_ops(ops))
-			return ERR_PTR(-EINVAL);
+	rcu_read_lock();
+	psock = sk_psock(sk);
+	tcp_bpf_update_sk_prot(sk, psock);
+	rcu_read_unlock();
+}
 
 		tcp_bpf_check_v6_needs_rebuild(sk, ops);
 	}
