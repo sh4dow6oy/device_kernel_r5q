@@ -8086,8 +8086,8 @@ int dev_change_xdp_fd(struct net_device *dev, struct netlink_ext_ack *extack,
 	const struct net_device_ops *ops = dev->netdev_ops;
 	enum bpf_netdev_command query;
 	u32 prog_id, expected_id = 0;
-	struct bpf_prog *prog = NULL;
 	bpf_op_t bpf_op, bpf_chk;
+	struct bpf_prog *prog;
 	bool offload;
 	int err;
 
@@ -8165,6 +8165,7 @@ int dev_change_xdp_fd(struct net_device *dev, struct netlink_ext_ack *extack,
 	} else {
 		if (!prog_id)
 			return 0;
+		prog = NULL;
 	}
 
 	if (expected_fd >= 0) {
