@@ -1623,7 +1623,7 @@ union bpf_attr {
  * 	Return
  * 		0
  *
- * long bpf_setsockopt(void *bpf_socket, int level, int optname, void *optval, int optlen)
+ * int bpf_setsockopt(void *bpf_socket, int level, int optname, void *optval, int optlen)
  * 	Description
  * 		Emulate a call to **setsockopt()** on the socket associated to
  * 		*bpf_socket*, which must be a full socket. The *level* at
@@ -1632,7 +1632,6 @@ union bpf_attr {
  * 		The option value of length *optlen* is pointed by *optval*.
  *
  * 		*bpf_socket* should be one of the following:
- *
  * 		* **struct bpf_sock_ops** for **BPF_PROG_TYPE_SOCK_OPS**.
  * 		* **struct bpf_sock_addr** for **BPF_CGROUP_INET4_CONNECT**
  * 		  and **BPF_CGROUP_INET6_CONNECT**.
@@ -1841,7 +1840,7 @@ union bpf_attr {
  * 	Return
  * 		0 on success, or a negative error in case of failure.
  *
- * long bpf_getsockopt(void *bpf_socket, int level, int optname, void *optval, int optlen)
+ * int bpf_getsockopt(void *bpf_socket, int level, int optname, void *optval, int optlen)
  * 	Description
  * 		Emulate a call to **getsockopt()** on the socket associated to
  * 		*bpf_socket*, which must be a full socket. The *level* at
@@ -1851,7 +1850,6 @@ union bpf_attr {
  * 		*opval* and of length *optlen*.
  *
  * 		*bpf_socket* should be one of the following:
- *
  * 		* **struct bpf_sock_ops** for **BPF_PROG_TYPE_SOCK_OPS**.
  * 		* **struct bpf_sock_addr** for **BPF_CGROUP_INET4_CONNECT**
  * 		  and **BPF_CGROUP_INET6_CONNECT**.
