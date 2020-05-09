@@ -39,8 +39,7 @@ extern void remove_proc_entry(const char *, struct proc_dir_entry *);
 extern int remove_proc_subtree(const char *, struct proc_dir_entry *);
 extern struct pid *tgid_pidfd_to_pid(const struct file *file);
 
-struct bpf_iter_aux_info;
-extern int bpf_iter_init_seq_net(void *priv_data, struct bpf_iter_aux_info *aux);
+extern int bpf_iter_init_seq_net(void *priv_data);
 extern void bpf_iter_fini_seq_net(void *priv_data);
 
 #else /* CONFIG_PROC_FS */
