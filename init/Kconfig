@@ -2148,4 +2148,6 @@ endchoice
 source "kernel/Kconfig.locks"
 
 source "init/Kconfig.gki"
-source "kernel/Kconfig.intelligence"
+
+config ARCH_HAS_NON_OVERLAPPING_ADDRESS_SPACE
+	bool
