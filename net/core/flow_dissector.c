@@ -93,10 +93,100 @@ int flow_dissector_bpf_prog_attach_check(struct net *net,
 		if (rcu_access_pointer(init_net.bpf.run_array[type]))
 			return -EEXIST;
 	}
+	rcu_read_unlock();
+
+	put_net(net);
+
+	if (copy_to_user(&uattr->query.attach_flags, &flags, sizeof(flags)))
+		return -EFAULT;
+	if (copy_to_user(&uattr->query.prog_cnt, &prog_cnt, sizeof(prog_cnt)))
+		return -EFAULT;
+
+	if (!attr->query.prog_cnt || !prog_ids || !prog_cnt)
+		return 0;
+
+	if (copy_to_user(prog_ids, &prog_id, sizeof(u32)))
+		return -EFAULT;
+
+	return 0;
+}
+
+int skb_flow_dissector_bpf_prog_attach(const union bpf_attr *attr,
+				       struct bpf_prog *prog)
+{
+	struct bpf_prog *attached;
+	struct net *net;
+
+	net = current->nsproxy->net_ns;
+	mutex_lock(&flow_dissector_mutex);
+	attached = rcu_dereference_protected(net->flow_dissector_prog,
+					     lockdep_is_held(&flow_dissector_mutex));
+	if (attached) {
+		/* Only one BPF program can be attached at a time */
+		mutex_unlock(&flow_dissector_mutex);
+		return -EEXIST;
+	}
+	rcu_assign_pointer(net->flow_dissector_prog, prog);
+	mutex_unlock(&flow_dissector_mutex);
+	return 0;
+}
+
+static int flow_dissector_bpf_prog_detach(struct net *net)
+{
+	struct bpf_prog *attached;
+
+	mutex_lock(&flow_dissector_mutex);
+	attached = rcu_dereference_protected(net->flow_dissector_prog,
+					     lockdep_is_held(&flow_dissector_mutex));
+	if (!attached) {
+		mutex_unlock(&flow_dissector_mutex);
+		return -ENOENT;
+	}
+	bpf_prog_put(attached);
+	RCU_INIT_POINTER(net->flow_dissector_prog, NULL);
+	mutex_unlock(&flow_dissector_mutex);
+	return 0;
+}
+/**
+ * skb_flow_get_be16 - extract be16 entity
+ * @skb: sk_buff to extract from
+ * @poff: offset to extract at
+ * @data: raw buffer pointer to the packet
+ * @hlen: packet header length
+ *
+ * The function will try to retrieve a be32 entity at
+ * offset poff
+ */
+static __be16 skb_flow_get_be16(const struct sk_buff *skb, int poff,
+				void *data, int hlen)
+{
+	__be16 *u, _u;
+
+	u = __skb_header_pointer(skb, poff, sizeof(_u), data, hlen, &_u);
+	if (u)
+		return *u;
 
 	return 0;
 }
 #endif /* CONFIG_BPF_SYSCALL */
+
+int skb_flow_dissector_bpf_prog_detach(const union bpf_attr *attr)
+{
+	return flow_dissector_bpf_prog_detach(current->nsproxy->net_ns);
+}
+
+static void __net_exit flow_dissector_pernet_pre_exit(struct net *net)
+{
+	/* We're not racing with attach/detach because there are no
+	 * references to netns left when pre_exit gets called.
+	 */
+	if (rcu_access_pointer(net->flow_dissector_prog))
+		flow_dissector_bpf_prog_detach(net);
+}
+
+static struct pernet_operations flow_dissector_pernet_ops __net_initdata = {
+	.pre_exit = flow_dissector_pernet_pre_exit,
+};
 
 /**
  * __skb_flow_get_ports - extract the upper layer ports and return them
@@ -1660,6 +1750,7 @@ static int __init init_default_flow_dissectors(void)
 	skb_flow_dissector_init(&flow_keys_basic_dissector,
 				flow_keys_basic_dissector_keys,
 				ARRAY_SIZE(flow_keys_basic_dissector_keys));
-	return 0;
+
+	return register_pernet_subsys(&flow_dissector_pernet_ops);
 }
 core_initcall(init_default_flow_dissectors);
