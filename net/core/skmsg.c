@@ -705,38 +705,6 @@ static void sk_psock_skb_redirect(struct sk_psock *psock, struct sk_buff *skb)
 	}
 }
 
-static void sk_psock_tls_verdict_apply(struct sk_psock *psock,
-				       struct sk_buff *skb, int verdict)
-{
-	switch (verdict) {
-	case __SK_REDIRECT:
-		sk_psock_skb_redirect(psock, skb);
-		break;
-	case __SK_PASS:
-	case __SK_DROP:
-	default:
-		break;
-	}
-}
-
-int sk_psock_tls_strp_read(struct sk_psock *psock, struct sk_buff *skb)
-{
-	struct bpf_prog *prog;
-	int ret = __SK_PASS;
-
-	rcu_read_lock();
-	prog = READ_ONCE(psock->progs.skb_verdict);
-	if (likely(prog)) {
-		tcp_skb_bpf_redirect_clear(skb);
-		ret = sk_psock_bpf_run(psock, prog, skb);
-		ret = sk_psock_map_verd(ret, tcp_skb_bpf_redirect_fetch(skb));
-	}
-	rcu_read_unlock();
-	sk_psock_tls_verdict_apply(psock, skb, ret);
-	return ret;
-}
-EXPORT_SYMBOL_GPL(sk_psock_tls_strp_read);
-
 static void sk_psock_verdict_apply(struct sk_psock *psock,
 				   struct sk_buff *skb, int verdict)
 {
