@@ -92,7 +92,7 @@ static struct ipv6_sr_hdr *get_srh(struct sk_buff *skb)
 	 */
 	srh = (struct ipv6_sr_hdr *)(skb->data + srhoff);
 
-	if (!seg6_validate_srh(srh, len))
+	if (!seg6_validate_srh(srh, len, true))
 		return NULL;
 
 	return srh;
