@@ -7189,7 +7189,7 @@ tcp_parse_options(sock_net(sk), skb, &tmp_opt, NULL, 0,
 			meta_sk = mptcp_meta_sk(fastopen_sk);
 #endif
 		af_ops->send_synack(fastopen_sk, dst, &fl, req,
-				    &foc, TCP_SYNACK_FASTOPEN);
+				    &foc, TCP_SYNACK_FASTOPEN, skb);
 		/* Add the child socket directly into the accept queue */
 #ifdef CONFIG_MPTCP
 		if (!inet_csk_reqsk_queue_add(sk, req, meta_sk)) {
@@ -7224,7 +7224,8 @@ tcp_parse_options(sock_net(sk), skb, &tmp_opt, NULL, 0,
 				tcp_timeout_init((struct sock *)req));
 		af_ops->send_synack(sk, dst, &fl, req, &foc,
 				    !want_cookie ? TCP_SYNACK_NORMAL :
-						   TCP_SYNACK_COOKIE);
+						   TCP_SYNACK_COOKIE,
+				    skb);
 		if (want_cookie) {
 			reqsk_free(req);
 			return 0;
