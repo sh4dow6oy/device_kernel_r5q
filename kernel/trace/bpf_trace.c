@@ -1577,15 +1577,6 @@ const struct bpf_prog_ops tracing_prog_ops = {
 	.test_run = bpf_prog_test_run_tracing,
 };
 
-const struct bpf_verifier_ops tracing_verifier_ops = {
-	.get_func_proto  = tracing_prog_func_proto,
-	.is_valid_access = tracing_prog_is_valid_access,
-};
-
-const struct bpf_prog_ops tracing_prog_ops = {
-	.test_run = bpf_prog_test_run_tracing,
-};
-
 static bool raw_tp_writable_prog_is_valid_access(int off, int size,
 						 enum bpf_access_type type,
 						 const struct bpf_prog *prog,
