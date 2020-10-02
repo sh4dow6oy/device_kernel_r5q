@@ -54,6 +54,12 @@ static __always_inline void __clear_page_lru_flags(struct page *page)
 {
 	VM_BUG_ON_PAGE(!PageLRU(page), page);
 
+/**
+ * __clear_page_lru_flags - clear page lru flags before releasing a page
+ * @page: the page that was on lru and now has a zero reference
+ */
+static __always_inline void __clear_page_lru_flags(struct page *page)
+{
 	__ClearPageLRU(page);
 
 	/* this shouldn't happen, so leave the flags to bad_page() */
