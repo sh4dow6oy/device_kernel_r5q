@@ -1833,7 +1833,6 @@ putback_inactive_pages(struct lruvec *lruvec, struct list_head *page_list)
 		lruvec = mem_cgroup_page_lruvec(page, pgdat);
 
 		SetPageLRU(page);
-		lru = page_lru(page);
 		add_page_to_lru_list(page, lruvec);
 
 		if (PageActive(page)) {
@@ -1842,8 +1841,9 @@ putback_inactive_pages(struct lruvec *lruvec, struct list_head *page_list)
 			reclaim_stat->recent_rotated[file] += numpages;
 		}
 		if (put_page_testzero(page)) {
+			__ClearPageLRU(page);
 			del_page_from_lru_list(page, lruvec);
-			__clear_page_lru_flags(page);
+			__ClearPageActive(page);
 
 			if (unlikely(PageCompound(page))) {
 				spin_unlock_irq(&pgdat->lru_lock);
@@ -2076,8 +2076,9 @@ static unsigned move_active_pages_to_lru(struct lruvec *lruvec,
 		add_page_to_lru_list(page, lruvec);
 
 		if (put_page_testzero(page)) {
+			__ClearPageLRU(page);
 			del_page_from_lru_list(page, lruvec);
-			__clear_page_lru_flags(page);
+			__ClearPageActive(page);
 
 			if (unlikely(PageCompound(page))) {
 				spin_unlock_irq(&pgdat->lru_lock);
@@ -6990,8 +6991,8 @@ void check_move_unevictable_pages(struct page **pages, int nr_pages)
 
 		if (page_evictable(page)) {
 			VM_BUG_ON_PAGE(PageActive(page), page);
+			del_page_from_lru_list(page, lruvec);
 			ClearPageUnevictable(page);
-			del_page_from_lru_list(page, lruvec, LRU_UNEVICTABLE);
 			add_page_to_lru_list(page, lruvec);
 			pgrescued++;
 		}
