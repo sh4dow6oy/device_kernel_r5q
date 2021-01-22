@@ -1,9 +1,4 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-/*
- * x86 KFENCE support.
- *
- * Copyright (C) 2020, Google LLC.
- */
 
 #ifndef _ASM_X86_KFENCE_H
 #define _ASM_X86_KFENCE_H
@@ -15,6 +10,12 @@
 #include <asm/pgtable.h>
 #include <asm/set_memory.h>
 #include <asm/tlbflush.h>
+
+/*
+ * The page fault handler entry function, up to which the stack trace is
+ * truncated in reports.
+ */
+#define KFENCE_SKIP_ARCH_FAULT_HANDLER "asm_exc_page_fault"
 
 /* Force 4K pages for __kfence_pool. */
 static inline bool arch_kfence_init_pool(void)
