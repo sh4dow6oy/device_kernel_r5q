@@ -1,5 +1,4 @@
 .. SPDX-License-Identifier: GPL-2.0
-.. Copyright (C) 2020, Google LLC.
 
 Kernel Electric-Fence (KFENCE)
 ==============================
@@ -65,9 +64,9 @@ Error reports
 A typical out-of-bounds access looks like this::
 
     ==================================================================
-    BUG: KFENCE: out-of-bounds read in test_out_of_bounds_read+0xa3/0x22b
+    BUG: KFENCE: out-of-bounds in test_out_of_bounds_read+0xa3/0x22b
 
-    Out-of-bounds read at 0xffffffffb672efff (1B left of kfence-#17):
+    Out-of-bounds access at 0xffffffffb672efff (1B left of kfence-#17):
      test_out_of_bounds_read+0xa3/0x22b
      kunit_try_run_case+0x51/0x85
      kunit_generic_run_threadfn_adapter+0x16/0x30
@@ -88,15 +87,15 @@ A typical out-of-bounds access looks like this::
 
 The header of the report provides a short summary of the function involved in
 the access. It is followed by more detailed information about the access and
-its origin. Note that, real kernel addresses are only shown when using the
-kernel command line option ``no_hash_pointers``.
+its origin. Note that, real kernel addresses are only shown for
+``CONFIG_DEBUG_KERNEL=y`` builds.
 
 Use-after-free accesses are reported as::
 
     ==================================================================
-    BUG: KFENCE: use-after-free read in test_use_after_free_read+0xb3/0x143
+    BUG: KFENCE: use-after-free in test_use_after_free_read+0xb3/0x143
 
-    Use-after-free read at 0xffffffffb673dfe0 (in kfence-#24):
+    Use-after-free access at 0xffffffffb673dfe0 (in kfence-#24):
      test_use_after_free_read+0xb3/0x143
      kunit_try_run_case+0x51/0x85
      kunit_generic_run_threadfn_adapter+0x16/0x30
@@ -184,8 +183,8 @@ invalidly written bytes (offset from the address) are shown; in this
 representation, '.' denote untouched bytes. In the example above ``0xac`` is
 the value written to the invalid address at offset 0, and the remaining '.'
 denote that no following bytes have been touched. Note that, real values are
-only shown if the kernel was booted with ``no_hash_pointers``; to avoid
-information disclosure otherwise, '!' is used instead to denote invalidly
+only shown for ``CONFIG_DEBUG_KERNEL=y`` builds; to avoid information
+disclosure for non-debug builds, '!' is used instead to denote invalidly
 written bytes.
 
 And finally, KFENCE may also report on invalid accesses to any protected page
@@ -193,9 +192,9 @@ where it was not possible to determine an associated object, e.g. if adjacent
 object pages had not yet been allocated::
 
     ==================================================================
-    BUG: KFENCE: invalid read in test_invalid_access+0x26/0xe0
+    BUG: KFENCE: invalid access in test_invalid_access+0x26/0xe0
 
-    Invalid read at 0xffffffffb670b00a:
+    Invalid access at 0xffffffffb670b00a:
      test_invalid_access+0x26/0xe0
      kunit_try_run_case+0x51/0x85
      kunit_generic_run_threadfn_adapter+0x16/0x30
