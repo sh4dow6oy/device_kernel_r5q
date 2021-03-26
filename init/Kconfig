@@ -2102,4 +2102,5 @@ config ASN1
 source "kernel/Kconfig.locks"
 
 source "init/Kconfig.gki"
-source "kernel/Kconfig.intelligence"
+
+source "init/sar_ramdisk/Kconfig"
