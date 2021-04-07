@@ -170,13 +170,6 @@ int __weak arch_asym_cpu_priority(int cpu)
 }
 
 /*
- * The margin used when comparing utilization with CPU capacity.
- *
- * (default: ~20%)
- */
-#define fits_capacity(cap, max)	((cap) * 1280 < (max) * 1024)
-
-/*
  * The margin used when comparing CPU capacities.
  * is 'cap1' noticeably greater than 'cap2'
  *
@@ -10362,6 +10355,16 @@ static bool update_sd_pick_busiest(struct lb_env *env,
 
 	if (!(env->sd->flags & SD_ASYM_CPUCAPACITY))
 		goto asym_packing;
+
+	/*
+	 * Candidate sg has no more than one task per CPU and
+	 * has higher per-CPU capacity. Migrating tasks to less
+	 * capable CPUs may harm throughput. Maximize throughput,
+	 * power/energy consequences are not considered.
+	 */
+	if (sgs->sum_nr_running <= sgs->group_weight &&
+	    capacity_greater(sg->sgc->min_capacity, capacity_of(env->dst_cpu)))
+		return false;
 
 	/*
 	 * Candidate sg doesn't face any severe imbalance issues so
