@@ -5168,15 +5168,14 @@ int kgsl_device_platform_probe(struct kgsl_device *device)
 		}
 	}
 
-	device->events_worker = kthread_create_worker(0, "kgsl-events");
+	device->events_wq = alloc_workqueue("kgsl-events",
+		WQ_UNBOUND | WQ_MEM_RECLAIM | WQ_SYSFS, 0);
 
-	if (IS_ERR(device->events_worker)) {
-		status = PTR_ERR(device->events_worker);
-		dev_err(device->dev, "Failed to create events worker ret=%d\n", status);
+	if (!device->events_wq) {
+		dev_err(device->dev, "Failed to allocate events workqueue\n");
+		status = -ENOMEM;
 		goto error_pwrctrl_close;
 	}
-
-	sched_set_fifo(device->events_worker->task);
 
 	if (!devm_request_mem_region(device->dev, device->reg_phys,
 				device->reg_len, device->name)) {
@@ -5299,8 +5298,10 @@ int kgsl_device_platform_probe(struct kgsl_device *device)
 error_close_mmu:
 	kgsl_mmu_close(device);
 error_pwrctrl_close:
-	if (!IS_ERR(device->events_worker))
-		kthread_destroy_worker(device->events_worker);
+	if (device->events_wq) {
+		destroy_workqueue(device->events_wq);
+		device->events_wq = NULL;
+	}
 
 	kgsl_pwrctrl_close(device);
 error:
@@ -5312,7 +5313,10 @@ EXPORT_SYMBOL(kgsl_device_platform_probe);
 
 void kgsl_device_platform_remove(struct kgsl_device *device)
 {
-	kthread_destroy_worker(device->events_worker);
+	if (device->events_wq) {
+		destroy_workqueue(device->events_wq);
+		device->events_wq = NULL;
+	}
 
 	kfree(device->dev->dma_parms);
 	device->dev->dma_parms = NULL;
