@@ -3331,10 +3331,6 @@ static void binder_transaction(struct binder_proc *proc,
 		int retries = 0;
 		int max_retries = 100;
 
-<<<<<<< HEAD
-retry_lowmem:
-=======
->>>>>>> 06906ab78832 (UPSTREAM: binder: use cred instead of task for getsecid)
 		security_cred_getsecid(proc->cred, &secid);
 		ret = security_secid_to_secctx(secid, &secctx, &secctx_sz);
 		if (ret == -ENOMEM && retries++ < max_retries) {
