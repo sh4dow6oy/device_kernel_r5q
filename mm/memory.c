@@ -2920,8 +2920,8 @@ int do_swap_page(struct vm_fault *vmf)
 	} else {
 		do_page_add_anon_rmap(page, vma, vmf->address, exclusive);
 		mem_cgroup_commit_charge(page, memcg, true, false);
-          if (!lru_gen_enabled())
-		activate_page(page);
+		if (!lru_gen_enabled())
+			activate_page(page);
 	}
 
 	swap_free(entry);
