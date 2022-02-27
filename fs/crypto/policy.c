@@ -689,6 +689,20 @@ int fscrypt_has_permitted_context(struct inode *parent, struct inode *child)
 }
 EXPORT_SYMBOL(fscrypt_has_permitted_context);
 
+#define SDHCI "sdhci"
+
+static int fscrypt_update_context(union fscrypt_context *ctx)
+{
+	char *boot = "ufs";
+
+	if (!fscrypt_find_storage_type(&boot)) {
+		if (!strcmp(boot, SDHCI))
+			ctx->v1.flags |= FSCRYPT_POLICY_FLAG_IV_INO_LBLK_32;
+		return 0;
+	}
+	return -EINVAL;
+}
+
 /**
  * fscrypt_inherit_context() - Sets a child context from its parent
  * @parent: Parent inode from which the context is inherited.
