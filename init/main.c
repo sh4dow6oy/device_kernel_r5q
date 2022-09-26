@@ -715,7 +715,6 @@ asmlinkage __visible void __init start_kernel(void)
 	hrtimers_init();
 	softirq_init();
 	timekeeping_init();
-	kfence_init();
 	time_init();
 
 	/* This must be after timekeeping is initialized */
