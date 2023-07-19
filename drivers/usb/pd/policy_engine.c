@@ -528,6 +528,150 @@ static unsigned int get_connector_type(struct usbpd *pd)
 	}
 	return val.intval;
 }
+#endif
+
+#if defined(CONFIG_BATTERY_SAMSUNG_USING_QC)
+unsigned int get_pd_max_power(void)
+{
+	return max_pd_power;
+
+}
+
+int get_pd_cap_count(void)
+{
+	return pd_count;
+}
+
+bool get_ps_ready_status(void)
+{
+	return ps_ready;
+}
+#endif
+
+void usbpd_acc_detach(struct device *dev)
+{	
+	struct usbpd *pd = dev_get_drvdata(dev);
+
+	pr_info("%s: acc_type %d\n",
+		__func__, pd->phy_driver_data->acc_type);
+	if (pd->phy_driver_data->acc_type != CCIC_DOCK_DETACHED) {
+		if (pd->phy_driver_data->acc_type == CCIC_DOCK_HMT)
+			schedule_delayed_work(&pd->phy_driver_data->acc_detach_handler,
+				msecs_to_jiffies(GEAR_VR_DETACH_WAIT_MS));
+		else
+			schedule_delayed_work(&pd->phy_driver_data->acc_detach_handler,
+				msecs_to_jiffies(0));
+	}
+}
+
+static void usbpd_acc_detach_handler(struct work_struct *wk)
+{
+
+	struct pm6150_phydrv_data *phy_driver_data =
+		container_of(wk, struct pm6150_phydrv_data,
+				acc_detach_handler.work);
+
+	pr_info("%s: acc_type %d\n",
+		__func__, phy_driver_data->acc_type);
+	if (phy_driver_data->acc_type != CCIC_DOCK_DETACHED) {
+		if (phy_driver_data->acc_type != CCIC_DOCK_NEW)
+			ccic_send_dock_intent(CCIC_DOCK_DETACHED);
+		ccic_send_dock_uevent(phy_driver_data->Vendor_ID,
+				phy_driver_data->Product_ID,
+				CCIC_DOCK_DETACHED);
+		phy_driver_data->acc_type = CCIC_DOCK_DETACHED;
+		phy_driver_data->Vendor_ID = 0;
+		phy_driver_data->Product_ID = 0;
+		phy_driver_data->Device_Version = 0;
+		phy_driver_data->is_samsung_accessory_enter_mode = 0;
+#if 0		
+		pd->alt_sended = 0;
+		pd->SVID_0 = 0;
+		pd->SVID_1 = 0;
+		pd->Standard_Vendor_ID = 0;
+		
+		
+		reinit_completion(&pd->uvdm_out_wait);
+		reinit_completion(&pd->uvdm_in_wait);
+#endif		
+	}
+}
+
+static int process_check_accessory(void * data)
+{
+	struct usbpd *pd = data;
+#if defined(CONFIG_USB_HOST_NOTIFY) && defined(CONFIG_USB_HW_PARAM)
+	struct otg_notify *o_notify = get_otg_notify();
+#endif
+	uint16_t vid = pd->phy_driver_data->Vendor_ID;
+	uint16_t pid = pd->phy_driver_data->Product_ID;
+	uint16_t acc_type = CCIC_DOCK_DETACHED;
+
+	/* detect Gear VR */
+	if (pd->phy_driver_data->acc_type == CCIC_DOCK_DETACHED) {
+		if (vid == SAMSUNG_VENDOR_ID) {
+			switch (pid) {
+			/* GearVR: Reserved GearVR PID+6 */
+			case GEARVR_PRODUCT_ID:
+			case GEARVR_PRODUCT_ID_1:
+			case GEARVR_PRODUCT_ID_2:
+			case GEARVR_PRODUCT_ID_3:
+			case GEARVR_PRODUCT_ID_4:
+			case GEARVR_PRODUCT_ID_5:
+				acc_type = CCIC_DOCK_HMT;
+				pr_info("%s : Samsung Gear VR connected.\n", __func__);
+#if defined(CONFIG_USB_HOST_NOTIFY) && defined(CONFIG_USB_HW_PARAM)
+				if (o_notify)
+					inc_hw_param(o_notify, USB_CCIC_VR_USE_COUNT);
+#endif
+				break;
+			case DEXDOCK_PRODUCT_ID:
+				acc_type = CCIC_DOCK_DEX;
+				pr_info("%s : Samsung DEX connected.\n", __func__);
+#if defined(CONFIG_USB_HOST_NOTIFY) && defined(CONFIG_USB_HW_PARAM)
+				if (o_notify)
+					inc_hw_param(o_notify, USB_CCIC_DEX_USE_COUNT);
+#endif
+				break;
+			case DEXPAD_PRODUCT_ID:
+				acc_type = CCIC_DOCK_DEXPAD;
+				pr_info("%s : Samsung DEX PADconnected.\n", __func__);
+#if defined(CONFIG_USB_HOST_NOTIFY) && defined(CONFIG_USB_HW_PARAM)
+				if (o_notify)
+					inc_hw_param(o_notify, USB_CCIC_DEX_USE_COUNT);
+#endif
+				break;
+			case HDMI_PRODUCT_ID:
+				acc_type = CCIC_DOCK_HDMI;
+				pr_info("%s : Samsung HDMI connected.\n", __func__);
+				break;
+			default:
+				acc_type = CCIC_DOCK_NEW;
+				pr_info("%s : default device connected.\n", __func__);
+				break;
+			}
+		} else if (vid == SAMSUNG_MPA_VENDOR_ID) {
+			switch(pid) {
+			case MPA_PRODUCT_ID:
+				acc_type = CCIC_DOCK_MPA;
+				pr_info("%s : Samsung MPA connected.\n", __func__);
+				break;
+			default:
+				acc_type = CCIC_DOCK_NEW;
+				pr_info("%s : default device connected.\n", __func__);
+				break;
+			}
+		}
+		pd->phy_driver_data->acc_type = acc_type;
+	} else
+		acc_type = pd->phy_driver_data->acc_type;
+
+	if (acc_type != CCIC_DOCK_NEW)
+		ccic_send_dock_intent(acc_type);
+
+	ccic_send_dock_uevent(vid, pid, acc_type);
+		return 1;
+}
 
 static inline void stop_usb_host(struct usbpd *pd)
 {
