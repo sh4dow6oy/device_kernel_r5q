@@ -313,21 +313,7 @@ static unsigned int get_next_freq(struct sugov_policy *sg_policy,
 	struct cpufreq_policy *policy = sg_policy->policy;
 	unsigned int freq = arch_scale_freq_invariant() ?
 				policy->cpuinfo.max_freq : policy->cur;
-#ifdef CONFIG_SCHED_KAIR_GLUE
-	struct sugov_cpu *sg_cpu;
-	struct kair_class *vessel;
-	unsigned int delta_max, delta_min;
-	int util_delta;
-	unsigned int legacy_freq;
-
-#ifdef KAIR_CLUSTER_TRAVERSING
-	unsigned int each;
-	unsigned int sigma_cpu = policy->cpu;
-	randomness most_rand = 0;
-#endif
-	int cur_rand = KAIR_DIVERGING;
-	RV_DECLARE(rv);
-#endif
+	unsigned int idx, l_freq, h_freq;
 
 	freq = (freq + (freq >> 2)) * util / max;
 
@@ -385,7 +371,21 @@ skip_betting:
 	if (freq == sg_policy->cached_raw_freq && sg_policy->next_freq != UINT_MAX)
 		return sg_policy->next_freq;
 	sg_policy->cached_raw_freq = freq;
-	return cpufreq_driver_resolve_freq(policy, freq);
+	l_freq = cpufreq_driver_resolve_freq(policy, freq);
+	idx = cpufreq_frequency_table_target(policy, freq, CPUFREQ_RELATION_H);
+	h_freq = policy->freq_table[idx].frequency;
+	h_freq = clamp(h_freq, policy->min, policy->max);
+	if (l_freq <= h_freq || l_freq == policy->min)
+		return l_freq;
+
+	/*
+	 * Use the frequency step below if the calculated frequency is <20%
+	 * higher than it.
+	 */
+	if (mult_frac(100, freq - h_freq, l_freq - h_freq) < 20)
+		return h_freq;
+
+	return l_freq;
 }
 
 static void sugov_get_util(unsigned long *util, unsigned long *max, int cpu)
