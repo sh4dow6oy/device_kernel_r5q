@@ -1222,7 +1222,12 @@ static int s2mu106_vbus_on_check(void *_data)
 	struct usbpd_data *data = (struct usbpd_data *) _data;
 	struct s2mu106_usbpd_data *pdic_data = data->phy_driver_data;
 
-	return s2mu106_usbpd_check_vbus(pdic_data, 4300, VBUS_ON);
+	if (volt == OTG_5V)
+		vbus_check = s2mu106_usbpd_check_vbus(pdic_data, 4300, VBUS_ON);
+	else if (volt == OTG_9V)
+		vbus_check = s2mu106_usbpd_check_vbus(pdic_data, 8300, VBUS_ON);
+
+	return vbus_check;
 #else
 	return 0;
 #endif
