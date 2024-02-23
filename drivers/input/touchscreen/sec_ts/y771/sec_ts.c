@@ -1630,8 +1630,290 @@ void sec_ts_set_grip_type(struct sec_ts_data *ts, u8 set_type)
 	}
 
 	if (mode)
-		set_grip_data_to_ic(ts, mode);
+		set_grip_data_to_ic_func(ts, mode);
 }
+
+struct sec_ts_data *g_ts;
+
+#ifdef CONFIG_DEBUG_FS
+static ssize_t sec_ts_tsp_cmoffset_all_read(struct file *file, char __user *buf,
+					size_t len, loff_t *offset)
+{
+	struct sec_ts_data *ts;
+	static ssize_t retlen = 0;
+	ssize_t retlen_sdc = 0, retlen_sub = 0, retlen_main = 0;
+	ssize_t count = 0;
+	loff_t pos = *offset;
+#if defined(CONFIG_SEC_FACTORY)
+	int ret;
+#endif
+
+	if (!g_ts) {
+		pr_err("%s %s: dev is null\n", SECLOG, __func__);
+		return 0;
+	}
+	ts = g_ts;
+
+	if (ts->proc_cmoffset_size == 0) {
+		pr_err("%s %s: proc_cmoffset_size is 0\n", SECLOG, __func__);
+		return 0;
+	}
+
+	if (pos == 0) {
+#if defined(CONFIG_SEC_FACTORY)
+		ret = get_cmoffset_dump_all(ts, ts->cmoffset_sdc_proc, OFFSET_FW_SDC);
+		if (ret < 0)
+			input_err(true, &ts->client->dev,
+				"%s : sec_ts_get_cmoffset_dump SDC fail use boot time value\n", __func__);
+		ret = get_cmoffset_dump_all(ts, ts->cmoffset_sub_proc, OFFSET_FW_SUB);
+		if (ret < 0)
+			input_err(true, &ts->client->dev,
+				"%s : sec_ts_get_cmoffset_dump SUB fail use boot time value\n", __func__);
+		ret = get_cmoffset_dump_all(ts, ts->cmoffset_main_proc, OFFSET_FW_MAIN);
+		if (ret < 0)
+			input_err(true, &ts->client->dev,
+				"%s : sec_ts_get_cmoffset_dump MAIN fail use boot time value\n", __func__);
+#endif
+		retlen_sdc = strlen(ts->cmoffset_sdc_proc);
+		retlen_sub = strlen(ts->cmoffset_sub_proc);
+		retlen_main = strlen(ts->cmoffset_main_proc);
+
+		ts->cmoffset_all_proc = kzalloc(ts->proc_cmoffset_all_size, GFP_KERNEL);
+		if (!ts->cmoffset_all_proc){
+			input_err(true, &ts->client->dev, "%s : kzalloc fail (cmoffset_all_proc)\n", __func__);
+			return count;
+		}
+
+		strlcat(ts->cmoffset_all_proc, ts->cmoffset_sdc_proc, ts->proc_cmoffset_all_size);
+		strlcat(ts->cmoffset_all_proc, ts->cmoffset_sub_proc, ts->proc_cmoffset_all_size);
+		strlcat(ts->cmoffset_all_proc, ts->cmoffset_main_proc, ts->proc_cmoffset_all_size);
+
+		retlen = strlen(ts->cmoffset_all_proc);
+
+		input_info(true, &ts->client->dev, "%s : retlen[%d], retlen_sdc[%d], retlen_sub[%d], retlen_main[%d]\n",
+						__func__, retlen, retlen_sdc, retlen_sub, retlen_main);
+	}
+
+	if (pos >= retlen)
+		return 0;
+
+	count = min(len, (size_t)(retlen - pos));
+
+	input_info(true, &ts->client->dev, "%s : total:%d pos:%d count:%d\n", __func__, retlen, pos, count);
+
+	if (copy_to_user(buf, ts->cmoffset_all_proc + pos, count)) {
+		input_err(true, &ts->client->dev, "%s : copy_to_user error!\n", __func__, retlen, pos);
+		return -EFAULT;
+	}
+
+	*offset += count;
+
+	if (count < len) {
+		input_info(true, &ts->client->dev, "%s : print all & free cmoffset_all_proc [%d][%d]\n",
+					__func__, retlen, offset);
+		if (ts->cmoffset_all_proc)
+			kfree(ts->cmoffset_all_proc);
+		retlen = 0;
+	}
+
+	return count;
+}
+
+static ssize_t sec_ts_tsp_fail_hist_all_read(struct file *file, char __user *buf,
+					size_t len, loff_t *offset)
+{
+	struct sec_ts_data *ts;
+
+	static ssize_t retlen = 0;
+	ssize_t retlen_sdc = 0, retlen_sub = 0, retlen_main = 0;
+	ssize_t count = 0;
+	loff_t pos = *offset;
+#if defined(CONFIG_SEC_FACTORY)
+	int ret;
+#endif
+
+	if (!g_ts) {
+		pr_err("%s %s: dev is null\n", SECLOG, __func__);
+		return 0;
+	}
+	ts = g_ts;
+
+	if (ts->proc_fail_hist_size == 0) {
+		pr_err("%s %s: proc_fail_hist_size is 0\n", SECLOG, __func__);
+		return 0;
+	}
+
+	if (pos == 0) {
+#if defined(CONFIG_SEC_FACTORY)
+		ret = get_selftest_fail_hist_dump_all(ts, ts->fail_hist_sdc_proc, OFFSET_FW_SDC);
+		if (ret < 0)
+			input_err(true, &ts->client->dev,
+				"%s : sec_ts_get_fail_hist_dump SDC fail use boot time value\n", __func__);
+		ret = get_selftest_fail_hist_dump_all(ts, ts->fail_hist_sub_proc, OFFSET_FW_SUB);
+		if (ret < 0)
+			input_err(true, &ts->client->dev,
+				"%s : sec_ts_get_fail_hist_dump SUB fail use boot time value\n", __func__);
+		ret = get_selftest_fail_hist_dump_all(ts, ts->fail_hist_main_proc, OFFSET_FW_MAIN);
+		if (ret < 0)
+			input_err(true, &ts->client->dev,
+				"%s : sec_ts_get_fail_hist_dump MAIN fail use boot time value\n", __func__);
+#endif
+		retlen_sdc = strlen(ts->fail_hist_sdc_proc);
+		retlen_sub = strlen(ts->fail_hist_sub_proc);
+		retlen_main = strlen(ts->fail_hist_main_proc);
+
+		ts->fail_hist_all_proc = kzalloc(ts->proc_fail_hist_all_size, GFP_KERNEL);
+		if (!ts->fail_hist_all_proc){
+			input_err(true, &ts->client->dev, "%s : kzalloc fail (fail_hist_all_proc)\n", __func__);
+			return count;
+		}
+
+		strlcat(ts->fail_hist_all_proc, ts->fail_hist_sdc_proc, ts->proc_fail_hist_all_size);
+		strlcat(ts->fail_hist_all_proc, ts->fail_hist_sub_proc, ts->proc_fail_hist_all_size);
+		strlcat(ts->fail_hist_all_proc, ts->fail_hist_main_proc, ts->proc_fail_hist_all_size);
+
+		retlen = strlen(ts->fail_hist_all_proc);
+
+		input_info(true, &ts->client->dev, "%s : retlen[%d], retlen_sdc[%d], retlen_sub[%d], retlen_main[%d]\n",
+						__func__, retlen, retlen_sdc, retlen_sub, retlen_main);
+	}
+
+	if (pos >= retlen)
+		return 0;
+
+	count = min(len, (size_t)(retlen - pos));
+
+	input_info(true, &ts->client->dev, "%s : total:%d pos:%d count:%d\n", __func__, retlen, pos, count);
+
+	if (copy_to_user(buf, ts->fail_hist_all_proc + pos, count)) {
+		input_err(true, &ts->client->dev, "%s : copy_to_user error!\n", __func__, retlen, pos);
+		return -EFAULT;
+	}
+
+	*offset += count;
+
+	if (count < len) {
+		input_info(true, &ts->client->dev, "%s : print all & free fail_hist_all_proc [%d][%d]\n",
+					__func__, retlen, offset);
+		if (ts->fail_hist_all_proc)
+			kfree(ts->fail_hist_all_proc);
+		retlen = 0;
+	}
+
+	return count;
+}
+
+static ssize_t sec_ts_tsp_cmoffset_read(struct file *file, char __user *buf,
+					size_t len, loff_t *offset)
+{
+	pr_info("[sec_input] %s called offset:%d\n", __func__, (int)*offset);
+	return sec_ts_tsp_cmoffset_all_read(file, buf, len, offset);
+}
+
+static ssize_t sec_ts_tsp_fail_hist_read(struct file *file, char __user *buf,
+					size_t len, loff_t *offset)
+{
+	pr_info("[sec_input] %s called fail_hist:%d\n", __func__, (int)*offset);
+	return sec_ts_tsp_fail_hist_all_read(file, buf, len, offset);
+}
+
+static const struct file_operations tsp_cmoffset_all_file_ops = {
+	.owner = THIS_MODULE,
+	.read = sec_ts_tsp_cmoffset_read,
+	.llseek = generic_file_llseek,
+};
+
+static const struct file_operations tsp_fail_hist_all_file_ops = {
+	.owner = THIS_MODULE,
+	.read = sec_ts_tsp_fail_hist_read,
+	.llseek = generic_file_llseek,
+};
+
+static void sec_ts_init_proc(struct sec_ts_data *ts)
+{
+	struct proc_dir_entry *entry_cmoffset_all;
+	struct proc_dir_entry *entry_fail_hist_all;
+
+	ts->proc_cmoffset_size = (ts->tx_count * ts->rx_count * 4 + 100) * 3;	/* cm1 cm2 cm3 */
+	ts->proc_cmoffset_all_size = ts->proc_cmoffset_size * 3;	/* sdc sub main */
+
+	ts->proc_fail_hist_size = ((ts->tx_count + ts->rx_count) * 4 + 100) * 6;	/* have to check */
+	ts->proc_fail_hist_all_size = ts->proc_fail_hist_size * 3;	/* sdc sub main */
+
+	ts->cmoffset_sdc_proc = kzalloc(ts->proc_cmoffset_size, GFP_KERNEL);
+	if (!ts->cmoffset_sdc_proc)
+		return;
+
+	ts->cmoffset_sub_proc = kzalloc(ts->proc_cmoffset_size, GFP_KERNEL);
+	if (!ts->cmoffset_sub_proc)
+		goto err_alloc_sub;
+
+	ts->cmoffset_main_proc = kzalloc(ts->proc_cmoffset_size, GFP_KERNEL);
+	if (!ts->cmoffset_main_proc)
+		goto err_alloc_main;
+
+	ts->fail_hist_sdc_proc = kzalloc(ts->proc_fail_hist_size, GFP_KERNEL);
+	if (!ts->fail_hist_sdc_proc)
+		goto err_alloc_fail_hist_sdc;
+
+	ts->fail_hist_sub_proc = kzalloc(ts->proc_fail_hist_size, GFP_KERNEL);
+	if (!ts->fail_hist_sub_proc)
+		goto err_alloc_fail_hist_sub;
+
+	ts->fail_hist_main_proc = kzalloc(ts->proc_fail_hist_size, GFP_KERNEL);
+	if (!ts->fail_hist_main_proc)
+		goto err_alloc_fail_hist_main;
+
+	entry_cmoffset_all = proc_create("tsp_cmoffset_all", S_IFREG | S_IRUGO, NULL, &tsp_cmoffset_all_file_ops);
+	if (!entry_cmoffset_all) {
+		input_err(true, &ts->client->dev, "%s: failed to create /proc/tsp_cmoffset_all\n", __func__);
+		goto err_cmoffset_proc_create;
+	}
+	proc_set_size(entry_cmoffset_all, ts->proc_cmoffset_all_size);
+
+	entry_fail_hist_all = proc_create("tsp_fail_hist_all", S_IFREG | S_IRUGO, NULL, &tsp_fail_hist_all_file_ops);
+	if (!entry_fail_hist_all) {
+		input_err(true, &ts->client->dev, "%s: failed to create /proc/tsp_fail_hist_all\n", __func__);
+		goto err_fail_hist_proc_create;
+	}
+	proc_set_size(entry_fail_hist_all, ts->proc_fail_hist_all_size);
+
+	g_ts = ts;
+	input_info(true, &ts->client->dev, "%s: done\n", __func__);
+	return;
+
+err_fail_hist_proc_create:
+	proc_remove(entry_cmoffset_all);
+err_cmoffset_proc_create:
+	kfree(ts->fail_hist_main_proc);
+err_alloc_fail_hist_main:
+	kfree(ts->fail_hist_sub_proc);
+err_alloc_fail_hist_sub:
+	kfree(ts->fail_hist_sdc_proc);
+err_alloc_fail_hist_sdc:
+	kfree(ts->cmoffset_main_proc);
+err_alloc_main:
+	kfree(ts->cmoffset_sub_proc);
+err_alloc_sub:
+	kfree(ts->cmoffset_sdc_proc);
+
+	ts->cmoffset_sdc_proc = NULL;
+	ts->cmoffset_sub_proc = NULL;
+	ts->cmoffset_main_proc = NULL;
+	ts->cmoffset_all_proc = NULL;
+	ts->proc_cmoffset_size = 0;
+	ts->proc_cmoffset_all_size = 0;
+
+	ts->fail_hist_sdc_proc = NULL;
+	ts->fail_hist_sub_proc = NULL;
+	ts->fail_hist_main_proc = NULL;
+	ts->fail_hist_all_proc = NULL;
+	ts->proc_fail_hist_size = 0;
+	ts->proc_fail_hist_all_size = 0;
+
+	input_err(true, &ts->client->dev, "%s: failed\n", __func__);
+}
+#endif
 
 /* for debugging--------------------------------------------------------------------------------------*/
 static int sec_ts_pinctrl_configure(struct sec_ts_data *ts, bool enable)
@@ -2350,6 +2632,10 @@ static int sec_ts_probe(struct i2c_client *client, const struct i2c_device_id *i
 		ret = -ENOMEM;
 		goto err_allocate_frame;
 	}
+
+#ifdef CONFIG_DEBUG_FS
+	sec_ts_init_proc(ts);
+#endif
 
 	if (ts->plat_data->support_dex) {
 		ts->input_dev_pad->name = "sec_touchpad";
