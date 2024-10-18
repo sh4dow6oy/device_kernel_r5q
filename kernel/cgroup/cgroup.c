@@ -5146,9 +5146,12 @@ static struct cgroup *cgroup_create(struct cgroup *parent, const char *name,
 	cgrp->self.parent = &parent->self;
 	cgrp->root = root;
 	cgrp->level = level;
-	ret = cgroup_bpf_inherit(cgrp);
-	if (ret)
-		goto out_kernfs_remove;
+
+	if (cgrp->root == &cgrp_dfl_root) {
+		ret = cgroup_bpf_inherit(cgrp);
+		if (ret)
+			goto out_kernfs_remove;
+	}
 
 	/*
 	 * New cgroup inherits effective freeze counter, and
