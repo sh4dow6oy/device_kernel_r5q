@@ -2628,6 +2628,11 @@ int32_t npu_host_unload_network(struct npu_client *client,
 		goto free_network;
 	}
 
+	if (network->fw_error) {
+		NPU_ERR("fw in error state, skip unload network in fw\n");
+		goto free_network;
+	}
+
 	network->is_unloading = true;
 
 	NPU_DBG("Unload network %lld\n", network->id);
