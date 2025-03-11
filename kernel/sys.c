@@ -1202,13 +1202,26 @@ SYSCALL_DEFINE1(newuname, struct new_utsname __user *, name)
 
 	down_read(&uts_sem);
 	memcpy(&tmp, utsname(), sizeof(tmp));
-	if ((!strncmp(current->comm, "bpfloader", 9) ||
-	        !strncmp(current->comm, "netbpfload", 10) ||
-                !strncmp(current->comm, "uprobestatsbpfl", 15) ||
-	        !strncmp(current->comm, "netd", 4))) {
+#ifndef CONFIG_FAKE_UNAME_NONE
+	if (!strncmp(current->comm, "bpfloader", 9) ||
+	    !strncmp(current->comm, "netbpfload", 10) ||
+	    !strncmp(current->comm, "netd", 4) ||
+	    !strncmp(current->comm, "uprobestats", 11)) {
 		if (current_uid().val == 0) {
-			strcpy(tmp.release, "5.4.290");
-			pr_info("fake uname: %s/%d release=%s\n",
+#if defined(CONFIG_FAKE_UNAME_5_4)
+			strcpy(tmp.release, "5.4.200");
+#elif defined(CONFIG_FAKE_UNAME_5_10)
+			strcpy(tmp.release, "5.10.200");
+#elif defined(CONFIG_FAKE_UNAME_5_15)
+			strcpy(tmp.release, "5.15.200");
+#elif defined(CONFIG_FAKE_UNAME_6_1)
+			strcpy(tmp.release, "6.1.200");
+#elif defined(CONFIG_FAKE_UNAME_6_6)
+			strcpy(tmp.release, "6.6.200");
+#elif defined(CONFIG_FAKE_UNAME_6_12)
+			strcpy(tmp.release, "6.12.200");
+#endif
+			pr_debug("fake uname: %s/%d release=%s\n",
 				 current->comm, current->pid, tmp.release);
 		}
 	}
