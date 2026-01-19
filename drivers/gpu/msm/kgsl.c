@@ -4819,17 +4819,6 @@ static unsigned long _get_svm_area(struct kgsl_process_private *private,
 	unsigned long result;
 	unsigned long addr;
 
-	if (align_shift >= ilog2(SZ_2M))
-		align = SZ_2M;
-	else if (align_shift >= ilog2(SZ_1M))
-		align = SZ_1M;
-	else if (align_shift >= ilog2(SZ_64K))
-		align = SZ_64K;
-	else
-		align = SZ_4K;
-
-	align = max_t(uint64_t, align, PAGE_SIZE);
-
 	/* get the GPU pagetable's SVM range */
 	if (kgsl_mmu_svm_range(private->pagetable, &start, &end,
 				entry->memdesc.flags))
