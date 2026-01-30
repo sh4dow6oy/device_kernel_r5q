@@ -240,6 +240,22 @@ static void mlme_init_chainmask_cfg(struct wlan_objmgr_psoc *psoc,
 #endif /* SEC_CONFIG_PSM_SYSFS */
 }
 
+static void mlme_init_ratemask_cfg(struct wlan_objmgr_psoc *psoc,
+				   struct wlan_mlme_ratemask *ratemask_cfg)
+{
+	uint32_t masks[CFG_MLME_RATE_MASK_LEN] = { 0 };
+	qdf_size_t len = 0;
+	QDF_STATUS status;
+
+	ratemask_cfg->type = cfg_get(psoc, CFG_RATEMASK_TYPE);
+	if ((ratemask_cfg->type <= WLAN_MLME_RATEMASK_TYPE_NO_MASK) ||
+	    (ratemask_cfg->type >= WLAN_MLME_RATEMASK_TYPE_MAX)) {
+		mlme_legacy_debug("Ratemask disabled");
+		return;
+	}
+#endif /* SEC_CONFIG_PSM_SYSFS */
+}
+
 #ifdef WLAN_FEATURE_11W
 static void mlme_init_pmf_cfg(struct wlan_objmgr_psoc *psoc,
 			      struct wlan_mlme_generic *gen)
@@ -1504,6 +1520,7 @@ static void mlme_init_roam_offload_cfg(struct wlan_objmgr_psoc *psoc,
 	lfr->idle_roam_band = cfg_get(psoc, CFG_LFR_IDLE_ROAM_BAND);
 	lfr->sta_roam_disable = cfg_get(psoc, CFG_STA_DISABLE_ROAM);
 	mlme_init_sae_single_pmk_cfg(psoc, lfr);
+
 #ifdef SEC_CONFIG_PSM_SYSFS
 	if (wlan_hdd_sec_get_psm()) {
 		lfr->enable_idle_roam = 0;
@@ -1770,11 +1787,12 @@ static void mlme_init_lfr_cfg(struct wlan_objmgr_psoc *psoc,
 		lfr->roam_scan_offload_enabled = 0;
 		printk("[WIFI] CFG_LFR_ROAM_SCAN_OFFLOAD_ENABLED : sec_control_psm = %d", lfr->roam_scan_offload_enabled);
 
-		lfr->roam_bmiss_first_bcnt = 100;
+	        lfr->roam_bmiss_first_bcnt = 100;
 		printk("[WIFI] CFG_LFR_ROAM_BMISS_FIRST_BCNT : sec_control_psm = %d", lfr->roam_bmiss_first_bcnt);
 
 		lfr->roam_bmiss_final_bcnt = 100;
 		printk("[WIFI] CFG_LFR_ROAM_BMISS_FINAL_BCNT : sec_control_psm = %d", lfr->roam_bmiss_final_bcnt);
+
 	}
 #endif /* SEC_CONFIG_PSM_SYSFS */
 }
