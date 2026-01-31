@@ -229,50 +229,6 @@ static unsigned int dev_num = 1;
 static struct cdev wlan_hdd_state_cdev;
 static struct class *class;
 static dev_t device;
-#if defined (SEC_READ_MACADDR_SYSFS) || defined (SEC_WRITE_VERSION_IN_SYSFS) || defined (SEC_WRITE_SOFTAP_INFO_IN_SYSFS) || defined (SEC_CONFIG_PSM_SYSFS)
-void hdd_sysfs_update_driver_status(int32_t status);
-#endif /* SEC_READ_MACADDR_SYSFS || SEC_WRITE_VERSION_IN_SYSFS || SEC_WRITE_SOFTAP_INFO_IN_SYSFS || SEC_CONFIG_PSM_SYSFS */
-#ifdef SEC_CONFIG_PSM_SYSFS
-int wlan_hdd_sec_get_psm(void);
-#endif /* SEC_CONFIG_PSM_SYSFS */
-#ifdef SEC_WRITE_SOFTAP_INFO_IN_SYSFS
-#ifdef SEC_CONFIG_SUPPORT_MIMO
-static int sec_hw_dbs_capable = 1;
-#else //!SEC_CONFIG_SUPPORT_MIMO
-static int sec_hw_dbs_capable = 0;
-#endif //SEC_CONFIG_SUPPORT_MIMO
-static uint16_t sec_max_station = 0;
-#endif //SEC_WRITE_SOFTAP_INFO_IN_SYSFS
-#ifdef SEC_CONFIG_POWER_BACKOFF
-extern int cur_sec_sar_index;
-#endif /* SEC_CONFIG_POWER_BACKOFF */
-
-#ifndef MODULE
-static struct gwlan_loader *wlan_loader;
-static ssize_t wlan_boot_cb(struct kobject *kobj,
-			    struct kobj_attribute *attr,
-			    const char *buf, size_t count);
-struct gwlan_loader {
-	bool loaded_state;
-	struct kobject *boot_wlan_obj;
-	struct attribute_group *attr_group;
-};
-
-static struct kobj_attribute wlan_boot_attribute =
-	__ATTR(boot_wlan, 0220, NULL, wlan_boot_cb);
-
-static struct attribute *attrs[] = {
-	&wlan_boot_attribute.attr,
-	NULL,
-};
-#define MODULE_INITIALIZED 1
-
-#ifdef MULTI_IF_NAME
-#define WLAN_LOADER_NAME "boot_" MULTI_IF_NAME
-#else
-#define WLAN_LOADER_NAME "boot_wlan"
-#endif
-#endif
 
 #if defined (SEC_READ_MACADDR_SYSFS) || defined (SEC_WRITE_VERSION_IN_SYSFS) || defined (SEC_WRITE_SOFTAP_INFO_IN_SYSFS) || defined (SEC_CONFIG_PSM_SYSFS)
 void hdd_sysfs_update_driver_status(int32_t status);
@@ -15305,6 +15261,36 @@ void hdd_init_start_completion(void)
 	INIT_COMPLETION(wlan_start_comp);
 }
 
+#if defined CFG80211_USER_HINT_CELL_BASE_SELF_MANAGED || \
+                    (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 18, 0))
+static void hdd_inform_wifi_on(void)
+{
+	int ret;
+	struct hdd_context *hdd_ctx = cds_get_context(QDF_MODULE_ID_HDD);
+	struct osif_psoc_sync *psoc_sync;
+
+	hdd_nofl_debug("inform regdomain for wifi on");
+	ret = wlan_hdd_validate_context(hdd_ctx);
+	if (ret)
+		return;
+	if (!wlan_hdd_validate_modules_state(hdd_ctx))
+		return;
+	if (!hdd_ctx->wiphy)
+		return;
+	ret = osif_psoc_sync_op_start(wiphy_dev(hdd_ctx->wiphy), &psoc_sync);
+	if (ret)
+		return;
+	if (hdd_ctx->wiphy->registered)
+		hdd_send_wiphy_regd_sync_event(hdd_ctx);
+
+	osif_psoc_sync_op_stop(psoc_sync);
+}
+#else
+static void hdd_inform_wifi_on(void)
+{
+}
+#endif
+
 static ssize_t wlan_hdd_state_ctrl_param_write(struct file *filp,
 						const char __user *user_buf,
 						size_t count,
@@ -16494,17 +16480,6 @@ static int hdd_module_init(void)
 		return -EINVAL;
 
 	return 0;
-}
-#else
-static int __init hdd_module_init(void)
-{
-	int ret = -EINVAL;
-
-	ret = wlan_init_sysfs();
-	if (ret)
-		hdd_err("Failed to create sysfs entry");
-
-	return ret;
 }
 #endif
 
