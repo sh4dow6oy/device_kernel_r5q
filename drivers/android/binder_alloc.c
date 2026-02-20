@@ -35,6 +35,7 @@
 
 #ifdef CONFIG_SAMSUNG_FREECESS
 #include <linux/freecess.h>
+#include <linux/sched/jobctl.h>
 #endif
 
 #define MAX_ALLOCATION_SIZE (1024 * 1024)
@@ -441,14 +442,13 @@ static struct binder_buffer *binder_alloc_new_buf_locked(
 	}
 
 #ifdef CONFIG_SAMSUNG_FREECESS
-	if (is_async && (alloc->free_async_space < 3 * size
-		|| (alloc->free_async_space < ((alloc->buffer_size/2)*9/10)))) {
+	if (is_async && (alloc->free_async_space < 3*(size + sizeof(struct binder_buffer))
+		|| (alloc->free_async_space < alloc->buffer_size / 4))) {
 		rcu_read_lock();
 		p = find_task_by_vpid(alloc->pid);
 		rcu_read_unlock();
-		if (p != NULL && thread_group_is_frozen(p)) {
+		if (p && (thread_group_is_frozen(p) || p->jobctl & JOBCTL_TRAP_FREEZE))
 			binder_report(p, -1, "free_buffer_full", is_async);
-		}
 	}
 #endif
 
