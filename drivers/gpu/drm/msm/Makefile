@@ -9,11 +9,6 @@ ccflags-y += -I $(srctree)/drivers/gpu/drm/msm/hdmi
 ccflags-$(CONFIG_DRM_SDE_SHD) += -I $(srctree)/drivers/gpu/drm/msm/shd
 ccflags-$(CONFIG_DRM_SDE_SHP) += -I $(srctree)/drivers/gpu/drm/msm/shp
 
-ifeq ($(CONFIG_DISPLAY_SAMSUNG_LEGO),y)
-ccflags-y += -I$(srctree)/drivers/clk/qcom/
-ccflags-y += -I$(srctree)/drivers/gpu/drm/msm/samsung_lego
-endif
-
 msm_drm-y := \
 	dp/dp_usbpd.o \
 	dp/dp_parser.o \
