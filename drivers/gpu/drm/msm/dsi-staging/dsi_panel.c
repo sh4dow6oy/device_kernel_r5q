@@ -119,7 +119,11 @@ int dsi_dsc_create_pps_buf_cmd(struct msm_display_dsc_info *dsc, char *buf,
 	*bp++ = 1;
 	*bp++ = 0;
 	*bp++ = 0;
-	*bp++ = dsc->pps_delay_ms;
+#if defined(CONFIG_DISPLAY_SAMSUNG)
+		*bp++ = 0;
+#else
+		*bp++ = dsc->pps_delay_ms;
+#endif
 	*bp++ = 0;
 	*bp++ = 128;
 
