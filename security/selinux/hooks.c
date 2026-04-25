@@ -2855,10 +2855,9 @@ static int selinux_sb_kern_mount(struct super_block *sb, int flags, void *data)
 	int rc = 0;
 	struct security_mnt_opts opts;
 
-	security_init_mnt_opts(&opts);
-
-	if (!data)
-		goto out;
+	rc = superblock_doinit(sb, data);
+	if (rc)
+		return rc;
 
 	BUG_ON(sb->s_type->fs_flags & FS_BINARY_MOUNTDATA);
 
@@ -2880,7 +2879,7 @@ out_err:
 
 	ad.type = LSM_AUDIT_DATA_DENTRY;
 	ad.u.dentry = sb->s_root;
-	return superblock_has_perm(cred, sb, FILESYSTEM__MOUNT, &ad);
+	rc = superblock_has_perm(cred, sb, FILESYSTEM__MOUNT, &ad);
 }
 
 static int selinux_sb_statfs(struct dentry *dentry)
