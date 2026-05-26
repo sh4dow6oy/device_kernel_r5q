@@ -1,5 +1,5 @@
-/* Copyright (c) 2008-2020, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
+/* Copyright (c) 2008-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -350,6 +350,14 @@ static void kgsl_destroy_ion(struct kgsl_dma_buf_meta *meta)
 		dma_buf_put(meta->dmabuf);
 		kfree(meta);
 	}
+
+	/*
+	 * Ion takes care of freeing the sg_table for us so
+	 * clear the sg table to ensure kgsl_sharedmem_free
+	 * doesn't try to free it again
+	 */
+	memdesc->sgt = NULL;
+	entry->priv_data = NULL;
 }
 #else
 static void kgsl_destroy_ion(struct kgsl_dma_buf_meta *meta)
@@ -624,11 +632,11 @@ int kgsl_context_init(struct kgsl_device_private *dev_priv,
 	if (id == -ENOSPC) {
 		/*
 		 * Before declaring that there are no contexts left try
-		 * flushing the event workqueue just in case there are
+		 * flushing the event worker just in case there are
 		 * detached contexts waiting to finish
 		 */
 
-		flush_workqueue(device->events_wq);
+		kthread_flush_worker(device->events_worker);
 		id = _kgsl_get_context_id(device);
 	}
 
@@ -4788,26 +4796,28 @@ static unsigned long _search_range(struct kgsl_process_private *private,
 	return result;
 }
 
+unsigned long kgsl_get_align(struct kgsl_memdesc *memdesc)
+{
+	u32 bit = kgsl_memdesc_get_align(memdesc);
+
+	if (bit >= ilog2(SZ_2M))
+		return SZ_2M;
+	else if (bit >= ilog2(SZ_1M))
+		return SZ_1M;
+	else if (bit >= ilog2(SZ_64K))
+		return SZ_64K;
+
+	return PAGE_SIZE;
+}
+
 static unsigned long _get_svm_area(struct kgsl_process_private *private,
 		struct kgsl_mem_entry *entry, unsigned long hint,
 		unsigned long len, unsigned long flags)
 {
 	uint64_t start, end;
-	int align_shift = kgsl_memdesc_get_align(&entry->memdesc);
-	uint64_t align;
+	unsigned long align = kgsl_get_align(&entry->memdesc);
 	unsigned long result;
 	unsigned long addr;
-
-	if (align_shift >= ilog2(SZ_2M))
-		align = SZ_2M;
-	else if (align_shift >= ilog2(SZ_1M))
-		align = SZ_1M;
-	else if (align_shift >= ilog2(SZ_64K))
-		align = SZ_64K;
-	else
-		align = SZ_4K;
-
-	align = max_t(uint64_t, align, entry->memdesc.pad_to);
 
 	/* get the GPU pagetable's SVM range */
 	if (kgsl_mmu_svm_range(private->pagetable, &start, &end,
@@ -5158,6 +5168,16 @@ int kgsl_device_platform_probe(struct kgsl_device *device)
 		}
 	}
 
+	device->events_worker = kthread_create_worker(0, "kgsl-events");
+
+	if (IS_ERR(device->events_worker)) {
+		status = PTR_ERR(device->events_worker);
+		dev_err(device->dev, "Failed to create events worker ret=%d\n", status);
+		goto error_pwrctrl_close;
+	}
+
+	sched_set_fifo(device->events_worker->task);
+
 	if (!devm_request_mem_region(device->dev, device->reg_phys,
 				device->reg_len, device->name)) {
 		KGSL_DRV_ERR(device, "request_mem_region failed\n");
@@ -5268,9 +5288,6 @@ int kgsl_device_platform_probe(struct kgsl_device *device)
 				PM_QOS_DEFAULT_VALUE);
 	}
 
-	device->events_wq = alloc_workqueue("kgsl-events",
-		WQ_UNBOUND | WQ_MEM_RECLAIM | WQ_SYSFS, 0);
-
 	/* Initialize the snapshot engine */
 	kgsl_device_snapshot_init(device);
 
@@ -5282,6 +5299,9 @@ int kgsl_device_platform_probe(struct kgsl_device *device)
 error_close_mmu:
 	kgsl_mmu_close(device);
 error_pwrctrl_close:
+	if (!IS_ERR(device->events_worker))
+		kthread_destroy_worker(device->events_worker);
+
 	kgsl_pwrctrl_close(device);
 error:
 	kgsl_device_debugfs_close(device);
@@ -5292,7 +5312,7 @@ EXPORT_SYMBOL(kgsl_device_platform_probe);
 
 void kgsl_device_platform_remove(struct kgsl_device *device)
 {
-	destroy_workqueue(device->events_wq);
+	kthread_destroy_worker(device->events_worker);
 
 	kfree(device->dev->dma_parms);
 	device->dev->dma_parms = NULL;
@@ -5341,6 +5361,16 @@ static struct notifier_block kgsl_sharedmem_size_nb = {
 
 static void kgsl_core_exit(void)
 {
+	if (kgsl_driver.workqueue) {
+		destroy_workqueue(kgsl_driver.workqueue);
+		kgsl_driver.workqueue = NULL;
+	}
+
+	if (kgsl_driver.mem_workqueue) {
+		destroy_workqueue(kgsl_driver.mem_workqueue);
+		kgsl_driver.mem_workqueue = NULL;
+	}
+
 	kgsl_events_exit();
 	kgsl_core_debugfs_close();
 
@@ -5437,8 +5467,20 @@ static int __init kgsl_core_init(void)
 	kgsl_driver.workqueue = alloc_workqueue("kgsl-workqueue",
 		WQ_UNBOUND | WQ_MEM_RECLAIM | WQ_SYSFS, 0);
 
+	if (!kgsl_driver.workqueue) {
+		pr_err("kgsl: Failed to allocate kgsl workqueue\n");
+		result = -ENOMEM;
+		goto err;
+	}
+
 	kgsl_driver.mem_workqueue = alloc_workqueue("kgsl-mementry",
 		WQ_UNBOUND | WQ_MEM_RECLAIM, 0);
+
+	if (!kgsl_driver.mem_workqueue) {
+		pr_err("kgsl: Failed to allocate mem workqueue\n");
+		result = -ENOMEM;
+		goto err;
+	}
 
 	kthread_init_worker(&kgsl_driver.worker);
 

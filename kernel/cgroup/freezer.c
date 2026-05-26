@@ -23,6 +23,8 @@
 #include <linux/seq_file.h>
 #include <linux/mutex.h>
 
+#include <trace/events/cgroup.h>
+
 /*
  * A cgroup is freezing if any FREEZING flags are set.  FREEZING_SELF is
  * set if "FROZEN" is written to freezer.state cgroupfs file, and cleared
@@ -172,17 +174,25 @@ static void freezer_attach(struct cgroup_taskset *tset)
 	 * current state before executing the following - !frozen tasks may
 	 * be visible in a FROZEN cgroup and frozen tasks in a THAWED one.
 	 */
-	cgroup_taskset_for_each(task, new_css, tset) {
-		struct freezer *freezer = css_freezer(new_css);
-
-		if (!(freezer->state & CGROUP_FREEZING)) {
-			__thaw_task(task);
+	while ((cgrp = cgroup_parent(cgrp))) {
+		if (frozen) {
+			cgrp->freezer.nr_frozen_descendants += desc;
+			if (!test_bit(CGRP_FROZEN, &cgrp->flags) &&
+			    test_bit(CGRP_FREEZE, &cgrp->flags) &&
+			    cgrp->freezer.nr_frozen_descendants ==
+			    cgrp->nr_descendants) {
+				set_bit(CGRP_FROZEN, &cgrp->flags);
+				cgroup_file_notify(&cgrp->events_file);
+				TRACE_CGROUP_PATH(notify_frozen, cgrp, 1);
+				desc++;
+			}
 		} else {
-			freeze_task(task);
-			/* clear FROZEN and propagate upwards */
-			while (freezer && (freezer->state & CGROUP_FROZEN)) {
-				freezer->state &= ~CGROUP_FROZEN;
-				freezer = parent_freezer(freezer);
+			cgrp->freezer.nr_frozen_descendants -= desc;
+			if (test_bit(CGRP_FROZEN, &cgrp->flags)) {
+				clear_bit(CGRP_FROZEN, &cgrp->flags);
+				cgroup_file_notify(&cgrp->events_file);
+				TRACE_CGROUP_PATH(notify_frozen, cgrp, 0);
+				desc++;
 			}
 		}
 	}
@@ -211,7 +221,55 @@ static void freezer_fork(struct task_struct *task)
 	 * to do.  If we lost and root is the new cgroup, noop is still the
 	 * right thing to do.
 	 */
-	if (task_css_is_root(task, freezer_cgrp_id))
+	frozen = test_bit(CGRP_FREEZE, &cgrp->flags) &&
+		cgrp->freezer.nr_frozen_tasks == __cgroup_task_count(cgrp);
+
+	if (frozen) {
+		/* Already there? */
+		if (test_bit(CGRP_FROZEN, &cgrp->flags))
+			return;
+
+		set_bit(CGRP_FROZEN, &cgrp->flags);
+	} else {
+		/* Already there? */
+		if (!test_bit(CGRP_FROZEN, &cgrp->flags))
+			return;
+
+		clear_bit(CGRP_FROZEN, &cgrp->flags);
+	}
+	cgroup_file_notify(&cgrp->events_file);
+	TRACE_CGROUP_PATH(notify_frozen, cgrp, frozen);
+
+	/* Update the state of ancestor cgroups. */
+	cgroup_propagate_frozen(cgrp, frozen);
+}
+
+/*
+ * Increment cgroup's nr_frozen_tasks.
+ */
+static void cgroup_inc_frozen_cnt(struct cgroup *cgrp)
+{
+	cgrp->freezer.nr_frozen_tasks++;
+}
+
+/*
+ * Decrement cgroup's nr_frozen_tasks.
+ */
+static void cgroup_dec_frozen_cnt(struct cgroup *cgrp)
+{
+	cgrp->freezer.nr_frozen_tasks--;
+	WARN_ON_ONCE(cgrp->freezer.nr_frozen_tasks < 0);
+}
+
+/*
+ * Enter frozen/stopped state, if not yet there. Update cgroup's counters,
+ * and revisit the state of the cgroup, if necessary.
+ */
+void cgroup_enter_frozen(void)
+{
+	struct cgroup *cgrp;
+
+	if (current->frozen)
 		return;
 
 	mutex_lock(&freezer_mutex);
@@ -320,9 +378,30 @@ static void freeze_cgroup(struct freezer *freezer)
 	struct css_task_iter it;
 	struct task_struct *task;
 
-	css_task_iter_start(&freezer->css, 0, &it);
-	while ((task = css_task_iter_next(&it)))
-		freeze_task(task);
+	lockdep_assert_held(&cgroup_mutex);
+
+	spin_lock_irq(&css_set_lock);
+	if (freeze)
+		set_bit(CGRP_FREEZE, &cgrp->flags);
+	else
+		clear_bit(CGRP_FREEZE, &cgrp->flags);
+	spin_unlock_irq(&css_set_lock);
+
+	if (freeze)
+		TRACE_CGROUP_PATH(freeze, cgrp);
+	else
+		TRACE_CGROUP_PATH(unfreeze, cgrp);
+
+	css_task_iter_start(&cgrp->self, 0, &it);
+	while ((task = css_task_iter_next(&it))) {
+		/*
+		 * Ignore kernel threads here. Freezing cgroups containing
+		 * kthreads isn't supported.
+		 */
+		if (task->flags & PF_KTHREAD)
+			continue;
+		cgroup_freeze_task(task, freeze);
+	}
 	css_task_iter_end(&it);
 }
 
@@ -391,29 +470,11 @@ static void freezer_change_state(struct freezer *freezer, bool freeze)
 	 * descendant will try to inherit its parent's FREEZING state as
 	 * CGROUP_FREEZING_PARENT.
 	 */
-	mutex_lock(&freezer_mutex);
-	rcu_read_lock();
-	css_for_each_descendant_pre(pos, &freezer->css) {
-		struct freezer *pos_f = css_freezer(pos);
-		struct freezer *parent = parent_freezer(pos_f);
-
-		if (!css_tryget_online(pos))
-			continue;
-		rcu_read_unlock();
-
-		if (pos_f == freezer)
-			freezer_apply_state(pos_f, freeze,
-					    CGROUP_FREEZING_SELF);
-		else
-			freezer_apply_state(pos_f,
-					    parent->state & CGROUP_FREEZING,
-					    CGROUP_FREEZING_PARENT);
-
-		rcu_read_lock();
-		css_put(pos);
+	if (!applied) {
+		TRACE_CGROUP_PATH(notify_frozen, cgrp,
+				  test_bit(CGRP_FROZEN, &cgrp->flags));
+		cgroup_file_notify(&cgrp->events_file);
 	}
-	rcu_read_unlock();
-	mutex_unlock(&freezer_mutex);
 }
 
 static ssize_t freezer_write(struct kernfs_open_file *of,
