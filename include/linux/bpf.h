@@ -348,6 +348,9 @@ enum bpf_arg_type {
 	ARG_PTR_TO_STACK_OR_NULL,	/* pointer to stack or NULL */
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> be80d28af5da (BACKPORT: bpf: add selected 5.15 helper implementations)
 =======
 >>>>>>> be80d28af5da (BACKPORT: bpf: add selected 5.15 helper implementations)
 	ARG_PTR_TO_CONST_STR,	/* pointer to a null terminated read-only string */

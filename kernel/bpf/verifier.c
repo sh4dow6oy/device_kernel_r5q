@@ -6059,6 +6059,9 @@ static int check_reference_leak(struct bpf_verifier_env *env)
 
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> be80d28af5da (BACKPORT: bpf: add selected 5.15 helper implementations)
 =======
 >>>>>>> be80d28af5da (BACKPORT: bpf: add selected 5.15 helper implementations)
 static int check_bpf_snprintf_call(struct bpf_verifier_env *env,
@@ -6092,8 +6095,11 @@ static int check_bpf_snprintf_call(struct bpf_verifier_env *env,
 }
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
 >>>>>>> 20f881883b3e (BACKPORT: bpf: add tracing IP and task-register helpers)
+=======
+>>>>>>> be80d28af5da (BACKPORT: bpf: add selected 5.15 helper implementations)
 =======
 >>>>>>> be80d28af5da (BACKPORT: bpf: add selected 5.15 helper implementations)
 static int check_get_func_ip(struct bpf_verifier_env *env)

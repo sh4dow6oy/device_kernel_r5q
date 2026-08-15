@@ -92,10 +92,15 @@ bpf_lsm_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_spin_unlock_proto;
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 	case BPF_FUNC_bprm_opts_set:
 		return &bpf_bprm_opts_set_proto;
 =======
 >>>>>>> af837db61418 (BACKPORT: bpf: expose task storage to tracing programs)
+=======
+	case BPF_FUNC_bprm_opts_set:
+		return &bpf_bprm_opts_set_proto;
+>>>>>>> be80d28af5da (BACKPORT: bpf: add selected 5.15 helper implementations)
 =======
 	case BPF_FUNC_bprm_opts_set:
 		return &bpf_bprm_opts_set_proto;
