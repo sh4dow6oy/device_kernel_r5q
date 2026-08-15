@@ -3856,6 +3856,7 @@ union bpf_attr {
 	FN(task_storage_get),		\
 	FN(task_storage_delete),	\
 	FN(get_current_task_btf),	\
+<<<<<<< HEAD
 	FN(bprm_opts_set),		\
 	FN(ktime_get_coarse_ns),	\
 	FN(ima_inode_hash),		\
@@ -3873,6 +3874,9 @@ union bpf_attr {
 	FN(get_func_ip),		\
 	FN(get_attach_cookie),	\
 	FN(task_pt_regs),		\
+=======
+	FN(for_each_map_elem),		\
+>>>>>>> 98c6a551deb8 (BACKPORT: bpf: add for_each_map_elem helper ABI)
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
