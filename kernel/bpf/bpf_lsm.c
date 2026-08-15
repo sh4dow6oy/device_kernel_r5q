@@ -90,6 +90,8 @@ bpf_lsm_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_spin_lock_proto;
 	case BPF_FUNC_spin_unlock:
 		return &bpf_spin_unlock_proto;
+	case BPF_FUNC_bprm_opts_set:
+		return &bpf_bprm_opts_set_proto;
 	default:
 		return tracing_prog_func_proto(func_id, prog);
 	}
