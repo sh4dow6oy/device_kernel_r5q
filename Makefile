@@ -1619,11 +1619,6 @@ PHONY += resolve_btfids_clean
 resolve_btfids_clean:
 	$(Q)$(MAKE) -sC $(srctree)/tools/bpf/resolve_btfids \
 		O=$(resolve_btfids_O) clean
-<<<<<<< HEAD
-
-clean: archclean vmlinuxclean
-=======
->>>>>>> f7cce1bb5b9c (BACKPORT: bpf: add BTF ID resolver build support)
 
 # mrproper - Delete all generated files, including .config
 #
