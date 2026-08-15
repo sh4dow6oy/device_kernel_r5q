@@ -527,6 +527,18 @@ static bool is_cmpxchg_insn(const struct bpf_insn *insn)
 	       insn->imm == BPF_CMPXCHG;
 }
 
+static bool bpf_pseudo_call(const struct bpf_insn *insn)
+{
+	return insn->code == (BPF_JMP | BPF_CALL) &&
+	       insn->src_reg == BPF_PSEUDO_CALL;
+}
+
+static bool bpf_pseudo_func(const struct bpf_insn *insn)
+{
+	return insn->code == (BPF_LD | BPF_IMM | BPF_DW) &&
+	       insn->src_reg == BPF_PSEUDO_FUNC;
+}
+
 /* string representation of 'enum bpf_reg_type' */
 static const char * const reg_type_str[] = {
 	[NOT_INIT]		= "?",
@@ -3675,8 +3687,6 @@ process_func:
 	continue_func:
 	subprog_end = subprog[idx + 1].start;
 	for (; i < subprog_end; i++) {
-		int next_insn;
-
 		if (!bpf_pseudo_call(insn + i) && !bpf_pseudo_func(insn + i))
 			continue;
 		/* remember insn and function to return to */
@@ -4875,7 +4885,6 @@ static const struct bpf_reg_types timer_types = { .types = { PTR_TO_MAP_VALUE } 
 static const struct bpf_reg_types percpu_btf_ptr_types = { .types = { PTR_TO_PERCPU_BTF_ID } };
 static const struct bpf_reg_types func_ptr_types = { .types = { PTR_TO_FUNC } };
 static const struct bpf_reg_types stack_ptr_types = { .types = { PTR_TO_STACK } };
-static const struct bpf_reg_types const_str_ptr_types = { .types = { PTR_TO_MAP_VALUE } };
 
 static const struct bpf_reg_types *compatible_reg_types[__BPF_ARG_TYPE_MAX] = {
 	[ARG_PTR_TO_MAP_KEY]		= &map_key_value_types,
@@ -4907,7 +4916,6 @@ static const struct bpf_reg_types *compatible_reg_types[__BPF_ARG_TYPE_MAX] = {
 	[ARG_PTR_TO_PERCPU_BTF_ID]	= &percpu_btf_ptr_types,
 	[ARG_PTR_TO_FUNC]		= &func_ptr_types,
 	[ARG_PTR_TO_STACK_OR_NULL]	= &stack_ptr_types,
-	[ARG_PTR_TO_CONST_STR]		= &const_str_ptr_types,
 };
 
 static int check_reg_type(struct bpf_verifier_env *env, u32 regno,
@@ -5098,50 +5106,8 @@ skip_type_check:
 			verbose(env, "verifier internal error\n");
 			return -EFAULT;
 		}
-	} else if (arg_type == ARG_PTR_TO_TIMER) {
-		if (process_timer_func(env, regno, meta))
-			return -EACCES;
 	} else if (arg_type == ARG_PTR_TO_FUNC) {
 		meta->subprogno = reg->subprogno;
-	} else if (arg_type == ARG_PTR_TO_CONST_STR) {
-		struct bpf_map *map = reg->map_ptr;
-		int map_off;
-		u64 map_addr;
-		char *str_ptr;
-
-		if (reg->type != PTR_TO_MAP_VALUE || !map ||
-		    !bpf_map_is_rdonly(map)) {
-			verbose(env, "R%d does not point to a readonly map\n", regno);
-			return -EACCES;
-		}
-
-		if (!tnum_is_const(reg->var_off)) {
-			verbose(env, "R%d is not a constant address\n", regno);
-			return -EACCES;
-		}
-
-		if (!map->ops->map_direct_value_addr) {
-			verbose(env, "no direct value access support for this map type\n");
-			return -EACCES;
-		}
-
-		err = check_map_access(env, regno, reg->off,
-				       map->value_size - reg->off, false);
-		if (err)
-			return err;
-
-		map_off = reg->off + reg->var_off.value;
-		err = map->ops->map_direct_value_addr(map, &map_addr, map_off);
-		if (err) {
-			verbose(env, "direct value access on string failed\n");
-			return err;
-		}
-
-		str_ptr = (char *)(long)map_addr;
-		if (!strnchr(str_ptr + map_off, map->value_size - map_off, 0)) {
-			verbose(env, "string is not zero-terminated\n");
-			return -EINVAL;
-		}
 	} else if (arg_type_is_mem_ptr(arg_type)) {
 		/* The access to this pointer is only checked when we hit the
 		 * next is_mem_size argument below.
@@ -5798,12 +5764,10 @@ int map_set_for_each_callback_args(struct bpf_verifier_env *env,
 	callee->regs[BPF_REG_2].type = PTR_TO_MAP_KEY;
 	__mark_reg_known_zero(&callee->regs[BPF_REG_2]);
 	callee->regs[BPF_REG_2].map_ptr = caller->regs[BPF_REG_1].map_ptr;
-	callee->regs[BPF_REG_2].map_uid = caller->regs[BPF_REG_1].map_uid;
 
 	callee->regs[BPF_REG_3].type = PTR_TO_MAP_VALUE;
 	__mark_reg_known_zero(&callee->regs[BPF_REG_3]);
 	callee->regs[BPF_REG_3].map_ptr = caller->regs[BPF_REG_1].map_ptr;
-	callee->regs[BPF_REG_3].map_uid = caller->regs[BPF_REG_1].map_uid;
 
 	/* pointer to stack or null */
 	callee->regs[BPF_REG_4] = caller->regs[BPF_REG_3];
@@ -5839,38 +5803,6 @@ static int set_map_elem_callback_state(struct bpf_verifier_env *env,
 		return err;
 
 	callee->in_callback_fn = true;
-	return 0;
-}
-
-static int set_timer_callback_state(struct bpf_verifier_env *env,
-				    struct bpf_func_state *caller,
-				    struct bpf_func_state *callee,
-				    int insn_idx)
-{
-	struct bpf_map *map_ptr = caller->regs[BPF_REG_1].map_ptr;
-
-	/* bpf_timer_set_callback(struct bpf_timer *timer, void *callback_fn);
-	 * callback_fn(struct bpf_map *map, void *key, void *value);
-	 */
-	callee->regs[BPF_REG_1].type = CONST_PTR_TO_MAP;
-	__mark_reg_known_zero(&callee->regs[BPF_REG_1]);
-	callee->regs[BPF_REG_1].map_ptr = map_ptr;
-	callee->regs[BPF_REG_1].map_uid = caller->regs[BPF_REG_1].map_uid;
-
-	callee->regs[BPF_REG_2].type = PTR_TO_MAP_KEY;
-	__mark_reg_known_zero(&callee->regs[BPF_REG_2]);
-	callee->regs[BPF_REG_2].map_ptr = map_ptr;
-	callee->regs[BPF_REG_2].map_uid = caller->regs[BPF_REG_1].map_uid;
-
-	callee->regs[BPF_REG_3].type = PTR_TO_MAP_VALUE;
-	__mark_reg_known_zero(&callee->regs[BPF_REG_3]);
-	callee->regs[BPF_REG_3].map_ptr = map_ptr;
-	callee->regs[BPF_REG_3].map_uid = caller->regs[BPF_REG_1].map_uid;
-
-	/* unused */
-	__mark_reg_not_init(env, &callee->regs[BPF_REG_4]);
-	__mark_reg_not_init(env, &callee->regs[BPF_REG_5]);
-	callee->in_async_callback_fn = true;
 	return 0;
 }
 
@@ -6045,75 +5977,6 @@ static int check_reference_leak(struct bpf_verifier_env *env)
 	return state->acquired_refs ? -EINVAL : 0;
 }
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> be80d28af5da (BACKPORT: bpf: add selected 5.15 helper implementations)
-=======
->>>>>>> be80d28af5da (BACKPORT: bpf: add selected 5.15 helper implementations)
-static int check_bpf_snprintf_call(struct bpf_verifier_env *env,
-				   struct bpf_reg_state *regs)
-{
-	struct bpf_reg_state *fmt_reg = &regs[BPF_REG_3];
-	struct bpf_reg_state *data_len_reg = &regs[BPF_REG_5];
-	struct bpf_map *fmt_map = fmt_reg->map_ptr;
-	int err, fmt_map_off, num_args;
-	u64 fmt_addr;
-	char *fmt;
-
-	/* The data array consists of u64 arguments. */
-	if (data_len_reg->var_off.value % 8)
-		return -EINVAL;
-	num_args = data_len_reg->var_off.value / 8;
-
-	/* ARG_PTR_TO_CONST_STR guarantees a constant, zero-terminated map value. */
-	fmt_map_off = fmt_reg->off + fmt_reg->var_off.value;
-	err = fmt_map->ops->map_direct_value_addr(fmt_map, &fmt_addr,
-						  fmt_map_off);
-	if (err)
-		return err;
-	fmt = (char *)(long)fmt_addr + fmt_map_off;
-
-	err = bpf_bprintf_prepare(fmt, UINT_MAX, NULL, NULL, num_args);
-	if (err < 0)
-		verbose(env, "Invalid format string\n");
-
-	return err;
-}
-
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> 20f881883b3e (BACKPORT: bpf: add tracing IP and task-register helpers)
-=======
->>>>>>> be80d28af5da (BACKPORT: bpf: add selected 5.15 helper implementations)
-=======
->>>>>>> be80d28af5da (BACKPORT: bpf: add selected 5.15 helper implementations)
-static int check_get_func_ip(struct bpf_verifier_env *env)
-{
-	enum bpf_attach_type eatype = env->prog->expected_attach_type;
-	enum bpf_prog_type type = resolve_prog_type(env->prog);
-	int func_id = BPF_FUNC_get_func_ip;
-
-	if (type == BPF_PROG_TYPE_TRACING) {
-		if (eatype != BPF_TRACE_FENTRY && eatype != BPF_TRACE_FEXIT &&
-		    eatype != BPF_MODIFY_RETURN) {
-			verbose(env,
-				"func %s#%d supported only for fentry/fexit/fmod_ret programs\n",
-				func_id_name(func_id), func_id);
-			return -ENOTSUPP;
-		}
-		return 0;
-	} else if (type == BPF_PROG_TYPE_KPROBE) {
-		return 0;
-	}
-
-	verbose(env, "func %s#%d not supported for program type %d\n",
-		func_id_name(func_id), func_id, type);
-	return -ENOTSUPP;
-}
-
 static int check_helper_call(struct bpf_verifier_env *env,
 			     struct bpf_insn *insn, int *insn_idx_p)
 {
@@ -6230,12 +6093,6 @@ static int check_helper_call(struct bpf_verifier_env *env,
 	if (func_id == BPF_FUNC_for_each_map_elem) {
 		err = __check_func_call(env, insn, insn_idx_p, meta.subprogno,
 					set_map_elem_callback_state);
-		if (err < 0)
-			return err;
-	}
-	if (func_id == BPF_FUNC_timer_set_callback) {
-		err = __check_func_call(env, insn, insn_idx_p, meta.subprogno,
-					set_timer_callback_state);
 		if (err < 0)
 			return err;
 	}
