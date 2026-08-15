@@ -4084,27 +4084,7 @@ union bpf_attr {
 	FN(task_storage_get),		\
 	FN(task_storage_delete),	\
 	FN(get_current_task_btf),	\
-<<<<<<< HEAD
-	FN(bprm_opts_set),		\
-	FN(ktime_get_coarse_ns),	\
-	FN(ima_inode_hash),		\
-	FN(sock_from_file),		\
-	FN(check_mtu),			\
 	FN(for_each_map_elem),		\
-	FN(snprintf),			\
-	FN(sys_bpf),			\
-	FN(btf_find_by_name_kind),	\
-	FN(sys_close),			\
-	FN(timer_init),			\
-	FN(timer_set_callback),	\
-	FN(timer_start),		\
-	FN(timer_cancel),		\
-	FN(get_func_ip),		\
-	FN(get_attach_cookie),	\
-	FN(task_pt_regs),		\
-=======
-	FN(for_each_map_elem),		\
->>>>>>> 98c6a551deb8 (BACKPORT: bpf: add for_each_map_elem helper ABI)
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
