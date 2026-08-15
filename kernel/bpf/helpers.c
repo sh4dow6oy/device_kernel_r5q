@@ -1343,21 +1343,6 @@ bpf_base_func_proto(enum bpf_func_id func_id)
 		return &bpf_probe_read_kernel_str_proto;
 	case BPF_FUNC_snprintf_btf:
 		return &bpf_snprintf_btf_proto;
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
-	case BPF_FUNC_snprintf:
-		return &bpf_snprintf_proto;
-=======
->>>>>>> 20f881883b3e (BACKPORT: bpf: add tracing IP and task-register helpers)
-=======
-	case BPF_FUNC_snprintf:
-		return &bpf_snprintf_proto;
->>>>>>> be80d28af5da (BACKPORT: bpf: add selected 5.15 helper implementations)
-=======
-	case BPF_FUNC_snprintf:
-		return &bpf_snprintf_proto;
->>>>>>> be80d28af5da (BACKPORT: bpf: add selected 5.15 helper implementations)
 	case BPF_FUNC_task_pt_regs:
 		return &bpf_task_pt_regs_proto;
 	default:

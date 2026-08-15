@@ -1192,41 +1192,6 @@ const struct bpf_func_proto bpf_snprintf_btf_proto = {
 	.arg5_type	= ARG_ANYTHING,
 };
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> be80d28af5da (BACKPORT: bpf: add selected 5.15 helper implementations)
-=======
->>>>>>> be80d28af5da (BACKPORT: bpf: add selected 5.15 helper implementations)
-BPF_CALL_1(bpf_sock_from_file, struct file *, file)
-{
-	int err;
-
-	return (unsigned long)sock_from_file(file, &err);
-}
-
-BTF_ID_LIST(bpf_sock_from_file_btf_ids)
-BTF_ID(struct, socket)
-BTF_ID(struct, file)
-
-static const struct bpf_func_proto bpf_sock_from_file_proto = {
-	.func		= bpf_sock_from_file,
-	.gpl_only	= false,
-	.ret_type	= RET_PTR_TO_BTF_ID_OR_NULL,
-	.ret_btf_id	= &bpf_sock_from_file_btf_ids[0],
-	.arg1_type	= ARG_PTR_TO_BTF_ID,
-	.arg1_btf_id	= &bpf_sock_from_file_btf_ids[1],
-};
-
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> 20f881883b3e (BACKPORT: bpf: add tracing IP and task-register helpers)
-=======
->>>>>>> be80d28af5da (BACKPORT: bpf: add selected 5.15 helper implementations)
-=======
->>>>>>> be80d28af5da (BACKPORT: bpf: add selected 5.15 helper implementations)
 BPF_CALL_1(bpf_get_func_ip_tracing, void *, ctx)
 {
 	/* This helper call is inlined by the verifier. */
@@ -1250,36 +1215,6 @@ BPF_CALL_1(bpf_get_func_ip_kprobe, struct pt_regs *, regs)
 static const struct bpf_func_proto bpf_get_func_ip_proto_kprobe = {
 	.func		= bpf_get_func_ip_kprobe,
 	.gpl_only	= true,
-	.ret_type	= RET_INTEGER,
-	.arg1_type	= ARG_PTR_TO_CTX,
-};
-
-BPF_CALL_1(bpf_get_attach_cookie_trace, void *, ctx)
-{
-	struct bpf_trace_run_ctx *run_ctx;
-
-	/* Keep test-run and other non-array execution paths harmless. */
-	if (!current->bpf_ctx)
-		return 0;
-	run_ctx = container_of(current->bpf_ctx, struct bpf_trace_run_ctx, run_ctx);
-	return run_ctx->bpf_cookie;
-}
-
-static const struct bpf_func_proto bpf_get_attach_cookie_proto_trace = {
-	.func		= bpf_get_attach_cookie_trace,
-	.gpl_only	= false,
-	.ret_type	= RET_INTEGER,
-	.arg1_type	= ARG_PTR_TO_CTX,
-};
-
-BPF_CALL_1(bpf_get_attach_cookie_pe, struct bpf_perf_event_data_kern *, ctx)
-{
-	return ctx->event->bpf_cookie;
-}
-
-static const struct bpf_func_proto bpf_get_attach_cookie_proto_pe = {
-	.func		= bpf_get_attach_cookie_pe,
-	.gpl_only	= false,
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_PTR_TO_CTX,
 };
@@ -1390,6 +1325,8 @@ bpf_tracing_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_task_storage_get_proto;
 	case BPF_FUNC_task_storage_delete:
 		return &bpf_task_storage_delete_proto;
+	case BPF_FUNC_get_func_ip:
+		return &bpf_get_func_ip_proto_tracing;
 	default:
 		return NULL;
 	}
@@ -1411,8 +1348,6 @@ kprobe_prog_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 #endif
 	case BPF_FUNC_get_func_ip:
 		return &bpf_get_func_ip_proto_kprobe;
-	case BPF_FUNC_get_attach_cookie:
-		return &bpf_get_attach_cookie_proto_trace;
 	default:
 		return bpf_tracing_func_proto(func_id, prog);
 	}
