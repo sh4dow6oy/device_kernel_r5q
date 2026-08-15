@@ -3865,6 +3865,42 @@ union bpf_attr {
  *	Return
  *		Pointer to the current task.
  *
+ * long bpf_bprm_opts_set(struct linux_binprm *bprm, u64 flags)
+ *	Description
+ *		Set or clear options on *bprm*. The
+ *		**BPF_F_BPRM_SECUREEXEC** flag sets the secureexec bit and
+ *		therefore the **AT_SECURE** auxiliary vector for glibc.
+ *	Return
+ *		0 on success, or **-EINVAL** for unsupported flags.
+ *
+ * struct socket *bpf_sock_from_file(struct file *file)
+ *	Description
+ *		If *file* represents a socket, return the associated socket.
+ *	Return
+ *		A pointer to a struct socket, or NULL if *file* is not a socket.
+ *
+ * long bpf_check_mtu(void *ctx, u32 ifindex, u32 *mtu_len, s32 len_diff, u64 flags)
+ *	Description
+ *		Check packet size against the MTU of the network device selected
+ *		by *ifindex*.  The helper is intended to be used before helpers
+ *		that adjust the packet size.  *len_diff* describes the planned
+ *		size change and may be negative.
+ *
+ *		An *ifindex* of zero uses the current device.  The input value of
+ *		*mtu_len*, when non-zero, is treated as an L3 packet length;
+ *		otherwise the packet context length is used.  On return *mtu_len*
+ *		contains the device MTU.
+ *
+ *		For **struct sk_buff** contexts, **BPF_MTU_CHK_SEGS** also checks
+ *		GSO segments and rejects a segment that still exceeds the MTU.
+ *		This flag cannot be combined with a non-zero *len_diff* or input
+ *		length.  The context is **struct xdp_md** for XDP programs and
+ *		**struct sk_buff** for TC cls_act programs.
+ *	Return
+ *		0 on success, **BPF_MTU_CHK_RET_FRAG_NEEDED** when the packet
+ *		exceeds the MTU, or **BPF_MTU_CHK_RET_SEGS_TOOBIG** for an
+ *		exceeding GSO segment.  Invalid arguments return a negative errno.
+ *
  * u64 bpf_get_func_ip(void *ctx)
  *	Description
  *		Get address of the traced function (for tracing and kprobe programs).
