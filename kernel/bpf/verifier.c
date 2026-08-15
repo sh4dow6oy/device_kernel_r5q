@@ -6057,6 +6057,7 @@ static int check_reference_leak(struct bpf_verifier_env *env)
 	return state->acquired_refs ? -EINVAL : 0;
 }
 
+<<<<<<< HEAD
 static int check_bpf_snprintf_call(struct bpf_verifier_env *env,
 				   struct bpf_reg_state *regs)
 {
@@ -6087,6 +6088,8 @@ static int check_bpf_snprintf_call(struct bpf_verifier_env *env,
 	return err;
 }
 
+=======
+>>>>>>> 20f881883b3e (BACKPORT: bpf: add tracing IP and task-register helpers)
 static int check_get_func_ip(struct bpf_verifier_env *env)
 {
 	enum bpf_attach_type eatype = env->prog->expected_attach_type;

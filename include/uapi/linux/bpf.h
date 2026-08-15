@@ -3824,6 +3824,7 @@ union bpf_attr {
  *	Return
  *		Address of the traced function.
  *
+<<<<<<< HEAD
  * u64 bpf_get_attach_cookie(void *ctx)
  *	Description
  *		Get the user-provided bpf_cookie associated with this attachment.
@@ -3832,6 +3833,8 @@ union bpf_attr {
  *	Return
  *		The attachment cookie, or 0 if none was specified.
  *
+=======
+>>>>>>> 20f881883b3e (BACKPORT: bpf: add tracing IP and task-register helpers)
  * long bpf_task_pt_regs(struct task_struct *task)
  *	Description
  *		Get the struct pt_regs associated with **task**.

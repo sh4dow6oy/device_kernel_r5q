@@ -1192,6 +1192,7 @@ const struct bpf_func_proto bpf_snprintf_btf_proto = {
 	.arg5_type	= ARG_ANYTHING,
 };
 
+<<<<<<< HEAD
 BPF_CALL_1(bpf_sock_from_file, struct file *, file)
 {
 	int err;
@@ -1212,6 +1213,8 @@ static const struct bpf_func_proto bpf_sock_from_file_proto = {
 	.arg1_btf_id	= &bpf_sock_from_file_btf_ids[1],
 };
 
+=======
+>>>>>>> 20f881883b3e (BACKPORT: bpf: add tracing IP and task-register helpers)
 BPF_CALL_1(bpf_get_func_ip_tracing, void *, ctx)
 {
 	/* This helper call is inlined by the verifier. */
@@ -1346,6 +1349,7 @@ bpf_tracing_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 	case BPF_FUNC_task_storage_delete:
 		return &bpf_task_storage_delete_proto;
 <<<<<<< HEAD
+<<<<<<< HEAD
 	case BPF_FUNC_get_func_ip:
 		return &bpf_get_func_ip_proto_tracing;
 <<<<<<< HEAD
@@ -1357,6 +1361,10 @@ bpf_tracing_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 >>>>>>> be80d28af5da (BACKPORT: bpf: add selected 5.15 helper implementations)
 =======
 >>>>>>> af837db61418 (BACKPORT: bpf: expose task storage to tracing programs)
+=======
+	case BPF_FUNC_get_func_ip:
+		return &bpf_get_func_ip_proto_tracing;
+>>>>>>> 20f881883b3e (BACKPORT: bpf: add tracing IP and task-register helpers)
 	default:
 		return NULL;
 	}
