@@ -25,6 +25,7 @@
 #include <linux/capability.h>
 #include <linux/percpu-refcount.h>
 #include <linux/sched.h>
+#include <linux/bpfptr.h>
 
 struct bpf_verifier_env;
 struct bpf_verifier_log;
@@ -2033,6 +2034,7 @@ extern const struct bpf_func_proto bpf_this_cpu_ptr_proto;
 extern const struct bpf_func_proto bpf_for_each_map_elem_proto;
 extern const struct bpf_func_proto bpf_task_storage_get_proto;
 extern const struct bpf_func_proto bpf_task_storage_delete_proto;
+extern const struct bpf_func_proto bpf_btf_find_by_name_kind_proto;
 
 const struct bpf_func_proto *bpf_tracing_func_proto(
 	enum bpf_func_id func_id, const struct bpf_prog *prog);
