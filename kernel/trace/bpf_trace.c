@@ -1345,6 +1345,7 @@ bpf_tracing_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_task_storage_get_proto;
 	case BPF_FUNC_task_storage_delete:
 		return &bpf_task_storage_delete_proto;
+<<<<<<< HEAD
 	case BPF_FUNC_get_func_ip:
 		return &bpf_get_func_ip_proto_tracing;
 <<<<<<< HEAD
@@ -1354,6 +1355,8 @@ bpf_tracing_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 	case BPF_FUNC_sock_from_file:
 		return &bpf_sock_from_file_proto;
 >>>>>>> be80d28af5da (BACKPORT: bpf: add selected 5.15 helper implementations)
+=======
+>>>>>>> af837db61418 (BACKPORT: bpf: expose task storage to tracing programs)
 	default:
 		return NULL;
 	}
