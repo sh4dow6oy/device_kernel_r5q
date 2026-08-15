@@ -347,6 +347,9 @@ enum bpf_arg_type {
 	ARG_PTR_TO_FUNC,	/* pointer to a bpf program function */
 	ARG_PTR_TO_STACK_OR_NULL,	/* pointer to stack or NULL */
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> be80d28af5da (BACKPORT: bpf: add selected 5.15 helper implementations)
 	ARG_PTR_TO_CONST_STR,	/* pointer to a null terminated read-only string */
 	ARG_PTR_TO_TIMER,	/* pointer to bpf_timer */
 =======
