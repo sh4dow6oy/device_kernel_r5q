@@ -1977,10 +1977,6 @@ static __latent_entropy struct task_struct *copy_process(
 
 #ifdef CONFIG_BPF_SYSCALL
 	RCU_INIT_POINTER(p->bpf_storage, NULL);
-<<<<<<< HEAD
-	p->bpf_ctx = NULL;
-=======
->>>>>>> af837db61418 (BACKPORT: bpf: expose task storage to tracing programs)
 #endif
 
 #ifdef CONFIG_LOCKDEP

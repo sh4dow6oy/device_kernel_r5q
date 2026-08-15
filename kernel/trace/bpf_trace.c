@@ -1390,39 +1390,6 @@ bpf_tracing_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_task_storage_get_proto;
 	case BPF_FUNC_task_storage_delete:
 		return &bpf_task_storage_delete_proto;
-<<<<<<< HEAD
-<<<<<<< HEAD
-	case BPF_FUNC_get_func_ip:
-		return &bpf_get_func_ip_proto_tracing;
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
-	case BPF_FUNC_get_attach_cookie:
-		return &bpf_get_attach_cookie_proto_trace;
-	case BPF_FUNC_sock_from_file:
-		return &bpf_sock_from_file_proto;
-<<<<<<< HEAD
-<<<<<<< HEAD
->>>>>>> be80d28af5da (BACKPORT: bpf: add selected 5.15 helper implementations)
-=======
->>>>>>> af837db61418 (BACKPORT: bpf: expose task storage to tracing programs)
-=======
-	case BPF_FUNC_get_func_ip:
-		return &bpf_get_func_ip_proto_tracing;
->>>>>>> 20f881883b3e (BACKPORT: bpf: add tracing IP and task-register helpers)
-=======
-	case BPF_FUNC_get_attach_cookie:
-		return &bpf_get_attach_cookie_proto_trace;
->>>>>>> e1c117175a68 (BACKPORT: bpf: propagate perf attach cookies)
-=======
-	case BPF_FUNC_get_attach_cookie:
-		return &bpf_get_attach_cookie_proto_trace;
->>>>>>> e1c117175a68 (BACKPORT: bpf: propagate perf attach cookies)
-=======
->>>>>>> be80d28af5da (BACKPORT: bpf: add selected 5.15 helper implementations)
-=======
->>>>>>> be80d28af5da (BACKPORT: bpf: add selected 5.15 helper implementations)
 	default:
 		return NULL;
 	}

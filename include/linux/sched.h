@@ -35,7 +35,6 @@ struct backing_dev_info;
 struct bio_list;
 struct blk_plug;
 struct bpf_local_storage;
-struct bpf_run_ctx;
 struct cfs_rq;
 struct fs_struct;
 struct futex_pi_state;
@@ -1378,8 +1377,6 @@ struct task_struct {
 #ifdef CONFIG_BPF_SYSCALL
 	/* Used by BPF task local storage. */
 	struct bpf_local_storage __rcu	*bpf_storage;
-	/* Used for BPF run context. */
-	struct bpf_run_ctx		*bpf_ctx;
 #endif
 #ifdef OPLUS_FEATURE_SCHED_ASSIST
 	int ux_state;
@@ -1459,8 +1456,6 @@ struct task_struct {
 #if IS_ENABLED(CONFIG_OPLUS_FEATURE_FDLEAK_CHECK)
 	unsigned int fdleak_flag;
 #endif
-<<<<<<< HEAD
-=======
 	/* task is frozen/stopped (used by the cgroup freezer) */
 	ANDROID_KABI_USE(1, unsigned frozen:1);
 
@@ -1491,7 +1486,6 @@ struct task_struct {
 	short nice_backup;
 	atomic_t inherit_types;
 #endif
->>>>>>> af837db61418 (BACKPORT: bpf: expose task storage to tracing programs)
 
 	/*
 	 * New fields for task_struct should be added above here, so that
