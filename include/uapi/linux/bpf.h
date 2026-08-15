@@ -3871,6 +3871,14 @@ union bpf_attr {
  *	Return
  *		Address of the traced function.
  *
+ * u64 bpf_get_attach_cookie(void *ctx)
+ *	Description
+ *		Get the user-provided bpf_cookie associated with this attachment.
+ *		The value can be different for each attachment of the same program.
+ *		Supported for kprobe/uprobe, tracepoint, and perf_event programs.
+ *	Return
+ *		The attachment cookie, or 0 if none was specified.
+ *
  * long bpf_task_pt_regs(struct task_struct *task)
  *	Description
  *		Get the struct pt_regs associated with **task**.
