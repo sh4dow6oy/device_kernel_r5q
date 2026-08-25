@@ -37,7 +37,6 @@
 #include <linux/uaccess.h>
 #include <asm/tlbflush.h>
 #include <asm/shmparam.h>
-
 #include "internal.h"
 
 struct vfree_deferred {

@@ -1097,10 +1097,6 @@ const char * const vmstat_text[] = {
 	"nr_written",
 	"nr_kernel_misc_reclaimable",
 	"nr_unreclaimable_pages",
-#ifdef CONFIG_KZEROD
-	"zero_page_alloc_total",
-	"zero_page_alloc_prezero",
-#endif
 
 	/* enum writeback_stat_item counters */
 	"nr_dirty_threshold",
@@ -1226,7 +1222,7 @@ const char * const vmstat_text[] = {
 	"swap_ra",
 	"swap_ra_hit",
 #endif
-#endif /* CONFIG_VM_EVENTS_COUNTERS */
+#endif /* CONFIG_VM_EVENT_COUNTERS */
 };
 #endif /* CONFIG_PROC_FS || CONFIG_SYSFS || CONFIG_NUMA */
 
@@ -1720,7 +1716,7 @@ static const struct file_operations vmstat_file_operations = {
 
 #ifdef CONFIG_SMP
 static DEFINE_PER_CPU(struct delayed_work, vmstat_work);
-int sysctl_stat_interval __read_mostly = HZ;
+int sysctl_stat_interval __read_mostly = 60 * HZ;
 
 #ifdef CONFIG_PROC_FS
 static void refresh_vm_stats(struct work_struct *work)
