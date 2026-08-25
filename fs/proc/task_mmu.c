@@ -18,10 +18,10 @@
 #include <linux/page_idle.h>
 #include <linux/shmem_fs.h>
 #include <linux/uaccess.h>
+#include <linux/pkeys.h>
 #include <linux/mm_inline.h>
-#include <linux/ctype.h>
-#include <linux/io_record.h>
 #include <linux/freezer.h>
+#include <linux/ctype.h>
 
 #include <asm/elf.h>
 #include <asm/tlb.h>
@@ -33,6 +33,8 @@
 #include "../../drivers/block/zram/zram_drv.h"
 #endif
 
+#define SEQ_PUT_DEC(str, val) \
+		seq_put_decimal_ull_width(m, str, (val) << (PAGE_SHIFT-10), 8)
 void task_mem(struct seq_file *m, struct mm_struct *mm)
 {
 	unsigned long text, lib, swap, anon, file, shmem;
@@ -56,40 +58,34 @@ void task_mem(struct seq_file *m, struct mm_struct *mm)
 	if (hiwater_rss < mm->hiwater_rss)
 		hiwater_rss = mm->hiwater_rss;
 
-	text = (PAGE_ALIGN(mm->end_code) - (mm->start_code & PAGE_MASK)) >> 10;
-	lib = (mm->exec_vm << (PAGE_SHIFT-10)) - text;
+	/* split executable areas between text and lib */
+	text = PAGE_ALIGN(mm->end_code) - (mm->start_code & PAGE_MASK);
+	text = min(text, mm->exec_vm << PAGE_SHIFT);
+	lib = (mm->exec_vm << PAGE_SHIFT) - text;
+
 	swap = get_mm_counter(mm, MM_SWAPENTS);
-	seq_printf(m,
-		"VmPeak:\t%8lu kB\n"
-		"VmSize:\t%8lu kB\n"
-		"VmLck:\t%8lu kB\n"
-		"VmPin:\t%8lu kB\n"
-		"VmHWM:\t%8lu kB\n"
-		"VmRSS:\t%8lu kB\n"
-		"RssAnon:\t%8lu kB\n"
-		"RssFile:\t%8lu kB\n"
-		"RssShmem:\t%8lu kB\n"
-		"VmData:\t%8lu kB\n"
-		"VmStk:\t%8lu kB\n"
-		"VmExe:\t%8lu kB\n"
-		"VmLib:\t%8lu kB\n"
-		"VmPTE:\t%8lu kB\n"
-		"VmSwap:\t%8lu kB\n",
-		hiwater_vm << (PAGE_SHIFT-10),
-		total_vm << (PAGE_SHIFT-10),
-		mm->locked_vm << (PAGE_SHIFT-10),
-		mm->pinned_vm << (PAGE_SHIFT-10),
-		hiwater_rss << (PAGE_SHIFT-10),
-		total_rss << (PAGE_SHIFT-10),
-		anon << (PAGE_SHIFT-10),
-		file << (PAGE_SHIFT-10),
-		shmem << (PAGE_SHIFT-10),
-		mm->data_vm << (PAGE_SHIFT-10),
-		mm->stack_vm << (PAGE_SHIFT-10), text, lib,
-		mm_pgtables_bytes(mm) >> 10,
-		swap << (PAGE_SHIFT-10));
+	SEQ_PUT_DEC("VmPeak:\t", hiwater_vm);
+	SEQ_PUT_DEC(" kB\nVmSize:\t", total_vm);
+	SEQ_PUT_DEC(" kB\nVmLck:\t", mm->locked_vm);
+	SEQ_PUT_DEC(" kB\nVmPin:\t", mm->pinned_vm);
+	SEQ_PUT_DEC(" kB\nVmHWM:\t", hiwater_rss);
+	SEQ_PUT_DEC(" kB\nVmRSS:\t", total_rss);
+	SEQ_PUT_DEC(" kB\nRssAnon:\t", anon);
+	SEQ_PUT_DEC(" kB\nRssFile:\t", file);
+	SEQ_PUT_DEC(" kB\nRssShmem:\t", shmem);
+	SEQ_PUT_DEC(" kB\nVmData:\t", mm->data_vm);
+	SEQ_PUT_DEC(" kB\nVmStk:\t", mm->stack_vm);
+	seq_put_decimal_ull_width(m,
+		    " kB\nVmExe:\t", text >> 10, 8);
+	seq_put_decimal_ull_width(m,
+		    " kB\nVmLib:\t", lib >> 10, 8);
+	seq_put_decimal_ull_width(m,
+		    " kB\nVmPTE:\t", mm_pgtables_bytes(mm) >> 10, 8);
+	SEQ_PUT_DEC(" kB\nVmSwap:\t", swap);
+	seq_puts(m, " kB\n");
 	hugetlb_report_usage(m, mm);
 }
+#undef SEQ_PUT_DEC
 
 unsigned long task_vsize(struct mm_struct *mm)
 {
@@ -212,7 +208,7 @@ static void vma_stop(struct proc_maps_private *priv)
 	struct mm_struct *mm = priv->mm;
 
 	release_task_mempolicy(priv);
-	up_read(&mm->mmap_sem);
+	mmap_read_unlock(mm);
 	mmput(mm);
 }
 
@@ -250,7 +246,11 @@ static void *m_start(struct seq_file *m, loff_t *ppos)
 	if (!mm || !mmget_not_zero(mm))
 		return NULL;
 
-	down_read(&mm->mmap_sem);
+	if (mmap_read_lock_killable(mm)) {
+		mmput(mm);
+		return ERR_PTR(-EINTR);
+	}
+
 	hold_task_mempolicy(priv);
 	priv->tail_vma = get_gate_vma(mm);
 
@@ -331,7 +331,6 @@ static int proc_map_release(struct inode *inode, struct file *file)
 	if (priv->mm)
 		mmdrop(priv->mm);
 
-	kfree(priv->rollup);
 	return seq_release_private(inode, file);
 }
 
@@ -363,19 +362,22 @@ static void show_vma_header_prefix(struct seq_file *m,
 				   dev_t dev, unsigned long ino)
 {
 	seq_setwidth(m, 25 + sizeof(void *) * 6 - 1);
-	seq_printf(m, "%08lx-%08lx %c%c%c%c %08llx %02x:%02x %lu ",
-		   start,
-		   end,
-		   flags & VM_READ ? 'r' : '-',
-		   flags & VM_WRITE ? 'w' : '-',
-		   flags & VM_EXEC ? 'x' : '-',
-		   flags & VM_MAYSHARE ? 's' : 'p',
-		   pgoff,
-		   MAJOR(dev), MINOR(dev), ino);
+	seq_put_hex_ll(m, NULL, start, 8);
+	seq_put_hex_ll(m, "-", end, 8);
+	seq_putc(m, ' ');
+	seq_putc(m, flags & VM_READ ? 'r' : '-');
+	seq_putc(m, flags & VM_WRITE ? 'w' : '-');
+	seq_putc(m, flags & VM_EXEC ? 'x' : '-');
+	seq_putc(m, flags & VM_MAYSHARE ? 's' : 'p');
+	seq_put_hex_ll(m, " ", pgoff, 8);
+	seq_put_hex_ll(m, " ", MAJOR(dev), 2);
+	seq_put_hex_ll(m, ":", MINOR(dev), 2);
+	seq_put_decimal_ull(m, " ", ino);
+	seq_putc(m, ' ');
 }
 
 static void
-show_map_vma(struct seq_file *m, struct vm_area_struct *vma, int is_pid)
+show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
 {
 	struct mm_struct *mm = vma->vm_mm;
 	struct file *file = vma->vm_file;
@@ -445,35 +447,18 @@ done:
 	seq_putc(m, '\n');
 }
 
-static int show_map(struct seq_file *m, void *v, int is_pid)
+static int show_map(struct seq_file *m, void *v)
 {
-	show_map_vma(m, v, is_pid);
+	show_map_vma(m, v);
 	m_cache_vma(m, v);
 	return 0;
-}
-
-static int show_pid_map(struct seq_file *m, void *v)
-{
-	return show_map(m, v, 1);
-}
-
-static int show_tid_map(struct seq_file *m, void *v)
-{
-	return show_map(m, v, 0);
 }
 
 static const struct seq_operations proc_pid_maps_op = {
 	.start	= m_start,
 	.next	= m_next,
 	.stop	= m_stop,
-	.show	= show_pid_map
-};
-
-static const struct seq_operations proc_tid_maps_op = {
-	.start	= m_start,
-	.next	= m_next,
-	.stop	= m_stop,
-	.show	= show_tid_map
+	.show	= show_map
 };
 
 static int pid_maps_open(struct inode *inode, struct file *file)
@@ -481,20 +466,8 @@ static int pid_maps_open(struct inode *inode, struct file *file)
 	return do_maps_open(inode, file, &proc_pid_maps_op);
 }
 
-static int tid_maps_open(struct inode *inode, struct file *file)
-{
-	return do_maps_open(inode, file, &proc_tid_maps_op);
-}
-
 const struct file_operations proc_pid_maps_operations = {
 	.open		= pid_maps_open,
-	.read		= seq_read,
-	.llseek		= seq_lseek,
-	.release	= proc_map_release,
-};
-
-const struct file_operations proc_tid_maps_operations = {
-	.open		= tid_maps_open,
 	.read		= seq_read,
 	.llseek		= seq_lseek,
 	.release	= proc_map_release,
@@ -521,7 +494,6 @@ const struct file_operations proc_tid_maps_operations = {
 
 #ifdef CONFIG_PROC_PAGE_MONITOR
 struct mem_size_stats {
-	bool first;
 	unsigned long resident;
 	unsigned long shared_clean;
 	unsigned long shared_dirty;
@@ -535,14 +507,9 @@ struct mem_size_stats {
 	unsigned long swap;
 #ifdef CONFIG_ZRAM_LRU_WRITEBACK
 	unsigned long writeback;
-	unsigned long writeback_huge;
-	unsigned long same;
-	unsigned long huge;
-	unsigned long swap_shared;
 #endif
 	unsigned long shared_hugetlb;
 	unsigned long private_hugetlb;
-	unsigned long first_vma_start;
 	u64 pss;
 	u64 pss_locked;
 	u64 swap_pss;
@@ -634,11 +601,12 @@ static void smaps_pte_entry(pte_t *pte, unsigned long addr,
 
 		if (!non_swap_entry(swpent)) {
 			int mapcount;
-#ifdef CONFIG_ZRAM_LRU_WRITEBACK
-			int type;
-#endif
 
 			mss->swap += PAGE_SIZE;
+#ifdef CONFIG_ZRAM_LRU_WRITEBACK
+			if (is_writeback_entry(swpent))
+				mss->writeback += PAGE_SIZE;
+#endif
 			mapcount = swp_swapcount(swpent);
 			if (mapcount >= 2) {
 				u64 pss_delta = (u64)PAGE_SIZE << PSS_SHIFT;
@@ -648,21 +616,6 @@ static void smaps_pte_entry(pte_t *pte, unsigned long addr,
 			} else {
 				mss->swap_pss += (u64)PAGE_SIZE << PSS_SHIFT;
 			}
-#ifdef CONFIG_ZRAM_LRU_WRITEBACK
-			type = zram_get_entry_type(swp_offset(swpent));
-			if (type == ZRAM_WB_TYPE || type == ZRAM_WB_HUGE_TYPE)
-				mss->writeback += PAGE_SIZE;
-			if (type == ZRAM_WB_HUGE_TYPE)
-				mss->writeback_huge += PAGE_SIZE;
-			if (mapcount >= 2) {
-				mss->swap_shared += PAGE_SIZE;
-			} else {
-				if (type == ZRAM_SAME_TYPE)
-					mss->same += PAGE_SIZE;
-				if (type == ZRAM_HUGE_TYPE)
-					mss->huge += PAGE_SIZE;
-			}
-#endif
 		} else if (is_migration_entry(swpent))
 			page = migration_entry_to_page(swpent);
 		else if (is_device_private_entry(swpent))
@@ -783,6 +736,7 @@ static void show_smap_vma_flags(struct seq_file *m, struct vm_area_struct *vma)
 		[ilog2(VM_ACCOUNT)]	= "ac",
 		[ilog2(VM_NORESERVE)]	= "nr",
 		[ilog2(VM_HUGETLB)]	= "ht",
+		[ilog2(VM_SYNC)]	= "sf",
 		[ilog2(VM_ARCH_1)]	= "ar",
 		[ilog2(VM_WIPEONFORK)]	= "wf",
 		[ilog2(VM_DONTDUMP)]	= "dd",
@@ -795,13 +749,16 @@ static void show_smap_vma_flags(struct seq_file *m, struct vm_area_struct *vma)
 		[ilog2(VM_MERGEABLE)]	= "mg",
 		[ilog2(VM_UFFD_MISSING)]= "um",
 		[ilog2(VM_UFFD_WP)]	= "uw",
-#ifdef CONFIG_X86_INTEL_MEMORY_PROTECTION_KEYS
+#ifdef CONFIG_ARCH_HAS_PKEYS
 		/* These come out via ProtectionKey: */
 		[ilog2(VM_PKEY_BIT0)]	= "",
 		[ilog2(VM_PKEY_BIT1)]	= "",
 		[ilog2(VM_PKEY_BIT2)]	= "",
 		[ilog2(VM_PKEY_BIT3)]	= "",
+#if VM_PKEY_BIT4
+		[ilog2(VM_PKEY_BIT4)]	= "",
 #endif
+#endif /* CONFIG_ARCH_HAS_PKEYS */
 #ifdef CONFIG_HAVE_ARCH_USERFAULTFD_MINOR
 		[ilog2(VM_UFFD_MINOR)]	= "ui",
 #endif /* CONFIG_HAVE_ARCH_USERFAULTFD_MINOR */
@@ -813,8 +770,9 @@ static void show_smap_vma_flags(struct seq_file *m, struct vm_area_struct *vma)
 		if (!mnemonics[i][0])
 			continue;
 		if (vma->vm_flags & (1UL << i)) {
-			seq_printf(m, "%c%c ",
-				   mnemonics[i][0], mnemonics[i][1]);
+			seq_putc(m, mnemonics[i][0]);
+			seq_putc(m, mnemonics[i][1]);
+			seq_putc(m, ' ');
 		}
 	}
 	seq_putc(m, '\n');
@@ -849,16 +807,9 @@ static int smaps_hugetlb_range(pte_t *pte, unsigned long hmask,
 }
 #endif /* HUGETLB_PAGE */
 
-void __weak arch_show_smap(struct seq_file *m, struct vm_area_struct *vma)
+static void smap_gather_stats(struct vm_area_struct *vma,
+			     struct mem_size_stats *mss)
 {
-}
-
-static int show_smap(struct seq_file *m, void *v, int is_pid)
-{
-	struct proc_maps_private *priv = m->private;
-	struct vm_area_struct *vma = v;
-	struct mem_size_stats mss_stack;
-	struct mem_size_stats *mss;
 	struct mm_walk smaps_walk = {
 		.pmd_entry = smaps_pte_range,
 #ifdef CONFIG_HUGETLB_PAGE
@@ -866,23 +817,6 @@ static int show_smap(struct seq_file *m, void *v, int is_pid)
 #endif
 		.mm = vma->vm_mm,
 	};
-	int ret = 0;
-	bool rollup_mode;
-	bool last_vma;
-
-	if (priv->rollup) {
-		rollup_mode = true;
-		mss = priv->rollup;
-		if (mss->first) {
-			mss->first_vma_start = vma->vm_start;
-			mss->first = false;
-		}
-		last_vma = !m_next_vma(priv, vma);
-	} else {
-		rollup_mode = false;
-		memset(&mss_stack, 0, sizeof(mss_stack));
-		mss = &mss_stack;
-	}
 
 	smaps_walk.private = mss;
 
@@ -913,118 +847,130 @@ static int show_smap(struct seq_file *m, void *v, int is_pid)
 #endif
 	/* mmap_sem is held in m_start */
 	walk_page_vma(vma, &smaps_walk);
+}
 
-	if (!rollup_mode) {
-		show_map_vma(m, vma, is_pid);
-		if (vma_get_anon_name(vma)) {
-			seq_puts(m, "Name:           ");
-			seq_print_vma_name(m, vma);
-			seq_putc(m, '\n');
-		}
-	} else if (last_vma) {
-		show_vma_header_prefix(
-			m, mss->first_vma_start, vma->vm_end, 0, 0, 0, 0);
-		seq_pad(m, ' ');
-		seq_puts(m, "[rollup]\n");
-	} else {
-		ret = SEQ_SKIP;
-	}
+#define SEQ_PUT_DEC(str, val) \
+		seq_put_decimal_ull_width(m, str, (val) >> 10, 8)
 
+/* Show the contents common for smaps and smaps_rollup */
+static void __show_smap(struct seq_file *m, const struct mem_size_stats *mss)
+{
+	SEQ_PUT_DEC("Rss:            ", mss->resident);
+	SEQ_PUT_DEC(" kB\nPss:            ", mss->pss >> PSS_SHIFT);
+	SEQ_PUT_DEC(" kB\nShared_Clean:   ", mss->shared_clean);
+	SEQ_PUT_DEC(" kB\nShared_Dirty:   ", mss->shared_dirty);
+	SEQ_PUT_DEC(" kB\nPrivate_Clean:  ", mss->private_clean);
+	SEQ_PUT_DEC(" kB\nPrivate_Dirty:  ", mss->private_dirty);
+	SEQ_PUT_DEC(" kB\nReferenced:     ", mss->referenced);
+	SEQ_PUT_DEC(" kB\nAnonymous:      ", mss->anonymous);
+	SEQ_PUT_DEC(" kB\nLazyFree:       ", mss->lazyfree);
+	SEQ_PUT_DEC(" kB\nAnonHugePages:  ", mss->anonymous_thp);
+	SEQ_PUT_DEC(" kB\nShmemPmdMapped: ", mss->shmem_thp);
+	SEQ_PUT_DEC(" kB\nShared_Hugetlb: ", mss->shared_hugetlb);
+	seq_put_decimal_ull_width(m, " kB\nPrivate_Hugetlb: ",
+				  mss->private_hugetlb >> 10, 7);
+	SEQ_PUT_DEC(" kB\nSwap:           ", mss->swap);
+	SEQ_PUT_DEC(" kB\nSwapPss:        ",
+					mss->swap_pss >> PSS_SHIFT);
+#ifdef CONFIG_ZRAM_LRU_WRITEBACK
+	SEQ_PUT_DEC(" kB\nWriteback:      ", mss->writeback);
+#endif
+	SEQ_PUT_DEC(" kB\nLocked:         ",
+					mss->pss_locked >> PSS_SHIFT);
+	seq_puts(m, " kB\n");
+}
+
+static int show_smap(struct seq_file *m, void *v)
+{
+	struct vm_area_struct *vma = v;
+	struct mem_size_stats mss;
+
+	memset(&mss, 0, sizeof(mss));
+
+	smap_gather_stats(vma, &mss);
+
+	show_map_vma(m, vma);
 	if (vma_get_anon_name(vma)) {
 		seq_puts(m, "Name:           ");
 		seq_print_vma_name(m, vma);
 		seq_putc(m, '\n');
 	}
 
-	if (!rollup_mode)
-		seq_printf(m,
-			   "Size:           %8lu kB\n"
-			   "KernelPageSize: %8lu kB\n"
-			   "MMUPageSize:    %8lu kB\n",
-			   (vma->vm_end - vma->vm_start) >> 10,
-			   vma_kernel_pagesize(vma) >> 10,
-			   vma_mmu_pagesize(vma) >> 10);
+	SEQ_PUT_DEC("Size:           ", vma->vm_end - vma->vm_start);
+	SEQ_PUT_DEC(" kB\nKernelPageSize: ", vma_kernel_pagesize(vma));
+	SEQ_PUT_DEC(" kB\nMMUPageSize:    ", vma_mmu_pagesize(vma));
+	seq_puts(m, " kB\n");
 
+	__show_smap(m, &mss);
 
-	if (!rollup_mode || last_vma)
-		seq_printf(m,
-			   "Rss:            %8lu kB\n"
-			   "Pss:            %8lu kB\n"
-			   "Shared_Clean:   %8lu kB\n"
-			   "Shared_Dirty:   %8lu kB\n"
-			   "Private_Clean:  %8lu kB\n"
-			   "Private_Dirty:  %8lu kB\n"
-			   "Referenced:     %8lu kB\n"
-			   "Anonymous:      %8lu kB\n"
-			   "LazyFree:       %8lu kB\n"
-			   "AnonHugePages:  %8lu kB\n"
-			   "ShmemPmdMapped: %8lu kB\n"
-			   "Shared_Hugetlb: %8lu kB\n"
-			   "Private_Hugetlb: %7lu kB\n"
-			   "Swap:           %8lu kB\n"
-			   "SwapPss:        %8lu kB\n"
-#ifdef CONFIG_ZRAM_LRU_WRITEBACK
-			   "Writeback:      %8lu kB\n"
-			   "WritebackHuge:  %8lu kB\n"
-			   "Same:           %8lu kB\n"
-			   "Huge:           %8lu kB\n"
-			   "SwapShared:     %8lu kB\n"
-#endif
-			   "Locked:         %8lu kB\n",
-			   mss->resident >> 10,
-			   (unsigned long)(mss->pss >> (10 + PSS_SHIFT)),
-			   mss->shared_clean  >> 10,
-			   mss->shared_dirty  >> 10,
-			   mss->private_clean >> 10,
-			   mss->private_dirty >> 10,
-			   mss->referenced >> 10,
-			   mss->anonymous >> 10,
-			   mss->lazyfree >> 10,
-			   mss->anonymous_thp >> 10,
-			   mss->shmem_thp >> 10,
-			   mss->shared_hugetlb >> 10,
-			   mss->private_hugetlb >> 10,
-			   mss->swap >> 10,
-			   (unsigned long)(mss->swap_pss >> (10 + PSS_SHIFT)),
-#ifdef CONFIG_ZRAM_LRU_WRITEBACK
-			   mss->writeback >> 10,
-			   mss->writeback_huge >> 10,
-			   mss->huge >> 10,
-			   mss->same >> 10,
-			   mss->swap_shared >> 10,
-#endif
-			   (unsigned long)(mss->pss_locked >> (10 + PSS_SHIFT)));
+	seq_printf(m, "THPeligible:    %d\n", transparent_hugepage_enabled(vma));
 
-	if (!rollup_mode) {
-		arch_show_smap(m, vma);
-		show_smap_vma_flags(m, vma);
-	}
+	if (arch_pkeys_enabled())
+		seq_printf(m, "ProtectionKey:  %8u\n", vma_pkey(vma));
+	show_smap_vma_flags(m, vma);
+
 	m_cache_vma(m, vma);
+
+	return 0;
+}
+
+static int show_smaps_rollup(struct seq_file *m, void *v)
+{
+	struct proc_maps_private *priv = m->private;
+	struct mem_size_stats mss;
+	struct mm_struct *mm;
+	struct vm_area_struct *vma;
+	unsigned long last_vma_end = 0;
+	int ret = 0;
+
+	priv->task = get_proc_task(priv->inode);
+	if (!priv->task)
+		return -ESRCH;
+
+	mm = priv->mm;
+	if (!mm || !mmget_not_zero(mm)) {
+		ret = -ESRCH;
+		goto out_put_task;
+	}
+
+	memset(&mss, 0, sizeof(mss));
+
+	ret = mmap_read_lock_killable(mm);
+	if (ret)
+		goto out_put_mm;
+
+	hold_task_mempolicy(priv);
+
+	for (vma = priv->mm->mmap; vma; vma = vma->vm_next) {
+		smap_gather_stats(vma, &mss);
+		last_vma_end = vma->vm_end;
+	}
+
+	show_vma_header_prefix(m, priv->mm->mmap ? priv->mm->mmap->vm_start : 0,
+			       last_vma_end, 0, 0, 0, 0);
+	seq_pad(m, ' ');
+	seq_puts(m, "[rollup]\n");
+
+	__show_smap(m, &mss);
+
+	release_task_mempolicy(priv);
+	mmap_read_unlock(mm);
+
+out_put_mm:
+	mmput(mm);
+out_put_task:
+	put_task_struct(priv->task);
+	priv->task = NULL;
+
 	return ret;
 }
-
-static int show_pid_smap(struct seq_file *m, void *v)
-{
-	return show_smap(m, v, 1);
-}
-
-static int show_tid_smap(struct seq_file *m, void *v)
-{
-	return show_smap(m, v, 0);
-}
+#undef SEQ_PUT_DEC
 
 static const struct seq_operations proc_pid_smaps_op = {
 	.start	= m_start,
 	.next	= m_next,
 	.stop	= m_stop,
-	.show	= show_pid_smap
-};
-
-static const struct seq_operations proc_tid_smaps_op = {
-	.start	= m_start,
-	.next	= m_next,
-	.stop	= m_stop,
-	.show	= show_tid_smap
+	.show	= show_smap
 };
 
 static int pid_smaps_open(struct inode *inode, struct file *file)
@@ -1032,28 +978,45 @@ static int pid_smaps_open(struct inode *inode, struct file *file)
 	return do_maps_open(inode, file, &proc_pid_smaps_op);
 }
 
-static int pid_smaps_rollup_open(struct inode *inode, struct file *file)
+static int smaps_rollup_open(struct inode *inode, struct file *file)
 {
-	struct seq_file *seq;
+	int ret;
 	struct proc_maps_private *priv;
-	int ret = do_maps_open(inode, file, &proc_pid_smaps_op);
 
-	if (ret < 0)
-		return ret;
-	seq = file->private_data;
-	priv = seq->private;
-	priv->rollup = kzalloc(sizeof(*priv->rollup), GFP_KERNEL);
-	if (!priv->rollup) {
-		proc_map_release(inode, file);
+	priv = kzalloc(sizeof(*priv), GFP_KERNEL_ACCOUNT);
+	if (!priv)
 		return -ENOMEM;
+
+	ret = single_open(file, show_smaps_rollup, priv);
+	if (ret)
+		goto out_free;
+
+	priv->inode = inode;
+	priv->mm = proc_mem_open(inode, PTRACE_MODE_READ);
+	if (IS_ERR(priv->mm)) {
+		ret = PTR_ERR(priv->mm);
+
+		single_release(inode, file);
+		goto out_free;
 	}
-	priv->rollup->first = true;
+
 	return 0;
+
+out_free:
+	kfree(priv);
+	return ret;
 }
 
-static int tid_smaps_open(struct inode *inode, struct file *file)
+static int smaps_rollup_release(struct inode *inode, struct file *file)
 {
-	return do_maps_open(inode, file, &proc_tid_smaps_op);
+	struct seq_file *seq = file->private_data;
+	struct proc_maps_private *priv = seq->private;
+
+	if (priv->mm)
+		mmdrop(priv->mm);
+
+	kfree(priv);
+	return single_release(inode, file);
 }
 
 const struct file_operations proc_pid_smaps_operations = {
@@ -1064,17 +1027,10 @@ const struct file_operations proc_pid_smaps_operations = {
 };
 
 const struct file_operations proc_pid_smaps_rollup_operations = {
-	.open		= pid_smaps_rollup_open,
+	.open		= smaps_rollup_open,
 	.read		= seq_read,
 	.llseek		= seq_lseek,
-	.release	= proc_map_release,
-};
-
-const struct file_operations proc_tid_smaps_operations = {
-	.open		= tid_smaps_open,
-	.read		= seq_read,
-	.llseek		= seq_lseek,
-	.release	= proc_map_release,
+	.release	= smaps_rollup_release,
 };
 
 enum clear_refs_types {
@@ -1097,7 +1053,7 @@ static inline void clear_soft_dirty(struct vm_area_struct *vma,
 	/*
 	 * The soft-dirty tracker uses #PF-s to catch writes
 	 * to pages, so write-protect the pte as well. See the
-	 * Documentation/vm/soft-dirty.txt for full description
+	 * Documentation/admin-guide/mm/soft-dirty.rst for full description
 	 * of how soft-dirty works.
 	 */
 	pte_t ptent = *pte;
@@ -1123,14 +1079,14 @@ static inline void clear_soft_dirty(struct vm_area_struct *vma,
 static inline void clear_soft_dirty_pmd(struct vm_area_struct *vma,
 		unsigned long addr, pmd_t *pmdp)
 {
-	pmd_t pmd = *pmdp;
+	pmd_t old, pmd = *pmdp;
 
 	if (pmd_present(pmd)) {
 		/* See comment in change_huge_pmd() */
-		pmdp_invalidate(vma, addr, pmdp);
-		if (pmd_dirty(*pmdp))
+		old = pmdp_invalidate(vma, addr, pmdp);
+		if (pmd_dirty(old))
 			pmd = pmd_mkdirty(pmd);
-		if (pmd_young(*pmdp))
+		if (pmd_young(old))
 			pmd = pmd_mkyoung(pmd);
 
 		pmd = pmd_wrprotect(pmd);
@@ -1259,6 +1215,7 @@ static ssize_t clear_refs_write(struct file *file, const char __user *buf,
 		return -ESRCH;
 	mm = get_task_mm(task);
 	if (mm) {
+		struct mmu_notifier_range range;
 		struct clear_refs_private cp = {
 			.type = type,
 		};
@@ -1270,7 +1227,7 @@ static ssize_t clear_refs_write(struct file *file, const char __user *buf,
 		};
 
 		if (type == CLEAR_REFS_MM_HIWATER_RSS) {
-			if (down_write_killable(&mm->mmap_sem)) {
+			if (mmap_write_lock_killable(mm)) {
 				count = -EINTR;
 				goto out_mm;
 			}
@@ -1280,18 +1237,21 @@ static ssize_t clear_refs_write(struct file *file, const char __user *buf,
 			 * resident set size to this mm's current rss value.
 			 */
 			reset_mm_hiwater_rss(mm);
-			up_write(&mm->mmap_sem);
+			mmap_write_unlock(mm);
 			goto out_mm;
 		}
 
-		down_read(&mm->mmap_sem);
+		if (mmap_read_lock_killable(mm)) {
+			count = -EINTR;
+			goto out_mm;
+		}
 		tlb_gather_mmu(&tlb, mm, 0, -1);
 		if (type == CLEAR_REFS_SOFT_DIRTY) {
 			for (vma = mm->mmap; vma; vma = vma->vm_next) {
 				if (!(vma->vm_flags & VM_SOFTDIRTY))
 					continue;
-				up_read(&mm->mmap_sem);
-				if (down_write_killable(&mm->mmap_sem)) {
+				mmap_read_unlock(mm);
+				if (mmap_write_lock_killable(mm)) {
 					count = -EINTR;
 					goto out_mm;
 				}
@@ -1310,23 +1270,26 @@ static ssize_t clear_refs_write(struct file *file, const char __user *buf,
 					 * failed like if
 					 * get_proc_task() fails?
 					 */
-					up_write(&mm->mmap_sem);
+					mmap_write_unlock(mm);
 					goto out_mm;
 				}
 				for (vma = mm->mmap; vma; vma = vma->vm_next) {
 					vma->vm_flags &= ~VM_SOFTDIRTY;
 					vma_set_page_prot(vma);
 				}
-				downgrade_write(&mm->mmap_sem);
+				mmap_write_downgrade(mm);
 				break;
 			}
-			mmu_notifier_invalidate_range_start(mm, 0, -1);
+
+			mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, 0,
+						NULL, mm, 0, -1UL);
+			mmu_notifier_invalidate_range_start(&range);
 		}
 		walk_page_range(0, mm->highest_vm_end, &clear_refs_walk);
 		if (type == CLEAR_REFS_SOFT_DIRTY)
-			mmu_notifier_invalidate_range_end(mm, 0, -1);
+			mmu_notifier_invalidate_range_end(&range);
 		tlb_finish_mmu(&tlb, 0, -1);
-		up_read(&mm->mmap_sem);
+		mmap_read_unlock(mm);
 out_mm:
 		mmput(mm);
 	}
@@ -1605,7 +1568,7 @@ static int pagemap_hugetlb_range(pte_t *ptep, unsigned long hmask,
  * Bits 0-54  page frame number (PFN) if present
  * Bits 0-4   swap type if swapped
  * Bits 5-54  swap offset if swapped
- * Bit  55    pte is soft-dirty (see Documentation/vm/soft-dirty.txt)
+ * Bit  55    pte is soft-dirty (see Documentation/admin-guide/mm/soft-dirty.rst)
  * Bit  56    page exclusively mapped
  * Bits 57-60 zero
  * Bit  61    page is file-page or shared-anon
@@ -1650,7 +1613,7 @@ static ssize_t pagemap_read(struct file *file, char __user *buf,
 	pm.show_pfn = file_ns_capable(file, &init_user_ns, CAP_SYS_ADMIN);
 
 	pm.len = (PAGEMAP_WALK_SIZE >> PAGE_SHIFT);
-	pm.buffer = kmalloc(pm.len * PM_ENTRY_BYTES, GFP_KERNEL);
+	pm.buffer = kmalloc_array(pm.len, PM_ENTRY_BYTES, GFP_KERNEL);
 	ret = -ENOMEM;
 	if (!pm.buffer)
 		goto out_mm;
@@ -1688,9 +1651,11 @@ static ssize_t pagemap_read(struct file *file, char __user *buf,
 		/* overflow ? */
 		if (end < start_vaddr || end > end_vaddr)
 			end = end_vaddr;
-		down_read(&mm->mmap_sem);
+		ret = mmap_read_lock_killable(mm);
+		if (ret)
+			goto out_free;
 		ret = walk_page_range(start_vaddr, end, &pagemap_walk);
-		up_read(&mm->mmap_sem);
+		mmap_read_unlock(mm);
 		start_vaddr = end;
 
 		len = min(count, PM_ENTRY_BYTES * pm.pos);
@@ -1742,8 +1707,6 @@ const struct file_operations proc_pagemap_operations = {
 };
 #endif /* CONFIG_PROC_PAGE_MONITOR */
 
-#ifdef CONFIG_PROCESS_RECLAIM
-
 #ifdef CONFIG_FREEZING
 static inline bool is_pm_freezing(void)
 {
@@ -1755,6 +1718,75 @@ static inline bool is_pm_freezing(void)
 	return false;
 }
 #endif /* CONFIG_FREEZING */
+
+#ifdef CONFIG_PROCESS_RECLAIM
+static BLOCKING_NOTIFIER_HEAD(proc_reclaim_notifier);
+
+int proc_reclaim_notifier_register(struct notifier_block *nb)
+{
+	return blocking_notifier_chain_register(&proc_reclaim_notifier, nb);
+}
+
+int proc_reclaim_notifier_unregister(struct notifier_block *nb)
+{
+	return blocking_notifier_chain_unregister(&proc_reclaim_notifier, nb);
+}
+
+static void proc_reclaim_notify(unsigned long pid, void *rp)
+{
+	blocking_notifier_call_chain(&proc_reclaim_notifier, pid, rp);
+}
+
+int reclaim_address_space(struct address_space *mapping,
+			struct reclaim_param *rp)
+{
+	struct radix_tree_iter iter;
+	void __rcu **slot;
+	pgoff_t start;
+	struct page *page;
+	LIST_HEAD(page_list);
+	int reclaimed;
+	int ret = NOTIFY_OK;
+
+	lru_add_drain();
+	start = 0;
+	rcu_read_lock();
+
+	radix_tree_for_each_slot(slot, &mapping->i_pages, &iter, start) {
+
+		page = radix_tree_deref_slot(slot);
+
+		if (radix_tree_deref_retry(page)) {
+			slot = radix_tree_iter_retry(&iter);
+			continue;
+		}
+
+		if (radix_tree_exceptional_entry(page))
+			continue;
+
+		if (isolate_lru_page(page))
+			continue;
+
+		rp->nr_scanned++;
+
+		list_add(&page->lru, &page_list);
+		inc_node_page_state(page, NR_ISOLATED_ANON +
+				page_is_file_cache(page));
+
+		if (need_resched()) {
+			slot = radix_tree_iter_resume(slot, &iter);
+			cond_resched_rcu();
+		}
+	}
+	rcu_read_unlock();
+	reclaimed = reclaim_pages_from_list(&page_list, NULL);
+	rp->nr_reclaimed += reclaimed;
+
+	if (rp->nr_scanned >= rp->nr_to_reclaim)
+		ret = NOTIFY_DONE;
+
+	return ret;
+}
 
 static int reclaim_pte_range(pmd_t *pmd, unsigned long addr,
 				unsigned long end, struct mm_walk *walk)
@@ -1775,7 +1807,7 @@ static int reclaim_pte_range(pmd_t *pmd, unsigned long addr,
 		is_lru_wb = true;
 #endif
 
-	split_huge_pmd(vma, addr, pmd);
+	split_huge_pmd(vma, pmd, addr);
 	if (pmd_trans_unstable(pmd) || !rp->nr_to_reclaim)
 		return 0;
 cont:
@@ -1795,18 +1827,20 @@ cont:
 		if (!page)
 			continue;
 
+		if (PageTransCompound(page))
+			continue;
+#ifdef CONFIG_ZRAM_LRU_WRITEBACK
+		if (is_lru_wb && ptep_test_and_clear_young(vma, addr, pte))
+			continue;
+#endif
+
 		if (PageUnevictable(page))
 			continue;
 
 		if (!PageLRU(page))
 			continue;
 
-#ifdef CONFIG_ZRAM_LRU_WRITEBACK
-		if (is_lru_wb && ptep_test_and_clear_young(vma, addr, pte))
-			continue;
-#endif
-
-		if (isolate_lru_page(page))
+		if (isolate_lru_page(compound_head(page)))
 			continue;
 
 		/* MADV_FREE clears pte dirty bit and then marks the page
@@ -1844,16 +1878,14 @@ cont:
 }
 
 #ifdef CONFIG_ZRAM_LRU_WRITEBACK
-static DEFINE_SPINLOCK(writeback_lock);
-static bool writeback_ongoing;
-
 static int writeback_pte_range(pmd_t *pmd, unsigned long addr,
 		unsigned long end, struct mm_walk *walk)
 {
 	struct mm_struct *mm = walk->mm;
-	struct list_head *list = walk->private;
+	struct zwbs **zwbs = walk->private;
 	pte_t *pte, ptent;
 	spinlock_t *ptl;
+	LIST_HEAD(swp_entry_list);
 
 	if (pmd_trans_unstable(pmd))
 		return 0;
@@ -1869,45 +1901,17 @@ static int writeback_pte_range(pmd_t *pmd, unsigned long addr,
 		ptent = *pte;
 		if (is_swap_pte(ptent)) {
 			swp_entry_t entry = pte_to_swp_entry(ptent);
-
 			if (unlikely(non_swap_entry(entry)))
 				continue;
 			if (swp_swapcount(entry) > 1)
 				continue;
-			zram_add_to_writeback_list(list, swp_offset(entry));
+			swap_add_to_list(&swp_entry_list, entry);
 		}
 	}
 	pte_unmap_unlock(pte - 1, ptl);
+	swap_writeback_list(zwbs, &swp_entry_list);
 
 	cond_resched();
-	return 0;
-}
-
-static int prefetch_pte_range(pmd_t *pmd, unsigned long start,
-		unsigned long end, struct mm_walk *walk)
-{
-	struct mm_struct *mm = walk->mm;
-	pte_t *orig_pte, pte;
-	spinlock_t *ptl;
-	swp_entry_t entry;
-	unsigned long index;
-
-	if (pmd_trans_unstable(pmd))
-		return 0;
-
-	for (index = start; index != end; index += PAGE_SIZE) {
-		orig_pte = pte_offset_map_lock(mm, pmd, start, &ptl);
-		pte = *(orig_pte + ((index - start) / PAGE_SIZE));
-		pte_unmap_unlock(orig_pte, ptl);
-
-		if (pte_present(pte) || pte_none(pte))
-			continue;
-		entry = pte_to_swp_entry(pte);
-		if (unlikely(non_swap_entry(entry)))
-			continue;
-
-		zram_prefetch_entry(swp_offset(entry));
-	}
 	return 0;
 }
 #endif
@@ -1919,9 +1923,31 @@ enum reclaim_type {
 	RECLAIM_RANGE,
 #ifdef CONFIG_ZRAM_LRU_WRITEBACK
 	RECLAIM_WRITEBACK,
-	PREFETCH_PROCESS,
 #endif
 };
+
+struct reclaim_param reclaim_task_nomap(struct task_struct *task,
+		int nr_to_reclaim)
+{
+	struct mm_struct *mm;
+	struct reclaim_param rp = {
+		.nr_to_reclaim = nr_to_reclaim,
+	};
+
+	get_task_struct(task);
+	mm = get_task_mm(task);
+	if (!mm)
+		goto out;
+	mmap_read_lock(mm);
+
+	proc_reclaim_notify((unsigned long)task_pid(task), (void *)&rp);
+
+	mmap_read_unlock(mm);
+	mmput(mm);
+out:
+	put_task_struct(task);
+	return rp;
+}
 
 struct reclaim_param reclaim_task_anon(struct task_struct *task,
 		int nr_to_reclaim)
@@ -1943,7 +1969,7 @@ struct reclaim_param reclaim_task_anon(struct task_struct *task,
 
 	reclaim_walk.private = &rp;
 
-	down_read(&mm->mmap_sem);
+	mmap_read_lock(mm);
 	for (vma = mm->mmap; vma; vma = vma->vm_next) {
 		if (is_vm_hugetlb_page(vma))
 			continue;
@@ -1961,7 +1987,7 @@ struct reclaim_param reclaim_task_anon(struct task_struct *task,
 	}
 
 	flush_tlb_mm(mm);
-	up_read(&mm->mmap_sem);
+	mmap_read_unlock(mm);
 	mmput(mm);
 out:
 	put_task_struct(task);
@@ -1982,9 +2008,9 @@ static ssize_t reclaim_write(struct file *file, const char __user *buf,
 	unsigned long end = 0;
 	struct reclaim_param rp;
 #ifdef CONFIG_ZRAM_LRU_WRITEBACK
-	LIST_HEAD(list);
-#endif
+	struct zwbs *zwbs[NR_ZWBS];
 	int err = 0;
+#endif
 
 	memset(buffer, 0, sizeof(buffer));
 	if (count > sizeof(buffer) - 1)
@@ -2005,12 +2031,14 @@ static ssize_t reclaim_write(struct file *file, const char __user *buf,
 #ifdef CONFIG_ZRAM_LRU_WRITEBACK
 	else if (!strcmp(type_buf, "writeback"))
 		type = RECLAIM_WRITEBACK;
-	else if (!strcmp(type_buf, "prefetch"))
-		type = PREFETCH_PROCESS;
 #endif
 	else
 		goto out_err;
 
+#ifdef CONFIG_PROCESS_RECLAIM_IGNORE_ALL_TYPE
+	if (type == RECLAIM_ALL)
+		return count;
+#endif
 	if (type == RECLAIM_RANGE) {
 		char *token;
 		unsigned long long len, len_in, tmp;
@@ -2042,22 +2070,17 @@ static ssize_t reclaim_write(struct file *file, const char __user *buf,
 			goto out_err;
 	}
 
-#ifdef CONFIG_ZRAM_LRU_WRITEBACK
-	/* we only allow single MADV_WRITEBACK at a time */
-	if (type == RECLAIM_WRITEBACK) {
-		spin_lock(&writeback_lock);
-		if (writeback_ongoing) {
-			spin_unlock(&writeback_lock);
-			return -EBUSY;
-		}
-		writeback_ongoing = true;
-		spin_unlock(&writeback_lock);
-	}
-#endif
-
 	task = get_proc_task(file->f_path.dentry->d_inode);
 	if (!task)
 		return -ESRCH;
+#ifdef CONFIG_ZRAM_LRU_WRITEBACK
+	if (type == RECLAIM_WRITEBACK) {
+		if (alloc_zwbs(zwbs)) {
+			pr_info("%s alloc_zwbs failed", __func__);
+			return -ENOMEM;
+		}
+	}
+#endif
 
 	mm = get_task_mm(task);
 	if (!mm)
@@ -2069,9 +2092,14 @@ static ssize_t reclaim_write(struct file *file, const char __user *buf,
 	rp.nr_to_reclaim = INT_MAX;
 	rp.nr_reclaimed = 0;
 	reclaim_walk.private = &rp;
+#ifdef CONFIG_ZRAM_LRU_WRITEBACK
+	if (type == RECLAIM_WRITEBACK) {
+		reclaim_walk.pmd_entry = writeback_pte_range;
+		reclaim_walk.private = (void *)zwbs;
+	}
+#endif
 
-
-	down_read(&mm->mmap_sem);
+	mmap_read_lock(mm);
 	if (type == RECLAIM_RANGE) {
 		vma = find_vma(mm, start);
 		while (vma) {
@@ -2098,40 +2126,34 @@ static ssize_t reclaim_write(struct file *file, const char __user *buf,
 			if (type == RECLAIM_FILE && !vma->vm_file)
 				continue;
 
-#ifdef CONFIG_ZRAM_LRU_WRITEBACK
-			if ((type == RECLAIM_WRITEBACK ||
-			     type == PREFETCH_PROCESS) && vma->vm_file)
-				continue;
-			if (type == RECLAIM_WRITEBACK) {
-				reclaim_walk.private = (void *)&list;
-				reclaim_walk.pmd_entry = writeback_pte_range;
-			} else if (type == PREFETCH_PROCESS) {
-				reclaim_walk.pmd_entry = prefetch_pte_range;
-			}
-#endif
 			rp.vma = vma;
+#ifdef CONFIG_ZRAM_LRU_WRITEBACK
+			if (type == RECLAIM_WRITEBACK && vma->vm_file)
+				continue;
+
 			err = walk_page_range(vma->vm_start, vma->vm_end,
 				&reclaim_walk);
 			if (err) {
 				count = err;
 				break;
 			}
+#else
+			if (walk_page_range(vma->vm_start, vma->vm_end,
+				&reclaim_walk))
+				break;
+#endif
 		}
 	}
 
 	flush_tlb_mm(mm);
-	up_read(&mm->mmap_sem);
+	mmap_read_unlock(mm);
 	mmput(mm);
 out:
 	put_task_struct(task);
 #ifdef CONFIG_ZRAM_LRU_WRITEBACK
 	if (type == RECLAIM_WRITEBACK) {
-		zram_writeback_list(&list);
-		flush_writeback_buffer(&list);
-
-		spin_lock(&writeback_lock);
-		writeback_ongoing = false;
-		spin_unlock(&writeback_lock);
+		swap_writeback_list(zwbs, NULL);
+		free_zwbs(zwbs);
 	}
 #endif
 	return count;
@@ -2308,7 +2330,7 @@ static int gather_hugetlb_stats(pte_t *pte, unsigned long hmask,
 /*
  * Display pages allocated per node and memory policy via /proc.
  */
-static int show_numa_map(struct seq_file *m, void *v, int is_pid)
+static int show_numa_map(struct seq_file *m, void *v)
 {
 	struct numa_maps_private *numa_priv = m->private;
 	struct proc_maps_private *proc_priv = &numa_priv->proc_maps;
@@ -2392,45 +2414,17 @@ out:
 	return 0;
 }
 
-static int show_pid_numa_map(struct seq_file *m, void *v)
-{
-	return show_numa_map(m, v, 1);
-}
-
-static int show_tid_numa_map(struct seq_file *m, void *v)
-{
-	return show_numa_map(m, v, 0);
-}
-
 static const struct seq_operations proc_pid_numa_maps_op = {
 	.start  = m_start,
 	.next   = m_next,
 	.stop   = m_stop,
-	.show   = show_pid_numa_map,
+	.show   = show_numa_map,
 };
-
-static const struct seq_operations proc_tid_numa_maps_op = {
-	.start  = m_start,
-	.next   = m_next,
-	.stop   = m_stop,
-	.show   = show_tid_numa_map,
-};
-
-static int numa_maps_open(struct inode *inode, struct file *file,
-			  const struct seq_operations *ops)
-{
-	return proc_maps_open(inode, file, ops,
-				sizeof(struct numa_maps_private));
-}
 
 static int pid_numa_maps_open(struct inode *inode, struct file *file)
 {
-	return numa_maps_open(inode, file, &proc_pid_numa_maps_op);
-}
-
-static int tid_numa_maps_open(struct inode *inode, struct file *file)
-{
-	return numa_maps_open(inode, file, &proc_tid_numa_maps_op);
+	return proc_maps_open(inode, file, &proc_pid_numa_maps_op,
+				sizeof(struct numa_maps_private));
 }
 
 const struct file_operations proc_pid_numa_maps_operations = {
@@ -2440,19 +2434,15 @@ const struct file_operations proc_pid_numa_maps_operations = {
 	.release	= proc_map_release,
 };
 
-const struct file_operations proc_tid_numa_maps_operations = {
-	.open		= tid_numa_maps_open,
-	.read		= seq_read,
-	.llseek		= seq_lseek,
-	.release	= proc_map_release,
-};
 #endif /* CONFIG_NUMA */
+
 
 #ifdef CONFIG_PAGE_BOOST
 /*
  * Currently, target_file_name is shared by all filemap_info nodes
  * as we do not access this node in parallel. (do not need synchronization also)
  */
+#include <linux/io_record.h>
 #include <linux/atomic.h>
 static atomic_t filemap_fd_opened = ATOMIC_INIT(0);
 char target_file_name[MAX_PAGE_BOOST_FILEPATH_LEN + 1] = "";
