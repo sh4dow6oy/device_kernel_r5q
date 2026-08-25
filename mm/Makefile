@@ -20,7 +20,6 @@ KCOV_INSTRUMENT_kmemleak.o := n
 KCOV_INSTRUMENT_memcontrol.o := n
 KCOV_INSTRUMENT_mmzone.o := n
 KCOV_INSTRUMENT_vmstat.o := n
-KCOV_INSTRUMENT_failslab.o := n
 
 mmu-y			:= nommu.o
 mmu-$(CONFIG_MMU)	:= gup.o highmem.o memory.o mincore.o \
@@ -40,13 +39,12 @@ obj-y			:= filemap.o mempool.o oom_kill.o \
 			   mm_init.o mmu_context.o percpu.o slab_common.o \
 			   compaction.o vmacache.o swap_slots.o \
 			   interval_tree.o list_lru.o workingset.o \
-			   debug.o $(mmu-y) showmem.o showmem_extra.o mm_debug.o vmpressure.o
+			   debug.o $(mmu-y) showmem.o showmem_extra.o vmpressure.o
 
 obj-y += init-mm.o
 
-ifdef CONFIG_KZEROD
-obj-y += kzerod.o
-endif
+obj-y += sec_mm/
+
 ifdef CONFIG_NO_BOOTMEM
 	obj-y		+= nobootmem.o
 else
@@ -108,7 +106,6 @@ obj-$(CONFIG_DEBUG_PAGE_REF) += debug_page_ref.o
 obj-$(CONFIG_HARDENED_USERCOPY) += usercopy.o
 obj-$(CONFIG_PERCPU_STATS) += percpu-stats.o
 obj-$(CONFIG_HMM) += hmm.o
-obj-$(CONFIG_PROCESS_RECLAIM)	+= process_reclaim.o
 obj-$(CONFIG_PAGE_BOOST_RECORDING) += io_record.o
 
 # [IOPP-Wformat-v1.0.4.14.patch]
@@ -118,3 +115,8 @@ obj-$(CONFIG_PAGE_BOOST_RECORDING) += io_record.o
 CFLAGS_backing-dev.o = -Wformat
 CFLAGS_page-writeback.o = -Wformat
 
+CFLAGS_page_alloc.o += -O3
+CFLAGS_vmscan.o += -O3
+CFLAGS_mmap.o += -O3
+CFLAGS_slub.o += -O3
+CFLAGS_compaction.o += -O3

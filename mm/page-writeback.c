@@ -81,6 +81,7 @@ int dirty_background_ratio;
  * dirty_background_bytes starts at 0 (disabled) so that it is a function of
  * dirty_background_ratio * the amount of dirtyable memory
  */
+/* IOPP-dirty_buffer-v1.0.4.4 */
 #ifdef CONFIG_LARGE_DIRTY_BUFFER
 unsigned long dirty_background_bytes;
 #else
@@ -1914,15 +1915,15 @@ pause:
 				(unsigned long) nr_dirty_inodes_in_timelist);
 		}
 
-		/* Collecting approximate value. No lock required. */
-		bdi->last_thresh = thresh;
-		bdi->last_nr_dirty = dirty;
-		bdi->paused_total += pause;
-
 		/* IOPP-prevent_infinite_writeback-v1.1.4.4 */
 		/* Do not sleep if the backing device is removed */
 		if (unlikely(!bdi->dev))
 			return;
+
+		/* Collecting approximate value. No lock required. */
+		bdi->last_thresh = thresh;
+		bdi->last_nr_dirty = dirty;
+		bdi->paused_total += pause;
 
 		__set_current_state(TASK_KILLABLE);
 		wb->dirty_sleep = now;
