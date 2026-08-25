@@ -1460,7 +1460,7 @@ static int backtrack_insn(struct bpf_verifier_env *env, int idx,
 
 	if (insn->code == 0)
 		return 0;
-	if (env->log.level & BPF_LOG_LEVEL2) {
+	if (env->log.level & BPF_LOG_LEVEL) {
 		verbose(env, "regs=%x stack=%llx before ", *reg_mask, *stack_mask);
 		verbose(env, "%d: ", idx);
 		print_bpf_insn(&cbs, insn, env->allow_ptr_leaks);
@@ -1739,7 +1739,7 @@ static int __mark_chain_precision(struct bpf_verifier_env *env, int regno,
 		DECLARE_BITMAP(mask, 64);
 		u32 history = st->jmp_history_cnt;
 
-		if (env->log.level & BPF_LOG_LEVEL2)
+		if (env->log.level & BPF_LOG_LEVEL)
 			verbose(env, "last_idx %d first_idx %d\n", last_idx, first_idx);
 		for (i = last_idx;;) {
 			if (skip_first) {
@@ -1826,7 +1826,7 @@ static int __mark_chain_precision(struct bpf_verifier_env *env, int regno,
 				new_marks = true;
 			reg->precise = true;
 		}
-		if (env->log.level & BPF_LOG_LEVEL2) {
+		if (env->log.level & BPF_LOG_LEVEL) {
 			print_verifier_state(env, func);
 			verbose(env, "parent %s regs=%x stack=%llx marks\n",
 				new_marks ? "didn't have" : "already had",
@@ -9685,14 +9685,8 @@ skip_full_check:
 	env->verification_time = ktime_get_ns() - start_time;
 	print_verification_stats(env);
 
-	// ANDROID: Do not fail to load if log buffer passed in from userspace
-	// is too small. The bpf log logic is refactored in the 6.4 kernel
-	// acknowledging the shortcomings of this approch. Instead of backporting
-	// the significant changes, simply ignore the fact that the log is full.
-	// For more information see commit 121664093803: bpf: Switch BPF verifier
-	// log to be a rotating log by default
-	//if (log->level && bpf_verifier_log_full(log))
-	//	ret = -ENOSPC;
+	if (log->level && bpf_verifier_log_full(log))
+		ret = -ENOSPC;
 	if (log->level && !log->ubuf) {
 		ret = -EFAULT;
 		goto err_release_maps;
