@@ -16,11 +16,8 @@
 #include <crypto/hash.h>
 #include <linux/bio-crypt-ctx.h>
 
-#if defined(CONFIG_FSCRYPT_SDP) || defined(CONFIG_DDAR)
-#include "fscrypt_knox_private.h"
-#endif
-
 #ifdef CONFIG_FSCRYPT_SDP
+#include "fscrypt_knox_private.h"
 #include "sdp/fscrypto_sdp_private.h"
 #include <sdp/fs_request.h>
 #endif
@@ -42,7 +39,7 @@ struct fscrypt_context_v1 {
 	u8 flags;
 	u8 master_key_descriptor[FSCRYPT_KEY_DESCRIPTOR_SIZE];
 	u8 nonce[FS_KEY_DERIVATION_NONCE_SIZE];
-#if defined(CONFIG_FSCRYPT_SDP) || defined(CONFIG_DDAR)
+#if defined(CONFIG_FSCRYPT_SDP)
 	u32 knox_flags;
 #endif
 };
@@ -55,7 +52,7 @@ struct fscrypt_context_v2 {
 	u8 __reserved[4];
 	u8 master_key_identifier[FSCRYPT_KEY_IDENTIFIER_SIZE];
 	u8 nonce[FS_KEY_DERIVATION_NONCE_SIZE];
-#if defined(CONFIG_FSCRYPT_SDP) || defined(CONFIG_DDAR)
+#if defined(CONFIG_FSCRYPT_SDP)
 	u32 knox_flags;
 #endif
 };
@@ -84,14 +81,14 @@ static inline int fscrypt_context_size(const union fscrypt_context *ctx)
 {
 	switch (ctx->version) {
 	case FSCRYPT_CONTEXT_V1:
-#if defined(CONFIG_FSCRYPT_SDP) || defined(CONFIG_DDAR)
+#if defined(CONFIG_FSCRYPT_SDP)
 		BUILD_BUG_ON(sizeof(ctx->v1) != 32);
 #else
 		BUILD_BUG_ON(sizeof(ctx->v1) != 28);
 #endif
 		return sizeof(ctx->v1);
 	case FSCRYPT_CONTEXT_V2:
-#if defined(CONFIG_FSCRYPT_SDP) || defined(CONFIG_DDAR)
+#if defined(CONFIG_FSCRYPT_SDP)
 		BUILD_BUG_ON(sizeof(ctx->v2) != 44);
 #else
 		BUILD_BUG_ON(sizeof(ctx->v2) != 40);
@@ -272,13 +269,6 @@ struct fscrypt_info {
 
 	/* Hashed inode number.  Only set for IV_INO_LBLK_32 */
 	u32 ci_hashed_ino;
-#ifdef CONFIG_FS_CRYPTO_SEC_EXTENSION
-	u8 ci_iv_key[FS_CRYPTO_BLOCK_SIZE];
-#endif
-
-#ifdef CONFIG_DDAR
-	struct dd_info *ci_dd_info;
-#endif
 
 #ifdef CONFIG_FSCRYPT_SDP
 	struct sdp_info *ci_sdp_info;
@@ -405,6 +395,8 @@ fscrypt_is_key_prepared(struct fscrypt_prepared_key *prep_key,
 	return READ_ONCE(prep_key->tfm) != NULL;
 }
 
+extern int fscrypt_find_storage_type(char **device);
+
 #else /* CONFIG_FS_ENCRYPTION_INLINE_CRYPT */
 
 static inline int fscrypt_select_encryption_impl(struct fscrypt_info *ci,
@@ -450,6 +442,11 @@ fscrypt_is_key_prepared(struct fscrypt_prepared_key *prep_key,
 			const struct fscrypt_info *ci)
 {
 	return READ_ONCE(prep_key->tfm) != NULL;
+}
+
+static inline int fscrypt_find_storage_type(char **device)
+{
+	return -EOPNOTSUPP;
 }
 #endif /* !CONFIG_FS_ENCRYPTION_INLINE_CRYPT */
 
@@ -645,6 +642,7 @@ int fscrypt_setup_v1_file_key(struct fscrypt_info *ci,
 int fscrypt_setup_v1_file_key_via_subscribed_keyrings(struct fscrypt_info *ci);
 
 #ifdef CONFIG_FSCRYPT_SDP
+extern void fscrypt_sdp_finalize_v1(struct fscrypt_info *ci);
 // functions added for v1 and v2 simultaneous support
 int find_and_derive_v1_fskey_via_subscribed_keyrings(
 					const struct fscrypt_info *ci,
@@ -676,28 +674,6 @@ static inline bool fscrypt_sdp_protected(const union fscrypt_context *ctx_u) {
 		case FSCRYPT_CONTEXT_V2: {
 			const struct fscrypt_context_v2 *ctx = &ctx_u->v2;
 			if (ctx->knox_flags & FSCRYPT_KNOX_FLG_SDP_MASK) {
-				return true;
-			}
-			break;
-		}
-	}
-	return false;
-}
-#endif
-
-#ifdef CONFIG_DDAR
-static inline bool fscrypt_ddar_protected(const union fscrypt_context *ctx_u) {
-	switch (ctx_u->version) {
-		case FSCRYPT_CONTEXT_V1: {
-			const struct fscrypt_context_v1 *ctx = &ctx_u->v1;
-			if (ctx->knox_flags & FSCRYPT_KNOX_FLG_DDAR_ENABLED) {
-				return true;
-			}
-			break;
-		}
-		case FSCRYPT_CONTEXT_V2: {
-			const struct fscrypt_context_v2 *ctx = &ctx_u->v2;
-			if (ctx->knox_flags & FSCRYPT_KNOX_FLG_DDAR_ENABLED) {
 				return true;
 			}
 			break;
