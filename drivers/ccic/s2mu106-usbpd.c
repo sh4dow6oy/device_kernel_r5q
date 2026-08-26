@@ -1222,12 +1222,7 @@ static int s2mu106_vbus_on_check(void *_data)
 	struct usbpd_data *data = (struct usbpd_data *) _data;
 	struct s2mu106_usbpd_data *pdic_data = data->phy_driver_data;
 
-	if (volt == OTG_5V)
-		vbus_check = s2mu106_usbpd_check_vbus(pdic_data, 4300, VBUS_ON);
-	else if (volt == OTG_9V)
-		vbus_check = s2mu106_usbpd_check_vbus(pdic_data, 8300, VBUS_ON);
-
-	return vbus_check;
+	return s2mu106_usbpd_check_vbus(pdic_data, 4300, VBUS_ON);
 #else
 	return 0;
 #endif
@@ -2371,14 +2366,12 @@ static void s2mu106_usbpd_otg_attach(struct s2mu106_usbpd_data *pdic_data)
 	ccic_event_work(pdic_data, CCIC_NOTIFY_DEV_USB, CCIC_NOTIFY_ID_USB,
 			1/*attach*/, USB_STATUS_NOTIFY_ATTACH_DFP/*drp*/);
 	/* add to turn on external 5V */
-#if defined(CONFIG_USB_HOST_NOTIFY) && defined(CONFIG_DISABLE_LOCKSCREEN_USB_RESTRICTION)
+#if defined(CONFIG_USB_HOST_NOTIFY)
 	if (!is_blocked(o_notify, NOTIFY_BLOCK_TYPE_HOST)) {
-#endif
 #ifdef CONFIG_PM_S2MU106
 		s2mu106_usbpd_check_vbus(pdic_data, 800, VBUS_OFF);
 #endif
 		s2mu106_vbus_turn_on_ctrl(pdic_data, VBUS_ON);
-#if defined(CONFIG_USB_HOST_NOTIFY) && defined(CONFIG_DISABLE_LOCKSCREEN_USB_RESTRICTION)
 	}
 #endif
 	usbpd_manager_acc_handler_cancel(dev);
