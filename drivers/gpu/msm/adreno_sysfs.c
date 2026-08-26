@@ -856,3 +856,4 @@ int adreno_sysfs_init(struct adreno_device *adreno_dev)
 
 	return 0;
 }
+

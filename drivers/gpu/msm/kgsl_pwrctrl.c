@@ -593,6 +593,35 @@ void kgsl_pwrctrl_set_constraint(struct kgsl_device *device,
 }
 EXPORT_SYMBOL(kgsl_pwrctrl_set_constraint);
 
+/**
+ * kgsl_pwrctrl_update_l2pc() - Update existing qos request
+ * @device: Pointer to the kgsl_device struct
+ * @timeout_us: the effective duration of qos request in usecs.
+ *
+ * Updates an existing qos request to avoid L2PC on the
+ * CPUs (which are selected through dtsi) on which GPU
+ * thread is running. This would help for performance.
+ */
+void kgsl_pwrctrl_update_l2pc(struct kgsl_device *device,
+			unsigned long timeout_us)
+{
+	int cpu;
+
+	if (device->pwrctrl.l2pc_cpus_mask == 0)
+		return;
+
+	cpu = get_cpu();
+	put_cpu();
+
+	if ((1 << cpu) & device->pwrctrl.l2pc_cpus_mask) {
+		pm_qos_update_request_timeout(
+				&device->pwrctrl.l2pc_cpus_qos,
+				device->pwrctrl.pm_qos_cpu_mask_latency,
+				timeout_us);
+	}
+}
+EXPORT_SYMBOL(kgsl_pwrctrl_update_l2pc);
+
 static ssize_t kgsl_pwrctrl_thermal_pwrlevel_store(struct device *dev,
 					 struct device_attribute *attr,
 					 const char *buf, size_t count)
@@ -1604,35 +1633,35 @@ static DEVICE_ATTR(pwrscale, 0644,
 	kgsl_pwrctrl_pwrscale_show,
 	kgsl_pwrctrl_pwrscale_store);
 
-static const struct attribute *pwrctrl_attr_list[] = {
-	&dev_attr_gpuclk.attr,
-	&dev_attr_max_gpuclk.attr,
-	&dev_attr_idle_timer.attr,
-	&dev_attr_gpubusy.attr,
-	&dev_attr_gpu_available_frequencies.attr,
-	&dev_attr_gpu_clock_stats.attr,
-	&dev_attr_max_pwrlevel.attr,
-	&dev_attr_min_pwrlevel.attr,
-	&dev_attr_thermal_pwrlevel.attr,
-	&dev_attr_num_pwrlevels.attr,
-	&dev_attr_pmqos_active_latency.attr,
-	&dev_attr_reset_count.attr,
-	&dev_attr_force_clk_on.attr,
-	&dev_attr_force_bus_on.attr,
-	&dev_attr_force_rail_on.attr,
-	&dev_attr_force_no_nap.attr,
-	&dev_attr_bus_split.attr,
-	&dev_attr_default_pwrlevel.attr,
-	&dev_attr_popp.attr,
-	&dev_attr_gpu_model.attr,
-	&dev_attr_gpu_busy_percentage.attr,
-	&dev_attr_min_clock_mhz.attr,
-	&dev_attr_max_clock_mhz.attr,
-	&dev_attr_clock_mhz.attr,
-	&dev_attr_freq_table_mhz.attr,
-	&dev_attr_temp.attr,
-	&dev_attr_pwrscale.attr,
-	NULL,
+static const struct device_attribute *pwrctrl_attr_list[] = {
+	&dev_attr_gpuclk,
+	&dev_attr_max_gpuclk,
+	&dev_attr_idle_timer,
+	&dev_attr_gpubusy,
+	&dev_attr_gpu_available_frequencies,
+	&dev_attr_gpu_clock_stats,
+	&dev_attr_max_pwrlevel,
+	&dev_attr_min_pwrlevel,
+	&dev_attr_thermal_pwrlevel,
+	&dev_attr_num_pwrlevels,
+	&dev_attr_pmqos_active_latency,
+	&dev_attr_reset_count,
+	&dev_attr_force_clk_on,
+	&dev_attr_force_bus_on,
+	&dev_attr_force_rail_on,
+	&dev_attr_force_no_nap,
+	&dev_attr_bus_split,
+	&dev_attr_default_pwrlevel,
+	&dev_attr_popp,
+	&dev_attr_gpu_model,
+	&dev_attr_gpu_busy_percentage,
+	&dev_attr_min_clock_mhz,
+	&dev_attr_max_clock_mhz,
+	&dev_attr_clock_mhz,
+	&dev_attr_freq_table_mhz,
+	&dev_attr_temp,
+	&dev_attr_pwrscale,
+	NULL
 };
 
 struct sysfs_link {
@@ -1654,7 +1683,7 @@ int kgsl_pwrctrl_init_sysfs(struct kgsl_device *device)
 {
 	int i, ret;
 
-	ret = sysfs_create_files(&device->dev->kobj, pwrctrl_attr_list);
+	ret = kgsl_create_device_sysfs_files(device->dev, pwrctrl_attr_list);
 	if (ret)
 		return ret;
 
@@ -1673,7 +1702,7 @@ int kgsl_pwrctrl_init_sysfs(struct kgsl_device *device)
 
 void kgsl_pwrctrl_uninit_sysfs(struct kgsl_device *device)
 {
-	sysfs_remove_files(&device->dev->kobj, pwrctrl_attr_list);
+	kgsl_remove_device_sysfs_files(device->dev, pwrctrl_attr_list);
 }
 
 /*
@@ -2325,6 +2354,13 @@ int kgsl_pwrctrl_init(struct kgsl_device *device)
 		goto error_cleanup_regulators;
 
 	pwr->power_flags = 0;
+
+	kgsl_property_read_u32(device, "qcom,l2pc-cpu-mask",
+			&pwr->l2pc_cpus_mask);
+
+	pwr->l2pc_update_queue = of_property_read_bool(
+				device->pdev->dev.of_node,
+				"qcom,l2pc-update-queue");
 
 	pm_runtime_enable(&pdev->dev);
 
@@ -3013,6 +3049,10 @@ _slumber(struct kgsl_device *device)
 		kgsl_pwrctrl_set_state(device, KGSL_STATE_SLUMBER);
 		pm_qos_update_request(&device->pwrctrl.pm_qos_req_dma,
 						PM_QOS_DEFAULT_VALUE);
+		if (device->pwrctrl.l2pc_cpus_mask)
+			pm_qos_update_request(
+					&device->pwrctrl.l2pc_cpus_qos,
+					PM_QOS_DEFAULT_VALUE);
 		break;
 	case KGSL_STATE_SUSPEND:
 		complete_all(&device->hwaccess_gate);
