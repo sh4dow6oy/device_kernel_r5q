@@ -2101,7 +2101,7 @@ int zs_page_migrate(struct address_space *mapping, struct page *newpage,
 	 * Here, any user cannot access all objects in the zspage so let's move.
 	 */
 	d_addr = kmap_atomic(newpage);
-	copy_page(d_addr, s_addr);
+	memcpy(d_addr, s_addr, PAGE_SIZE);
 	kunmap_atomic(d_addr);
 
 	for (addr = s_addr + offset; addr < s_addr + pos;
@@ -2488,7 +2488,7 @@ static void do_zs_compact(struct work_struct *work)
 	unsigned long pages_freed;
 	if (g_pool) {
 		pages_freed = zs_compact(g_pool);
-		pr_info("zs_compact pages_freed=%lu", pages_freed);
+		pr_info("zs_compact pages_freed=%d", pages_freed);
 	}
 }
 static DECLARE_WORK(zs_compact_work, do_zs_compact);
