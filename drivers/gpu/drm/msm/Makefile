@@ -1,13 +1,14 @@
 # SPDX-License-Identifier: GPL-2.0
-ccflags-y := -I $(srctree)/include/drm -I $(srctree)/drivers/gpu/drm/msm -I $(srctree)/drivers/gpu/drm/msm/dsi-staging -I $(srctree)/drivers/gpu/drm/msm/dp
-ccflags-y += -I $(srctree)/drivers/gpu/drm/msm/display-manager
-ccflags-$(CONFIG_DRM_MSM_DSI) += -I $(srctree)/drivers/gpu/drm/msm/dsi
-ccflags-$(CONFIG_DRM_MSM_DSI_PLL) += -I $(srctree)/drivers/gpu/drm/msm/dsi
-ccflags-y += -I $(srctree)/drivers/gpu/drm/msm/sde
-ccflags-y += -I $(srctree)/drivers/media/platform/msm/sde/rotator
-ccflags-y += -I $(srctree)/drivers/gpu/drm/msm/hdmi
-ccflags-$(CONFIG_DRM_SDE_SHD) += -I $(srctree)/drivers/gpu/drm/msm/shd
-ccflags-$(CONFIG_DRM_SDE_SHP) += -I $(srctree)/drivers/gpu/drm/msm/shp
+ccflags-y := -Iinclude/drm -Idrivers/gpu/drm/msm -Idrivers/gpu/drm/msm/dsi-staging -Idrivers/gpu/drm/msm/dp
+ccflags-y += -Idrivers/gpu/drm/msm/display-manager
+ccflags-$(CONFIG_DRM_MSM_DSI) += -Idrivers/gpu/drm/msm/dsi
+ccflags-$(CONFIG_DRM_MSM_DSI_PLL) += -Idrivers/gpu/drm/msm/dsi
+ccflags-y += -Idrivers/gpu/drm/msm/sde
+ccflags-y += -Idrivers/media/platform/msm/sde/rotator
+ccflags-$(CONFIG_DISPLAY_SAMSUNG) += -Idrivers/gpu/drm/msm/samsung
+ccflags-y += -Idrivers/gpu/drm/msm/hdmi
+ccflags-$(CONFIG_DRM_SDE_SHD) += -Idrivers/gpu/drm/msm/shd
+ccflags-$(CONFIG_DRM_SDE_SHP) += -Idrivers/gpu/drm/msm/shp
 
 ifeq ($(CONFIG_DISPLAY_SAMSUNG_LEGO),y)
 ccflags-y += -I$(srctree)/drivers/clk/qcom/
@@ -57,11 +58,10 @@ msm_drm-y := \
 	sde/sde_hw_color_proc_v4.o \
 	sde/sde_hw_ad4.o \
 	sde_edid_parser.o \
+	sde_dbg.o \
+	sde_dbg_evtlog.o \
 	sde_hdcp_1x.o \
-	sde_hdcp_2x.o \
-
-msm_drm-$(CONFIG_DEBUG_FS) += sde_dbg.o \
-	sde_dbg_evtlog.o
+	sde_hdcp_2x.o
 
 msm_drm-$(CONFIG_DRM_MSM_HDMI) += hdmi/hdmi.o \
 	hdmi/hdmi_audio.o \
@@ -240,4 +240,3 @@ obj-y += samsung/
 else ifeq ($(CONFIG_DISPLAY_SAMSUNG_LEGO),y)
 obj-y += samsung_lego/
 endif
-
