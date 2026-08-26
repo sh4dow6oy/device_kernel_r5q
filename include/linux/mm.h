@@ -316,7 +316,6 @@ extern pgprot_t protection_map[16];
  * @FAULT_FLAG_INSTRUCTION: The fault was during an instruction fetch.
  * @FAULT_FLAG_INTERRUPTIBLE: The fault can be interrupted by non-fatal signals.
  * @FAULT_FLAG_PREFAULT_OLD: Make faultaround ptes old.
- * @FAULT_FLAG_SPECULATIVE: Speculative fault, not holding mmap_sem.
  *
  * About @FAULT_FLAG_ALLOW_RETRY and @FAULT_FLAG_TRIED: we can specify
  * whether we would allow page faults to retry by specifying these two
@@ -348,7 +347,6 @@ extern pgprot_t protection_map[16];
 #define FAULT_FLAG_INSTRUCTION  		0x100
 #define FAULT_FLAG_INTERRUPTIBLE		0x200
 #define FAULT_FLAG_PREFAULT_OLD			0x400
-#define FAULT_FLAG_SPECULATIVE			0x800
 
 /*
  * The default fault flags that should be used by most of the
@@ -2895,9 +2893,23 @@ extern void free_memsize_reserved(phys_addr_t free_base, phys_addr_t free_size);
 extern void record_memsize_reserved(const char *name, phys_addr_t base,
 				    phys_addr_t size, bool nomap,
 				    bool reusable);
-extern bool need_memory_boosting(struct pglist_data *pgdat);
+extern inline bool need_memory_boosting(struct pglist_data *pgdat);
 
 extern int want_old_faultaround_pte;
+
+#ifdef CONFIG_PROCESS_RECLAIM
+struct reclaim_param {
+	struct vm_area_struct *vma;
+	/* Number of pages scanned */
+	int nr_scanned;
+	/* max pages to reclaim */
+	int nr_to_reclaim;
+	/* pages reclaimed */
+	int nr_reclaimed;
+};
+extern struct reclaim_param reclaim_task_anon(struct task_struct *task,
+		int nr_to_reclaim);
+#endif
 
 #endif /* __KERNEL__ */
 #endif /* _LINUX_MM_H */
