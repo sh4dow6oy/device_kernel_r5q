@@ -229,7 +229,6 @@ static unsigned int dev_num = 1;
 static struct cdev wlan_hdd_state_cdev;
 static struct class *class;
 static dev_t device;
-
 #if defined (SEC_READ_MACADDR_SYSFS) || defined (SEC_WRITE_VERSION_IN_SYSFS) || defined (SEC_WRITE_SOFTAP_INFO_IN_SYSFS) || defined (SEC_CONFIG_PSM_SYSFS)
 void hdd_sysfs_update_driver_status(int32_t status);
 #endif /* SEC_READ_MACADDR_SYSFS || SEC_WRITE_VERSION_IN_SYSFS || SEC_WRITE_SOFTAP_INFO_IN_SYSFS || SEC_CONFIG_PSM_SYSFS */
@@ -244,6 +243,36 @@ static int sec_hw_dbs_capable = 0;
 #endif //SEC_CONFIG_SUPPORT_MIMO
 static uint16_t sec_max_station = 0;
 #endif //SEC_WRITE_SOFTAP_INFO_IN_SYSFS
+#ifdef SEC_CONFIG_POWER_BACKOFF
+extern int cur_sec_sar_index;
+#endif /* SEC_CONFIG_POWER_BACKOFF */
+
+#ifndef MODULE
+static struct gwlan_loader *wlan_loader;
+static ssize_t wlan_boot_cb(struct kobject *kobj,
+			    struct kobj_attribute *attr,
+			    const char *buf, size_t count);
+struct gwlan_loader {
+	bool loaded_state;
+	struct kobject *boot_wlan_obj;
+	struct attribute_group *attr_group;
+};
+
+static struct kobj_attribute wlan_boot_attribute =
+	__ATTR(boot_wlan, 0220, NULL, wlan_boot_cb);
+
+static struct attribute *attrs[] = {
+	&wlan_boot_attribute.attr,
+	NULL,
+};
+#define MODULE_INITIALIZED 1
+
+#ifdef MULTI_IF_NAME
+#define WLAN_LOADER_NAME "boot_" MULTI_IF_NAME
+#else
+#define WLAN_LOADER_NAME "boot_wlan"
+#endif
+#endif
 
 /* the Android framework expects this param even though we don't use it */
 #define BUF_LEN 20
@@ -2760,20 +2789,12 @@ wlan_hdd_update_dbs_scan_and_fw_mode_config(void)
 #else //!SEC_WRITE_SOFTAP_INFO_IN_SYSFS
 		return QDF_STATUS_SUCCESS;
 #endif //SEC_WRITE_SOFTAP_INFO_IN_SYSFS
-
-	if (hdd_ctx->is_dual_mac_cfg_updated) {
-		hdd_debug("dual mac config has already been updated, skip");
-		return QDF_STATUS_SUCCESS;
-	}
-#else //!SEC_WRITE_SOFTAP_INFO_IN_SYSFS
-		return QDF_STATUS_SUCCESS;
-#endif //SEC_WRITE_SOFTAP_INFO_IN_SYSFS
 	cfg.scan_config = 0;
 	cfg.fw_mode_config = 0;
 	cfg.set_dual_mac_cb = policy_mgr_soc_set_dual_mac_cfg_cb;
 	if (policy_mgr_is_hw_dbs_capable(hdd_ctx->psoc)) {
 #ifdef SEC_WRITE_SOFTAP_INFO_IN_SYSFS
-                sec_hw_dbs_capable = 1;
+               sec_hw_dbs_capable = 1;
 #endif //SEC_WRITE_SOFTAP_INFO_IN_SYSFS
 		status =
 		ucfg_policy_mgr_get_chnl_select_plcy(hdd_ctx->psoc,
@@ -3639,65 +3660,6 @@ out:
 }
 #if defined (SEC_READ_MACADDR_SYSFS) || defined (SEC_WRITE_VERSION_IN_SYSFS) || defined (SEC_WRITE_SOFTAP_INFO_IN_SYSFS) || defined (SEC_CONFIG_PSM_SYSFS)
 void hdd_sysfs_update_driver_status(int32_t status)
-{
-	struct hdd_context *hdd_ctx = cds_get_context(QDF_MODULE_ID_HDD);
-	uint8_t version[512];
-	uint8_t softap[512];
-
-	if (status == DRIVER_MODULES_ENABLED) {
-		scnprintf(version, 512,
-			"HostSW: %s, "
-			"FW: %d.%d.%d.%d.%d.%d, "
-#if defined(CONFIG_LITHIUM)
-#if defined(QCA_WIFI_QCA6390)
-			"HW: QCA6391, "
-#elif defined(QCA_WIFI_QCA6490)
-			"HW: WCN6850, "
-#else
-			"HW: QCOM, "
-#endif
-#else
-			"HW: WCN6750, "
-#endif
-			"BoardVersion: %x "
-			"RefdesignID: %x "
-			"CustomerID: %x "
-			"ProjectID: %x "
-			"BoardDataRev: %x\n",
-			QWLAN_VERSIONSTR,
-			hdd_ctx->fw_version_info.major_spid,
-			hdd_ctx->fw_version_info.minor_spid,
-			hdd_ctx->fw_version_info.siid,
-			hdd_ctx->fw_version_info.rel_id,
-			hdd_ctx->fw_version_info.crmid,
-			hdd_ctx->fw_version_info.sub_id,
-	/* To match String in FTM Mode block hw_name */
-			//hdd_ctx->target_hw_name,
-			hdd_ctx->hw_bd_info.bdf_version,
-			hdd_ctx->hw_bd_info.ref_design_id,
-			hdd_ctx->hw_bd_info.customer_id,
-			hdd_ctx->hw_bd_info.project_id,
-			hdd_ctx->hw_bd_info.board_data_rev);
-		scnprintf(softap, 512,
-			"#softap.info\nDualBandConcurrency=%s\n5G=%s\nmaxClient=%d\nHalFn_setCountryCodeHal=%s\nHalFn_getValidChannels=%s\nDualInterface=%s\n",
-			sec_hw_dbs_capable ? "yes" : "no",
-			hdd_is_5g_supported(hdd_ctx) ? "yes" : "no",
-			sec_max_station,
-			"yes",
-			"yes",
-			"yes");
-		hdd_info("%s", version);
-		hdd_info("%s", softap);
-		cnss_sysfs_update_driver_status(status, version, softap);
-	} else {
-		cnss_sysfs_update_driver_status(status, NULL, NULL);
-	}
-}
-#endif /* SEC_READ_MACADDR_SYSFS || SEC_WRITE_VERSION_IN_SYSFS || SEC_WRITE_SOFTAP_INFO_IN_SYSFS || SEC_CONFIG_PSM_SYSFS */
-
-#ifdef WLAN_FEATURE_WMI_SEND_RECV_QMI
-static inline
-void hdd_set_qmi_stats_enabled(struct hdd_context *hdd_ctx)
 {
 	struct hdd_context *hdd_ctx = cds_get_context(QDF_MODULE_ID_HDD);
 	uint8_t version[512];
@@ -13599,11 +13561,9 @@ int hdd_wlan_stop_modules(struct hdd_context *hdd_ctx, bool ftm_mode)
 	/* Once the firmware sequence is completed reset this flag */
 	hdd_ctx->imps_enabled = false;
 	hdd_ctx->driver_status = DRIVER_MODULES_CLOSED;
-
 #if defined (SEC_READ_MACADDR_SYSFS) || defined (SEC_WRITE_VERSION_IN_SYSFS) || defined (SEC_WRITE_SOFTAP_INFO_IN_SYSFS) || defined (SEC_CONFIG_PSM_SYSFS)
 	hdd_sysfs_update_driver_status(DRIVER_MODULES_CLOSED);
 #endif /* SEC_READ_MACADDR_SYSFS || SEC_WRITE_VERSION_IN_SYSFS || SEC_WRITE_SOFTAP_INFO_IN_SYSFS || SEC_CONFIG_PSM_SYSFS */
-
 	hdd_debug("Wlan transitioned (now CLOSED)");
 
 done:
@@ -13939,10 +13899,11 @@ static QDF_STATUS hdd_open_concurrent_interface(struct hdd_context *hdd_ctx)
 
 	status = hdd_open_adapter_no_trans(hdd_ctx, QDF_STA_MODE,
 					   iface_name, mac_addr);
-	if (QDF_IS_STATUS_ERROR(status)) {
-		wlan_hdd_release_intf_addr(hdd_ctx, mac_addr);
-		hdd_err("Failed to open concurrent station interface");
-	}
+
+        if (QDF_IS_STATUS_ERROR(status)) {
+                wlan_hdd_release_intf_addr(hdd_ctx, mac_addr);
+                hdd_err("Failed to open concurrent station interface");
+        }
 #endif /* CONFIG_SEC */
 	return status;
 }
@@ -15261,36 +15222,6 @@ void hdd_init_start_completion(void)
 	INIT_COMPLETION(wlan_start_comp);
 }
 
-#if defined CFG80211_USER_HINT_CELL_BASE_SELF_MANAGED || \
-                    (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 18, 0))
-static void hdd_inform_wifi_on(void)
-{
-	int ret;
-	struct hdd_context *hdd_ctx = cds_get_context(QDF_MODULE_ID_HDD);
-	struct osif_psoc_sync *psoc_sync;
-
-	hdd_nofl_debug("inform regdomain for wifi on");
-	ret = wlan_hdd_validate_context(hdd_ctx);
-	if (ret)
-		return;
-	if (!wlan_hdd_validate_modules_state(hdd_ctx))
-		return;
-	if (!hdd_ctx->wiphy)
-		return;
-	ret = osif_psoc_sync_op_start(wiphy_dev(hdd_ctx->wiphy), &psoc_sync);
-	if (ret)
-		return;
-	if (hdd_ctx->wiphy->registered)
-		hdd_send_wiphy_regd_sync_event(hdd_ctx);
-
-	osif_psoc_sync_op_stop(psoc_sync);
-}
-#else
-static void hdd_inform_wifi_on(void)
-{
-}
-#endif
-
 static ssize_t wlan_hdd_state_ctrl_param_write(struct file *filp,
 						const char __user *user_buf,
 						size_t count,
@@ -16481,6 +16412,17 @@ static int hdd_module_init(void)
 
 	return 0;
 }
+#else
+static int __init hdd_module_init(void)
+{
+	int ret = -EINVAL;
+
+	ret = wlan_init_sysfs();
+	if (ret)
+		hdd_err("Failed to create sysfs entry");
+
+	return ret;
+}
 #endif
 
 
@@ -16547,17 +16489,6 @@ static int con_mode_handler_epping(const char *kmessage,
 	return ret;
 }
 #endif
-#if defined (SEC_CONFIG_PSM_SYSFS)
-int wlan_hdd_sec_get_psm(void)
-{
-	int psm = 0;
-
-	psm = cnss_sysfs_get_pm_info();
-//	hdd_info("psm %d", psm);
-
-	return psm;
-}
-#endif /* SEC_CONFIG_PSM_SYSFS */
 
 /**
  * hdd_get_conparam() - driver exit point
@@ -18005,4 +17936,3 @@ static const struct kernel_param_ops timer_multiplier_ops = {
 };
 
 module_param_cb(timer_multiplier, &timer_multiplier_ops, NULL, 0644);
-
