@@ -8276,10 +8276,13 @@ static const struct hdd_drv_cmd hdd_drv_cmds[] = {
 	{"P2P_ECSA",                  drv_cmd_set_channel_switch, true},
 	{"SET_INDOOR_CHANNELS",       drv_cmd_set_disable_chan_list, true},
 	{"GET_INDOOR_CHANNELS",       drv_cmd_get_disable_chan_list, false},
-#else
+#else /* !CONFIG_SEC */
 	{"SET_DISABLE_CHANNEL_LIST",  drv_cmd_set_disable_chan_list, true},
 	{"GET_DISABLE_CHANNEL_LIST",  drv_cmd_get_disable_chan_list, false},
 #endif /* CONFIG_SEC */
+#ifdef SEC_CONFIG_POWER_BACKOFF
+	{"SET_TX_POWER_CALLING",      drv_cmd_grip_power_set_tx_power_calling},
+#endif /* SEC_CONFIG_POWER_BACKOFF */
 	{"GET_ANI_LEVEL",             drv_cmd_get_ani_level, false},
 	{"STOP",                      drv_cmd_dummy, false},
 	/* Deprecated commands */
@@ -8567,4 +8570,3 @@ int hdd_ioctl(struct net_device *net_dev, struct ifreq *ifr, int cmd)
 
 	return errno;
 }
-
