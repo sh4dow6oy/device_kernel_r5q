@@ -15,9 +15,6 @@
 #include <linux/string.h>
 #include <linux/mount.h>
 #include "fscrypt_private.h"
-#ifdef CONFIG_FS_CRYPTO_SEC_EXTENSION
-#include "crypto_sec.h"
-#endif
 
 /**
  * fscrypt_policies_equal() - check whether two encryption policies are the same
@@ -32,17 +29,20 @@ bool fscrypt_policies_equal(const union fscrypt_policy *policy1,
 	if (policy1->version != policy2->version)
 		return false;
 
-	return !memcmp(policy1, policy2, fscrypt_policy_size(policy1));
-}
-
-static inline int set_nonce(char *nonce)
-{
-#ifdef CONFIG_FS_CRYPTO_SEC_EXTENSION
-	return fscrypt_sec_set_key_aes(nonce);
-#else
-	get_random_bytes(nonce, sizeof(nonce));
-	return 0;
-#endif /* CONFIG FS_CRYPTO_SEC_EXTENSION */
+	if (fscrypt_policy_contents_mode(policy1) == FSCRYPT_MODE_PRIVATE)
+		return(!memcmp(policy1->v1.master_key_descriptor,
+		       policy2->v1.master_key_descriptor,
+		       FSCRYPT_KEY_DESCRIPTOR_SIZE)) &&
+		      (fscrypt_policy_contents_mode(policy1) ==
+		       fscrypt_policy_contents_mode(policy2)) &&
+		      (fscrypt_policy_fnames_mode(policy1) ==
+		       fscrypt_policy_fnames_mode(policy2)) &&
+		      ((fscrypt_policy_flags(policy1) &
+			~FSCRYPT_POLICY_FLAG_IV_INO_LBLK_32) ==
+		       (fscrypt_policy_flags(policy2) &
+			~FSCRYPT_POLICY_FLAG_IV_INO_LBLK_32));
+	else
+		return !memcmp(policy1, policy2, fscrypt_policy_size(policy1));
 }
 
 static bool fscrypt_valid_enc_modes(u32 contents_mode, u32 filenames_mode)
@@ -60,7 +60,7 @@ static bool fscrypt_valid_enc_modes(u32 contents_mode, u32 filenames_mode)
 		return true;
 
 	if (contents_mode == FSCRYPT_MODE_PRIVATE &&
-	    filenames_mode == FSCRYPT_MODE_AES_256_CTS)
+		filenames_mode == FSCRYPT_MODE_AES_256_CTS)
 		return true;
 
 	return false;
@@ -135,7 +135,8 @@ static bool fscrypt_supported_v1_policy(const struct fscrypt_policy_v1 *policy,
 	}
 
 	if (policy->flags & ~(FSCRYPT_POLICY_FLAGS_PAD_MASK |
-			      FSCRYPT_POLICY_FLAG_DIRECT_KEY)) {
+			      FSCRYPT_POLICY_FLAG_DIRECT_KEY |
+			      FSCRYPT_POLICY_FLAG_IV_INO_LBLK_32)) {
 		fscrypt_warn(inode, "Unsupported encryption flags (0x%02x)",
 			     policy->flags);
 		return false;
@@ -247,7 +248,6 @@ bool fscrypt_supported_policy(const union fscrypt_policy *policy_u,
 static int fscrypt_new_context_from_policy(union fscrypt_context *ctx_u,
 					   const union fscrypt_policy *policy_u)
 {
-	int res;
 	memset(ctx_u, 0, sizeof(*ctx_u));
 
 	switch (policy_u->version) {
@@ -264,12 +264,7 @@ static int fscrypt_new_context_from_policy(union fscrypt_context *ctx_u,
 		memcpy(ctx->master_key_descriptor,
 		       policy->master_key_descriptor,
 		       sizeof(ctx->master_key_descriptor));
-		res = set_nonce(ctx->nonce);
-		if (res) {
-			printk(KERN_ERR
-				"%s: Failed to set nonce (err:%d)\n", __func__, res);
-			return res;
-		}
+		get_random_bytes(ctx->nonce, sizeof(ctx->nonce));
 
 #if defined(CONFIG_FSCRYPT_SDP) || defined(CONFIG_DDAR)
 		BUILD_BUG_ON((sizeof(*ctx) - sizeof(ctx->knox_flags))
@@ -293,12 +288,7 @@ static int fscrypt_new_context_from_policy(union fscrypt_context *ctx_u,
 		memcpy(ctx->master_key_identifier,
 		       policy->master_key_identifier,
 		       sizeof(ctx->master_key_identifier));
-		res = set_nonce(ctx->nonce);
-		if (res) {
-			printk(KERN_ERR
-				"%s: Failed to set nonce (err:%d)\n", __func__, res);
-			return res;
-		}
+		get_random_bytes(ctx->nonce, sizeof(ctx->nonce));
 
 #if defined(CONFIG_FSCRYPT_SDP) || defined(CONFIG_DDAR)
 		BUILD_BUG_ON((sizeof(*ctx) - sizeof(ctx->knox_flags))
@@ -729,16 +719,13 @@ int fscrypt_inherit_context(struct inode *parent, struct inode *child,
 		return -ENOKEY;
 
 	ctxsize = fscrypt_new_context_from_policy(&ctx, &ci->ci_policy);
-
-	BUILD_BUG_ON(sizeof(ctx) != FSCRYPT_SET_CONTEXT_MAX_SIZE);
-
-#ifdef CONFIG_DDAR
-	res = dd_test_and_inherit_context(&ctx, parent, child, ci, fs_data);
-	if (res) {
-		dd_error("failed to inherit dd policy\n");
-		return res;
+	if (fscrypt_policy_contents_mode(&ci->ci_policy) ==
+	    FSCRYPT_MODE_PRIVATE) {
+		res = fscrypt_update_context(&ctx);
+		if (res)
+			return res;
 	}
-#endif
+	BUILD_BUG_ON(sizeof(ctx) != FSCRYPT_SET_CONTEXT_MAX_SIZE);
 
 #ifdef CONFIG_FSCRYPT_SDP
 	res = fscrypt_sdp_inherit_context(parent, child, &ctx, fs_data);
@@ -747,9 +734,7 @@ int fscrypt_inherit_context(struct inode *parent, struct inode *child,
 				"%s: Failed to set sensitive ongoing flag (err:%d)\n", __func__, res);
 		return res;
 	}
-#endif
 
-#if defined(CONFIG_FSCRYPT_SDP) || defined(CONFIG_DDAR)
 	switch (ctx.version) {
 	case FSCRYPT_CONTEXT_V1: {
 		if (ctx.v1.knox_flags != 0)
@@ -763,6 +748,7 @@ int fscrypt_inherit_context(struct inode *parent, struct inode *child,
 	}
 	}
 #endif
+
 	res = parent->i_sb->s_cop->set_context(child, &ctx, ctxsize, fs_data);
 	if (res)
 		return res;
