@@ -79,10 +79,10 @@ static inline long gup_local(struct mm_struct *mm, uintptr_t start,
 
 	if (write)
 		flags |= FOLL_WRITE;
-        //temporaily blocked. should be changed after integrating FOLL_CMA 
-        //flags |= (write) ? FOLL_WRITE|FOLL_CMA : FOLL_CMA; 
 
+#ifdef FOLL_CMA
 	flags |= FOLL_CMA;
+#endif
 
 	return get_user_pages_remote(NULL, mm, start, nr_pages, flags, pages,
 				     NULL, NULL);
