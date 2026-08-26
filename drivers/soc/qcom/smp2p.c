@@ -26,6 +26,7 @@
 #include <linux/soc/qcom/smem.h>
 #include <linux/soc/qcom/smem_state.h>
 #include <linux/spinlock.h>
+#include <linux/pm_wakeup.h>
 
 #include <linux/ipc_logging.h>
 
@@ -164,6 +165,7 @@ struct qcom_smp2p {
 	struct regmap *ipc_regmap;
 	int ipc_offset;
 	int ipc_bit;
+	struct wakeup_source ws;
 
 	struct mbox_client mbox_client;
 	struct mbox_chan *mbox_chan;
@@ -300,6 +302,14 @@ static void qcom_smp2p_notify_in(struct qcom_smp2p *smp2p)
 	}
 }
 
+static irqreturn_t qcom_smp2p_isr(int irq, void *data)
+{
+	struct qcom_smp2p *smp2p = data;
+
+	__pm_stay_awake(&smp2p->ws);
+	return IRQ_WAKE_THREAD;
+}
+
 /**
  * qcom_smp2p_intr() - interrupt handler for incoming notifications
  * @irq:	unused
@@ -324,7 +334,7 @@ static irqreturn_t qcom_smp2p_intr(int irq, void *data)
 		if (IS_ERR(in)) {
 			dev_err(smp2p->dev,
 				"Unable to acquire remote smp2p item\n");
-			return IRQ_HANDLED;
+			goto out;
 		}
 
 		smp2p->in = in;
@@ -343,6 +353,8 @@ static irqreturn_t qcom_smp2p_intr(int irq, void *data)
 			qcom_smp2p_do_ssr_ack(smp2p);
 	}
 
+out:
+	__pm_relax(&smp2p->ws);
 	return IRQ_HANDLED;
 }
 
@@ -593,6 +605,11 @@ static int qcom_smp2p_alloc_item(struct platform_device *pdev,
 			list_add(&entry->node, &smp2p->outbound);
 		}
 	}
+#if IS_ENABLED(CONFIG_SEC_PM)
+	wakeup_source_init(&smp2p->ws, smp2p->name);
+#else
+	wakeup_source_init(&smp2p->ws, "smp2p");
+#endif
 
 	/* Kick the outgoing edge after allocating entries */
 	qcom_smp2p_kick(smp2p);
@@ -686,7 +703,7 @@ static int qcom_smp2p_probe(struct platform_device *pdev)
 					smp2p->name, (void *)smp2p);
 #else
 	ret = devm_request_threaded_irq(&pdev->dev, smp2p->irq,
-					NULL, qcom_smp2p_intr,
+					qcom_smp2p_isr, qcom_smp2p_intr,
 					IRQF_ONESHOT,
 					"smp2p", (void *)smp2p);
 #endif
@@ -766,6 +783,7 @@ static int qcom_smp2p_restore(struct device *dev)
 			list_add(&entry->node, &smp2p->outbound);
 		}
 	}
+	wakeup_source_init(&smp2p->ws, "smp2p");
 
 	enable_irq_wake(smp2p->irq);
 	/* Kick the outgoing edge after allocating entries */
@@ -800,6 +818,8 @@ static int qcom_smp2p_freeze(struct device *dev)
 	/* make null to point it to valid smem item during first interrupt */
 	smp2p->in = NULL;
 	smp2p->valid_entries = 0;
+	/* remove wakeup source */
+	wakeup_source_trash(&smp2p->ws);
 	return 0;
 }
 
