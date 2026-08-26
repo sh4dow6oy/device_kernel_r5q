@@ -3242,7 +3242,8 @@ static void freecess_async_binder_report(struct binder_proc *proc,
 		skip_bytes = 16;
 
 	if ((tr->flags & TF_ONE_WAY) && target_proc
-		&& target_proc->tsk && task_euid(target_proc->tsk).val > 10000
+		&& target_proc->tsk && target_proc->tsk->cred
+		&& (target_proc->tsk->cred->euid.val > 10000)
 		&& (proc->pid != target_proc->pid)) {
 		if (thread_group_is_frozen(target_proc->tsk)) {
 			if (t->buffer->data_size > skip_bytes) {
@@ -3272,7 +3273,8 @@ static void freecess_sync_binder_report(struct binder_proc *proc,
 		return;
 
 	if ((!(tr->flags & TF_ONE_WAY)) && target_proc
-		&& target_proc->tsk && task_euid(target_proc->tsk).val > 10000
+		&& target_proc->tsk && target_proc->tsk->cred
+		&& (target_proc->tsk->cred->euid.val > 10000)
 		&& (proc->pid != target_proc->pid) 
 		&& thread_group_is_frozen(target_proc->tsk)) {
 		//if sync binder, we don't need detecting info, so set code and interfacename as default value.
@@ -3587,6 +3589,7 @@ static void binder_transaction(struct binder_proc *proc,
 		int retries = 0;
 		int max_retries = 100;
 
+retry_lowmem:
 		security_cred_getsecid(proc->cred, &secid);
 		ret = security_secid_to_secctx(secid, &secctx, &secctx_sz);
 		if (ret == -ENOMEM && retries++ < max_retries) {
@@ -3802,7 +3805,7 @@ static void binder_transaction(struct binder_proc *proc,
 			binder_size_t parent_offset;
 			struct binder_fd_array_object *fda =
 				to_binder_fd_array_object(hdr);
-			size_t num_valid = (buffer_offset - off_start_offset) /
+			size_t num_valid = (buffer_offset - off_start_offset) / 
 						sizeof(binder_size_t);
 			struct binder_buffer_object *parent =
 				binder_validate_ptr(target_proc, t->buffer,
@@ -5628,6 +5631,13 @@ static long binder_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		}
 		break;
 	}
+	case BINDER_SET_SYSTEM_SERVER_PID: {
+		if (copy_from_user(&system_server_pid, ubuf,
+					sizeof(system_server_pid))) {
+			ret = -EINVAL;
+			goto err;
+		}
+	}
 	case BINDER_FREEZE: {
 		struct binder_freeze_info info;
 		struct binder_proc **target_procs = NULL, *target_proc;
@@ -6528,7 +6538,7 @@ void binders_in_transcation(int uid)
 
 	mutex_lock(&binder_procs_lock);
 	hlist_for_each_entry(itr, &binder_procs, proc_node) {
-		if (itr != NULL && task_euid(itr->tsk).val == uid) {
+		if (itr != NULL && (itr->tsk->cred->euid.val == uid)) {
 			binder_in_transaction(itr, uid);
 		}
 	}
