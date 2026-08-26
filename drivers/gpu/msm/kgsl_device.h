@@ -1,5 +1,4 @@
 /* Copyright (c) 2002,2007-2020, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -69,6 +68,7 @@ enum kgsl_event_results {
 	KGSL_EVENT_CANCELLED = 2,
 };
 
+#define KGSL_FLAG_WAKE_ON_TOUCH BIT(0)
 #define KGSL_FLAG_SPARSE        BIT(1)
 
 /*
@@ -329,7 +329,7 @@ struct kgsl_device {
 	struct kgsl_pwrscale pwrscale;
 
 	int reset_counter; /* Track how many GPU core resets have occurred */
-	struct kthread_worker *events_worker;
+	struct workqueue_struct *events_wq;
 
 	struct device *busmondev; /* pseudo dev for GPU BW voting governor */
 
@@ -654,6 +654,25 @@ static inline unsigned int kgsl_gpuid(struct kgsl_device *device,
 	unsigned int *chipid)
 {
 	return device->ftbl->gpuid(device, chipid);
+}
+
+static inline int kgsl_create_device_sysfs_files(struct device *root,
+	const struct device_attribute **list)
+{
+	int ret = 0, i;
+
+	for (i = 0; list[i] != NULL; i++)
+		ret |= device_create_file(root, list[i]);
+	return ret;
+}
+
+static inline void kgsl_remove_device_sysfs_files(struct device *root,
+	const struct device_attribute **list)
+{
+	int i;
+
+	for (i = 0; list[i] != NULL; i++)
+		device_remove_file(root, list[i]);
 }
 
 static inline struct kgsl_device *kgsl_device_from_dev(struct device *dev)
