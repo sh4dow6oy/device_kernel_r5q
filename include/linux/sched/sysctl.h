@@ -81,6 +81,7 @@ extern unsigned int sysctl_numa_balancing_scan_period_min;
 extern unsigned int sysctl_numa_balancing_scan_period_max;
 extern unsigned int sysctl_numa_balancing_scan_size;
 
+#ifdef CONFIG_SCHED_DEBUG
 extern __read_mostly unsigned int sysctl_sched_migration_cost;
 extern __read_mostly unsigned int sysctl_sched_nr_migrate;
 extern __read_mostly unsigned int sysctl_sched_time_avg;
@@ -100,12 +101,6 @@ extern int sched_boost_handler(struct ctl_table *table, int write,
  */
 extern unsigned int sysctl_sched_rt_period;
 extern int sysctl_sched_rt_runtime;
-
-#ifdef CONFIG_UCLAMP_TASK
-extern unsigned int sysctl_sched_uclamp_util_min;
-extern unsigned int sysctl_sched_uclamp_util_max;
-extern unsigned int sysctl_sched_uclamp_util_min_rt_default;
-#endif
 
 #ifdef CONFIG_CFS_BANDWIDTH
 extern unsigned int sysctl_sched_cfs_bandwidth_slice;
