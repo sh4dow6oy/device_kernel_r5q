@@ -109,7 +109,7 @@ static struct schedtune root_schedtune = {
  *    implementation especially for the computation of the per-CPU boost
  *    value
  */
-#define BOOSTGROUPS_COUNT 8
+#define BOOSTGROUPS_COUNT 9
 
 /* Array of configured boostgroups */
 static struct schedtune *allocated_group[BOOSTGROUPS_COUNT] = {
@@ -582,26 +582,6 @@ int schedtune_prefer_idle(struct task_struct *p)
 	return prefer_idle;
 }
 
-bool schedtune_prefer_prime(struct task_struct *p)
-{
-	struct schedtune *st;
-	int prefer_prime;
-
-	if (unlikely(!schedtune_initialized))
-		return 0;
-
-	/* Get prefer_prime value */
-	rcu_read_lock();
-	st = task_schedtune(p);
-	prefer_prime = st->prefer_prime;
-	rcu_read_unlock();
-
-	if(prefer_prime)
-		return sched_boost_policy() != SCHED_BOOST_NONE;
-
-	return false;
-}
-
 static u64
 prefer_idle_read(struct cgroup_subsys_state *css, struct cftype *cft)
 {
@@ -616,24 +596,6 @@ prefer_idle_write(struct cgroup_subsys_state *css, struct cftype *cft,
 {
 	struct schedtune *st = css_st(css);
 	st->prefer_idle = !!prefer_idle;
-
-	return 0;
-}
-
-static u64
-prefer_prime_read(struct cgroup_subsys_state *css, struct cftype *cft)
-{
-	struct schedtune *st = css_st(css);
-
-	return st->prefer_prime;
-}
-
-static int
-prefer_prime_write(struct cgroup_subsys_state *css, struct cftype *cft,
-	    u64 prefer_prime)
-{
-	struct schedtune *st = css_st(css);
-	st->prefer_prime = prefer_prime;
 
 	return 0;
 }
