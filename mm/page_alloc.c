@@ -1187,11 +1187,6 @@ static void free_pcppages_bulk(struct zone *zone, int count,
 	spin_lock(&zone->lock);
 	isolated_pageblocks = has_isolate_pageblock(zone);
 
-	/*
-	 * Ensure proper count is passed which otherwise would stuck in the
-	 * below while (list_empty(list)) loop.
-	 */
-	count = min(pcp->count, count);
 	while (count) {
 		struct page *page;
 		struct list_head *list;
@@ -2883,7 +2878,6 @@ static struct page *__rmqueue_pcplist(struct zone *zone, int migratetype,
 	struct list_head *list = NULL;
 
 	do {
-		/* First try to get CMA pages */
 		if (migratetype == MIGRATE_MOVABLE &&
 				gfp_flags & __GFP_CMA) {
 			list = get_populated_pcp_list(zone, 0, pcp,
@@ -3197,15 +3191,11 @@ static inline bool zone_watermark_fast(struct zone *z, unsigned int order,
 	 * need to be calculated.
 	 */
 	if (!order) {
-		long usable_free;
-		long reserved;
+		long fast_free;
 
-		usable_free = free_pages;
-		reserved = __zone_watermark_unusable_free(z, 0, alloc_flags);
-
-		/* reserved may over estimate high-atomic reserves. */
-		usable_free -= min(usable_free, reserved);
-		if (usable_free > mark + z->lowmem_reserve[classzone_idx])
+		fast_free = free_pages;
+		fast_free -= __zone_watermark_unusable_free(z, 0, alloc_flags);
+		if (fast_free > mark + z->lowmem_reserve[classzone_idx])
 			return true;
 	}
 
@@ -3543,8 +3533,10 @@ __alloc_pages_direct_compact(gfp_t gfp_mask, unsigned int order,
 
 	psi_memstall_enter(&pflags);
 	noreclaim_flag = memalloc_noreclaim_save();
+
 	*compact_result = try_to_compact_pages(gfp_mask, order, alloc_flags, ac,
 									prio);
+
 	memalloc_noreclaim_restore(noreclaim_flag);
 	psi_memstall_leave(&pflags);
 
@@ -3799,7 +3791,7 @@ static int
 __perform_reclaim(gfp_t gfp_mask, unsigned int order,
 					const struct alloc_context *ac)
 {
-	struct reclaim_state reclaim_state = {};
+	struct reclaim_state reclaim_state;
 	int progress;
 	unsigned int noreclaim_flag;
 	unsigned long pflags;
@@ -3850,7 +3842,7 @@ retry:
 	 */
 	if (!page && !drained) {
 		unreserve_highatomic_pageblock(ac, false);
-		if (!need_memory_boosting(NULL))
+		if (!need_memory_boosting())
 			drain_all_pages(NULL);
 		drained = true;
 		goto retry;
@@ -4110,12 +4102,6 @@ __alloc_pages_slowpath(gfp_t gfp_mask, unsigned int order,
 	unsigned int cpuset_mems_cookie;
 	unsigned int zonelist_iter_cookie;
 	int reserve_flags;
-	unsigned long pages_reclaimed = 0;
-	int retry_loop_count = 0;
-	unsigned long jiffies_s = jiffies;
-	u64 utime, stime_s, stime_e, stime_d;
-
-	task_cputime(current, &utime, &stime_s);
 
 	/*
 	 * We also sanity check to catch abuse of atomic reserves being used by
@@ -4207,7 +4193,6 @@ restart:
 	}
 
 retry:
-	retry_loop_count++;
 	/* Ensure kswapd doesn't accidentally go to sleep as long as we loop */
 	if (gfp_mask & __GFP_KSWAPD_RECLAIM)
 		wake_all_kswapds(order, ac);
@@ -4239,10 +4224,13 @@ retry:
 	if (current->flags & PF_MEMALLOC)
 		goto nopage;
 
+	if (fatal_signal_pending(current) && !(gfp_mask & __GFP_NOFAIL) &&
+			(gfp_mask & __GFP_FS))
+		goto nopage;
+
 	/* Try direct reclaim and then allocating */
 	page = __alloc_pages_direct_reclaim(gfp_mask, order, alloc_flags, ac,
 							&did_some_progress);
-	pages_reclaimed += did_some_progress;
 	if (page)
 		goto got_pg;
 
@@ -4359,29 +4347,6 @@ fail:
 	warn_alloc(gfp_mask, ac->nodemask,
 			"page allocation failure: order:%u", order);
 got_pg:
-	task_cputime(current, &utime, &stime_e);
-	stime_d = stime_e - stime_s;
-	if (stime_d / NSEC_PER_MSEC > 256) {
-		pg_data_t *pgdat;
-
-		unsigned long a_anon = 0;
-		unsigned long in_anon = 0;
-		unsigned long a_file = 0;
-		unsigned long in_file = 0;
-		for_each_online_pgdat(pgdat) {
-			a_anon += node_page_state(pgdat, NR_ACTIVE_ANON);
-			in_anon += node_page_state(pgdat, NR_INACTIVE_ANON);
-			a_file += node_page_state(pgdat, NR_ACTIVE_FILE);
-			in_file += node_page_state(pgdat, NR_INACTIVE_FILE);
-		}
-		pr_info("alloc stall: timeJS(ms):%u|%u rec:%lu|%lu ret:%d o:%d gfp:%#x(%pGg) AaiFai:%lukB|%lukB|%lukB|%lukB\n",
-			jiffies_to_msecs(jiffies - jiffies_s),
-			stime_d / NSEC_PER_MSEC,
-			did_some_progress, pages_reclaimed, retry_loop_count,
-			order, gfp_mask, &gfp_mask,
-			a_anon << (PAGE_SHIFT-10), in_anon << (PAGE_SHIFT-10),
-			a_file << (PAGE_SHIFT-10), in_file << (PAGE_SHIFT-10));
-	}
 	return page;
 }
 
@@ -4846,6 +4811,7 @@ long si_mem_available(void)
 	reclaimable = global_node_page_state(NR_SLAB_RECLAIMABLE) +
 			global_node_page_state(NR_KERNEL_MISC_RECLAIMABLE);
 	available += reclaimable - min(reclaimable / 2, wmark_low);
+
 #ifdef CONFIG_ION_RBIN_HEAP
 	available += atomic_read(&rbin_cached_pages);
 #endif
@@ -5219,11 +5185,21 @@ char numa_zonelist_order[] = "Node";
  * sysctl handler for numa_zonelist_order
  */
 int numa_zonelist_order_handler(struct ctl_table *table, int write,
-		void *buffer, size_t *length, loff_t *ppos)
+		void __user *buffer, size_t *length,
+		loff_t *ppos)
 {
-	if (write)
-		return __parse_numa_zonelist_order(buffer);
-	return proc_dostring(table, write, buffer, length, ppos);
+	char *str;
+	int ret;
+
+	if (!write)
+		return proc_dostring(table, write, buffer, length, ppos);
+	str = memdup_user_nul(buffer, 16);
+	if (IS_ERR(str))
+		return PTR_ERR(str);
+
+	ret = __parse_numa_zonelist_order(str);
+	kfree(str);
+	return ret;
 }
 
 
@@ -7383,7 +7359,7 @@ postcore_initcall(init_per_zone_wmark_min)
  *	or extra_free_kbytes changes.
  */
 int min_free_kbytes_sysctl_handler(struct ctl_table *table, int write,
-		void *buffer, size_t *length, loff_t *ppos)
+	void __user *buffer, size_t *length, loff_t *ppos)
 {
 	int rc;
 
@@ -7399,7 +7375,7 @@ int min_free_kbytes_sysctl_handler(struct ctl_table *table, int write,
 }
 
 int watermark_scale_factor_sysctl_handler(struct ctl_table *table, int write,
-		void *buffer, size_t *length, loff_t *ppos)
+	void __user *buffer, size_t *length, loff_t *ppos)
 {
 	int rc;
 
@@ -7429,7 +7405,7 @@ static void setup_min_unmapped_ratio(void)
 
 
 int sysctl_min_unmapped_ratio_sysctl_handler(struct ctl_table *table, int write,
-		void *buffer, size_t *length, loff_t *ppos)
+	void __user *buffer, size_t *length, loff_t *ppos)
 {
 	int rc;
 
@@ -7456,7 +7432,7 @@ static void setup_min_slab_ratio(void)
 }
 
 int sysctl_min_slab_ratio_sysctl_handler(struct ctl_table *table, int write,
-		void *buffer, size_t *length, loff_t *ppos)
+	void __user *buffer, size_t *length, loff_t *ppos)
 {
 	int rc;
 
@@ -7480,7 +7456,7 @@ int sysctl_min_slab_ratio_sysctl_handler(struct ctl_table *table, int write,
  * if in function of the boot time zone sizes.
  */
 int lowmem_reserve_ratio_sysctl_handler(struct ctl_table *table, int write,
-		void *buffer, size_t *length, loff_t *ppos)
+	void __user *buffer, size_t *length, loff_t *ppos)
 {
 	proc_dointvec_minmax(table, write, buffer, length, ppos);
 	setup_per_zone_lowmem_reserve();
@@ -7493,7 +7469,7 @@ int lowmem_reserve_ratio_sysctl_handler(struct ctl_table *table, int write,
  * pagelist can have before it gets flushed back to buddy allocator.
  */
 int percpu_pagelist_fraction_sysctl_handler(struct ctl_table *table, int write,
-		void *buffer, size_t *length, loff_t *ppos)
+	void __user *buffer, size_t *length, loff_t *ppos)
 {
 	struct zone *zone;
 	int old_percpu_pagelist_fraction;
@@ -7653,7 +7629,7 @@ void *__init alloc_large_system_hash(const char *tablename,
 		if (flags & HASH_EARLY)
 			table = memblock_virt_alloc_nopanic(size, 0);
 		else if (hashdist)
-			table = __vmalloc(size, gfp_flags);
+			table = __vmalloc(size, gfp_flags, PAGE_KERNEL);
 		else {
 			/*
 			 * If bucketsize is not a power-of-two, we may free
