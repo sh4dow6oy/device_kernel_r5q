@@ -867,7 +867,6 @@ static struct mm_struct *mm_init(struct mm_struct *mm, struct task_struct *p,
 		goto fail_nocontext;
 
 	mm->user_ns = get_user_ns(user_ns);
-	lru_gen_init_mm(mm);
 	return mm;
 
 fail_nocontext:
@@ -955,60 +954,8 @@ static inline void __mmput(struct mm_struct *mm)
 	}
 	if (mm->binfmt)
 		module_put(mm->binfmt->module);
-	lru_gen_del_mm(mm);
 	mmdrop(mm);
 }
-
-/*
- * Store pids of zygote and zygote64.
- * Both processes uses "main" as its comm.
- */
-static pid_t zygote_pids[2];
-
-bool is_app(struct task_struct *p)
-{
-	struct task_struct *parent;
-
-	parent = rcu_dereference(p->real_parent);
-
-	if (parent->pid == zygote_pids[0])
-		return true;
-
-	if (parent->pid == zygote_pids[1])
-		return true;
-
-	if (zygote_pids[0] && zygote_pids[1])
-		return false;
-
-	if (strncmp(parent->comm, "main", 4) == 0) {
-		if (!zygote_pids[0]) {
-			zygote_pids[0] = parent->pid;
-			pr_info("set zygote_pids[0]=%d", parent->pid);
-			return true;
-		}
-		if (!zygote_pids[1]) {
-			zygote_pids[1] = parent->pid;
-			pr_info("set zygote_pids[1]=%d", parent->pid);
-			return true;
-		}
-	}
-	return false;
-}
-
-void (*on_app_mmput_callback)(void);
-
-void call_on_app_mmput_callback(void)
-{
-	if (on_app_mmput_callback) {
-		on_app_mmput_callback();
-	}
-}
-
-void register_on_app_mmput_callback(void (*callback)(void))
-{
-	on_app_mmput_callback = callback;
-}
-EXPORT_SYMBOL_GPL(register_on_app_mmput_callback);
 
 /*
  * Decrement the use count and release all resources for an mm.
@@ -1021,9 +968,6 @@ int mmput(struct mm_struct *mm)
 	if (atomic_dec_and_test(&mm->mm_users)) {
 		__mmput(mm);
 		mm_freed = 1;
-		if (is_app(current)) {
-			call_on_app_mmput_callback();
-		}
 	}
 
 	return mm_freed;
@@ -1184,9 +1128,7 @@ static int wait_for_vfork_done(struct task_struct *child,
 	int killed;
 
 	freezer_do_not_count();
-	cgroup_enter_frozen();
 	killed = wait_for_completion_killable(vfork);
-	cgroup_leave_frozen(false);
 	freezer_count();
 
 	if (killed) {
@@ -1585,22 +1527,10 @@ static void posix_cpu_timers_init(struct task_struct *tsk)
 static inline void posix_cpu_timers_init(struct task_struct *tsk) { }
 #endif
 
-static inline void init_task_pid_links(struct task_struct *task)
-{
-	enum pid_type type;
-
-	for (type = PIDTYPE_PID; type < PIDTYPE_MAX; ++type) {
-		INIT_HLIST_NODE(&task->pid_links[type]);
-	}
-}
-
 static inline void
 init_task_pid(struct task_struct *task, enum pid_type type, struct pid *pid)
 {
-	if (type == PIDTYPE_PID)
-		task->thread_pid = pid;
-	else
-		task->signal->pids[type] = pid;
+	 task->pids[type].pid = pid;
 }
 
 static int pidfd_release(struct inode *inode, struct file *file)
@@ -1694,10 +1624,6 @@ static inline void rcu_copy_process(struct task_struct *p)
 	INIT_LIST_HEAD(&p->rcu_tasks_holdout_list);
 	p->rcu_tasks_idle_cpu = -1;
 #endif /* #ifdef CONFIG_TASKS_RCU */
-#ifdef CONFIG_TASKS_TRACE_RCU
-	p->trc_reader_nesting = 0;
-	INIT_LIST_HEAD(&p->trc_holdout_list);
-#endif /* #ifdef CONFIG_TASKS_TRACE_RCU */
 }
 
 static void __delayed_free_task(struct rcu_head *rhp)
@@ -2137,13 +2063,11 @@ static __latent_entropy struct task_struct *copy_process(
 		goto bad_fork_cancel_cgroup;
 	}
 
-	init_task_pid_links(p);
 	if (likely(p->pid)) {
 		ptrace_init_task(p, (clone_flags & CLONE_PTRACE) || trace);
 
 		init_task_pid(p, PIDTYPE_PID, pid);
 		if (thread_group_leader(p)) {
-			init_task_pid(p, PIDTYPE_TGID, pid);
 			init_task_pid(p, PIDTYPE_PGID, task_pgrp(current));
 			init_task_pid(p, PIDTYPE_SID, task_session(current));
 
@@ -2152,6 +2076,7 @@ static __latent_entropy struct task_struct *copy_process(
 				p->signal->flags |= SIGNAL_UNKILLABLE;
 			}
 
+			p->signal->leader_pid = pid;
 			p->signal->tty = tty_kref_get(current->signal->tty);
 			/*
 			 * Inherit has_child_subreaper flag under the same
@@ -2162,7 +2087,6 @@ static __latent_entropy struct task_struct *copy_process(
 							 p->real_parent->signal->is_child_subreaper;
 			list_add_tail(&p->sibling, &p->real_parent->children);
 			list_add_tail_rcu(&p->tasks, &init_task.tasks);
-			attach_pid(p, PIDTYPE_TGID);
 			attach_pid(p, PIDTYPE_PGID);
 			attach_pid(p, PIDTYPE_SID);
 			__this_cpu_inc(process_counts);
@@ -2256,13 +2180,13 @@ fork_out:
 	return ERR_PTR(retval);
 }
 
-static inline void init_idle_pids(struct task_struct *idle)
+static inline void init_idle_pids(struct pid_link *links)
 {
 	enum pid_type type;
 
 	for (type = PIDTYPE_PID; type < PIDTYPE_MAX; ++type) {
-		INIT_HLIST_NODE(&idle->pid_links[type]); /* not really needed */
-		init_task_pid(idle, type, &init_struct_pid);
+		INIT_HLIST_NODE(&links[type].node); /* not really needed */
+		links[type].pid = &init_struct_pid;
 	}
 }
 
@@ -2272,7 +2196,7 @@ struct task_struct *fork_idle(int cpu)
 	task = copy_process(CLONE_VM, 0, 0, NULL, NULL, &init_struct_pid, 0, 0,
 			    cpu_to_node(cpu));
 	if (!IS_ERR(task)) {
-		init_idle_pids(task);
+		init_idle_pids(task->pids);
 		init_idle(task, cpu);
 	}
 
@@ -2339,13 +2263,6 @@ long _do_fork(unsigned long clone_flags,
 			p->vfork_done = &vfork;
 			init_completion(&vfork);
 			get_task_struct(p);
-		}
-
-		if (IS_ENABLED(CONFIG_LRU_GEN) && !(clone_flags & CLONE_VM)) {
-			/* lock the task to synchronize with memcg migration */
-			task_lock(p);
-			lru_gen_add_mm(p->mm);
-			task_unlock(p);
 		}
 
 		wake_up_new_task(p);
