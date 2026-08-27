@@ -218,7 +218,7 @@ int athdiag_procfs_init(void *scn)
 	}
 
 #ifdef CONFIG_SEC
-	proc_file = proc_create_data(PROCFS_NAME, 0666, proc_dir,
+       proc_file = proc_create_data(PROCFS_NAME, 0666, proc_dir,
 #else
 	proc_file = proc_create_data(PROCFS_NAME, 0600, proc_dir,
 #endif
@@ -248,4 +248,10 @@ void athdiag_procfs_remove(void)
 		proc_dir = NULL;
 	}
 }
+#else
+int athdiag_procfs_init(void *scn)
+{
+	return 0;
+}
+void athdiag_procfs_remove(void) {}
 #endif
