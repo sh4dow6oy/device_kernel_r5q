@@ -94,6 +94,8 @@ int do_swap_account __read_mostly;
 #define do_swap_account		0
 #endif
 
+int is_heimdall_enabled;
+
 /* Whether legacy memory+swap accounting is active */
 static bool do_memsw_account(void)
 {
@@ -244,6 +246,11 @@ struct vmpressure *memcg_to_vmpressure(struct mem_cgroup *memcg)
 struct cgroup_subsys_state *vmpressure_to_css(struct vmpressure *vmpr)
 {
 	return &container_of(vmpr, struct mem_cgroup, vmpressure)->css;
+}
+
+static inline bool mem_cgroup_is_root(struct mem_cgroup *memcg)
+{
+	return (memcg == root_mem_cgroup);
 }
 
 #ifndef CONFIG_SLOB
@@ -673,7 +680,7 @@ struct mem_cgroup *mem_cgroup_from_task(struct task_struct *p)
 }
 EXPORT_SYMBOL(mem_cgroup_from_task);
 
-struct mem_cgroup *get_mem_cgroup_from_mm(struct mm_struct *mm)
+static struct mem_cgroup *get_mem_cgroup_from_mm(struct mm_struct *mm)
 {
 	struct mem_cgroup *memcg = NULL;
 
@@ -997,14 +1004,12 @@ void mem_cgroup_update_lru_size(struct lruvec *lruvec, enum lru_list lru,
 		*lru_size += nr_pages;
 
 	size = *lru_size;
-#ifndef CONFIG_LRU_GEN
 	if (WARN_ONCE(size < 0,
 		"%s(%p, %d, %d): lru_size %ld\n",
 		__func__, lruvec, lru, nr_pages, size)) {
 		VM_BUG_ON(1);
 		*lru_size = 0;
 	}
-#endif
 
 	if (nr_pages > 0)
 		*lru_size += nr_pages;
@@ -2146,7 +2151,7 @@ static void lock_page_lru(struct page *page, int *isolated)
 
 		lruvec = mem_cgroup_page_lruvec(page, zone->zone_pgdat);
 		ClearPageLRU(page);
-		del_page_from_lru_list(page, lruvec);
+		del_page_from_lru_list(page, lruvec, page_lru(page));
 		*isolated = 1;
 	} else
 		*isolated = 0;
@@ -2162,7 +2167,7 @@ static void unlock_page_lru(struct page *page, int isolated)
 		lruvec = mem_cgroup_page_lruvec(page, zone->zone_pgdat);
 		VM_BUG_ON_PAGE(PageLRU(page), page);
 		SetPageLRU(page);
-		add_page_to_lru_list(page, lruvec);
+		add_page_to_lru_list(page, lruvec, page_lru(page));
 	}
 	spin_unlock_irq(zone_lru_lock(zone));
 }
@@ -2194,7 +2199,6 @@ static void commit_charge(struct page *page, struct mem_cgroup *memcg,
 	 *
 	 * - a page cache insertion, a swapin fault, or a migration
 	 *   have the page locked
-	 * - mem_cgroup_trylock_pages()
 	 */
 	page->mem_cgroup = memcg;
 
@@ -2822,6 +2826,42 @@ static int mem_cgroup_hierarchy_write(struct cgroup_subsys_state *css,
 	return retval;
 }
 
+#ifdef CONFIG_MEMCG_HEIMDALL
+static ssize_t mem_cgroup_force_shrink_write(struct kernfs_open_file *of,
+					    char *buf, size_t nbytes,
+					    loff_t off)
+{
+	int type;
+	unsigned long size;
+	char *str;
+	int ret = -EINVAL;
+	struct mem_cgroup *memcg = mem_cgroup_from_css(of_css(of));
+
+	if (mem_cgroup_is_root(memcg))
+		goto error;
+
+	buf = strstrip(buf);
+	str = strchr(buf, ',');
+	if (str == NULL)
+		goto error;
+
+	*str = '\0';
+	ret = kstrtoul(str+1, 10, &size);
+	if (ret)
+		goto error;
+
+	ret = kstrtoint(buf, 10, &type);
+	if (ret)
+		goto error;
+
+	if (type > 0 && type <= MEMCG_HEIMDALL_SHRINK_FILE)
+		forced_shrink_node_memcg(NODE_DATA(0), memcg, type, size / PAGE_SIZE);
+
+error:
+	return ret ?: nbytes;
+}
+#endif
+
 static void tree_stat(struct mem_cgroup *memcg, unsigned long *stat)
 {
 	struct mem_cgroup *iter;
@@ -2862,10 +2902,16 @@ static unsigned long mem_cgroup_usage(struct mem_cgroup *memcg, bool swap)
 				val += memcg_page_state(iter, MEMCG_SWAP);
 		}
 	} else {
-		if (!swap)
-			val = page_counter_read(&memcg->memory);
-		else
-			val = page_counter_read(&memcg->memsw);
+		if (is_heimdall_enabled) {
+			val = memcg_page_state(memcg, MEMCG_RSS);
+			if (swap)
+				val += memcg_page_state(memcg, MEMCG_SWAP);
+		} else {
+			if (!swap)
+				val = page_counter_read(&memcg->memory);
+			else
+				val = page_counter_read(&memcg->memsw);
+		}
 	}
 	return val;
 }
@@ -3319,8 +3365,8 @@ static int memcg_stat_show(struct seq_file *m, void *v)
 		pg_data_t *pgdat;
 		struct mem_cgroup_per_node *mz;
 		struct zone_reclaim_stat *rstat;
-		unsigned long recent_rotated[ANON_AND_FILE] = {};
-		unsigned long recent_scanned[ANON_AND_FILE] = {};
+		unsigned long recent_rotated[2] = {0, 0};
+		unsigned long recent_scanned[2] = {0, 0};
 
 		for_each_online_pgdat(pgdat) {
 			mz = mem_cgroup_nodeinfo(memcg, pgdat->node_id);
@@ -3351,6 +3397,7 @@ static u64 mem_cgroup_vmpressure_read(struct cgroup_subsys_state *css,
 
 	return vmpressure;
 }
+
 static u64 mem_cgroup_swappiness_read(struct cgroup_subsys_state *css,
 				      struct cftype *cft)
 {
@@ -4150,6 +4197,12 @@ static struct cftype mem_cgroup_legacy_files[] = {
 		.seq_show = memcg_numa_stat_show,
 	},
 #endif
+#ifdef CONFIG_MEMCG_HEIMDALL
+	{
+		.name = "force_shrink",
+		.write = mem_cgroup_force_shrink_write,
+	},
+#endif
 	{
 		.name = "kmem.limit_in_bytes",
 		.private = MEMFILE_PRIVATE(_KMEM, RES_LIMIT),
@@ -4337,7 +4390,6 @@ static void __mem_cgroup_free(struct mem_cgroup *memcg)
 
 static void mem_cgroup_free(struct mem_cgroup *memcg)
 {
-	lru_gen_exit_memcg(memcg);
 	memcg_wb_domain_exit(memcg);
 	__mem_cgroup_free(memcg);
 }
@@ -4388,7 +4440,6 @@ static struct mem_cgroup *mem_cgroup_alloc(void)
 	INIT_LIST_HEAD(&memcg->cgwb_list);
 #endif
 	idr_replace(&mem_cgroup_idr, memcg, memcg->id.id);
-	lru_gen_init_memcg(memcg);
 	return memcg;
 fail:
 	mem_cgroup_id_remove(memcg);
@@ -5250,29 +5301,6 @@ static void mem_cgroup_move_task(void)
 }
 #endif
 
-#ifdef CONFIG_LRU_GEN
-static void mem_cgroup_attach(struct cgroup_taskset *tset)
-{
-	struct cgroup_subsys_state *css;
-	struct task_struct *task = NULL;
-
-	cgroup_taskset_for_each_leader(task, css, tset)
-		break;
-
-	if (!task)
-		return;
-
-	task_lock(task);
-	if (task->mm && task->mm->owner == task)
-		lru_gen_migrate_mm(task->mm);
-	task_unlock(task);
-}
-#else
-static void mem_cgroup_attach(struct cgroup_taskset *tset)
-{
-}
-#endif /* CONFIG_LRU_GEN */
-
 /*
  * Cgroup retains root cgroups across [un]mount cycles making it necessary
  * to verify whether we're attached to the default hierarchy on each mount
@@ -5574,7 +5602,6 @@ struct cgroup_subsys memory_cgrp_subsys = {
 	.css_free = mem_cgroup_css_free,
 	.css_reset = mem_cgroup_css_reset,
 	.can_attach = mem_cgroup_can_attach,
-	.attach = mem_cgroup_attach,
 	.cancel_attach = mem_cgroup_cancel_attach,
 	.post_attach = mem_cgroup_move_task,
 	.bind = mem_cgroup_bind,
