@@ -472,7 +472,8 @@ static bool device_pending_suspend(struct uart_port *uport)
 	struct msm_geni_serial_port *port = GET_DEV_PORT(uport);
 	int usage_count = atomic_read(&uport->dev->power.usage_count);
 
-	return (pm_runtime_status_suspended(uport->dev) && !usage_count);
+	return (pm_runtime_status_suspended(uport->dev) ||
+			(!atomic_read(&port->dbg_rt_pm_status) && !usage_count));
 }
 
 static bool check_transfers_inflight(struct uart_port *uport)
@@ -3103,17 +3104,14 @@ static void console_unregister(struct uart_driver *drv)
 }
 #endif /* defined(CONFIG_SERIAL_CORE_CONSOLE) || defined(CONFIG_CONSOLE_POLL) */
 
-#ifdef CONFIG_DEBUG_FS
 static void msm_geni_serial_debug_init(struct uart_port *uport, bool console)
 {
 	struct msm_geni_serial_port *msm_port = GET_DEV_PORT(uport);
 	char name[30];
 
-#ifdef CONFIG_DEBUG_FS
 	msm_port->dbg = debugfs_create_dir(dev_name(uport->dev), NULL);
 	if (IS_ERR_OR_NULL(msm_port->dbg))
 		dev_err(uport->dev, "Failed to create dbg dir\n");
-#endif
 
 	if (!console) {
 		memset(name, 0, sizeof(name));
@@ -3164,7 +3162,6 @@ static void msm_geni_serial_debug_init(struct uart_port *uport, bool console)
 		}
 	}
 }
-#endif
 
 static void msm_geni_serial_cons_pm(struct uart_port *uport,
 		unsigned int new_state, unsigned int old_state)
@@ -3588,9 +3585,8 @@ static int msm_geni_serial_probe(struct platform_device *pdev)
 	device_create_file(uport->dev, &dev_attr_loopback);
 	device_create_file(uport->dev, &dev_attr_xfer_mode);
 	device_create_file(uport->dev, &dev_attr_ver_info);
-#ifdef CONFIG_DEBUG_FS
+	device_create_file(uport->dev, &dev_attr_error_cnt);	//frame err node
 	msm_geni_serial_debug_init(uport, is_console);
-#endif
 	dev_port->port_setup = false;
 	ret = msm_geni_serial_get_ver_info(uport);
 	if (ret)
