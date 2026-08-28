@@ -245,10 +245,8 @@ bool try_get_rbincache(void)
 
 	spin_lock_irqsave(&region.region_lock, flags);
 	if (region.timeout < jiffies) {
-#ifdef CONFIG_ION_RBIN_HEAP
 		if (region.rc_disabled == true)
 			wake_ion_rbin_heap_shrink();
-#endif
 		region.rc_disabled = false;
 	}
 

@@ -40,7 +40,7 @@
 #include <linux/psi.h>
 #include "internal.h"
 
-#if defined(CONFIG_SDP)
+#ifdef CONFIG_SDP
 #include <sdp/cache_cleanup.h>
 #endif
 
@@ -48,9 +48,11 @@
 #include <linux/fscrypto_sdp_cache.h>
 #endif
 
+
 #ifdef CONFIG_PAGE_BOOST_RECORDING
 #include <linux/io_record.h>
 #endif
+
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/filemap.h>
@@ -203,12 +205,11 @@ void __delete_from_page_cache(struct page *page, void *shadow)
 {
 	struct address_space *mapping = page->mapping;
 	int nr = hpage_nr_pages(page);
-
-#if defined(CONFIG_SDP)
+    
+#ifdef CONFIG_SDP
 	if (mapping_sensitive(mapping))
 		sdp_page_cleanup(page);
 #endif
-
 	trace_mm_filemap_delete_from_page_cache(page);
 	/*
 	 * if we're uptodate, flush out into the cleancache, otherwise
@@ -1014,7 +1015,7 @@ static void wake_up_page(struct page *page, int bit)
 	wake_up_page_bit(page, bit);
 }
 
-static inline __sched int wait_on_page_bit_common(wait_queue_head_t *q,
+static inline int wait_on_page_bit_common(wait_queue_head_t *q,
 		struct page *page, int bit_nr, int state, bool lock)
 {
 	struct wait_page_queue wait_page;
@@ -1086,14 +1087,14 @@ static inline __sched int wait_on_page_bit_common(wait_queue_head_t *q,
 	return ret;
 }
 
-void __sched wait_on_page_bit(struct page *page, int bit_nr)
+void wait_on_page_bit(struct page *page, int bit_nr)
 {
 	wait_queue_head_t *q = page_waitqueue(page);
 	wait_on_page_bit_common(q, page, bit_nr, TASK_UNINTERRUPTIBLE, false);
 }
 EXPORT_SYMBOL(wait_on_page_bit);
 
-int __sched wait_on_page_bit_killable(struct page *page, int bit_nr)
+int wait_on_page_bit_killable(struct page *page, int bit_nr)
 {
 	wait_queue_head_t *q = page_waitqueue(page);
 	return wait_on_page_bit_common(q, page, bit_nr, TASK_KILLABLE, false);
@@ -1224,7 +1225,7 @@ EXPORT_SYMBOL_GPL(page_endio);
  * __lock_page - get a lock on the page, assuming we need to sleep to get it
  * @__page: the page to lock
  */
-void __sched __lock_page(struct page *__page)
+void __lock_page(struct page *__page)
 {
 	struct page *page = compound_head(__page);
 	wait_queue_head_t *q = page_waitqueue(page);
@@ -1232,7 +1233,7 @@ void __sched __lock_page(struct page *__page)
 }
 EXPORT_SYMBOL(__lock_page);
 
-int __sched __lock_page_killable(struct page *__page)
+int __lock_page_killable(struct page *__page)
 {
 	struct page *page = compound_head(__page);
 	wait_queue_head_t *q = page_waitqueue(page);
@@ -1251,7 +1252,7 @@ EXPORT_SYMBOL_GPL(__lock_page_killable);
  * If neither ALLOW_RETRY nor KILLABLE are set, will always return 1
  * with the page locked and the mmap_sem unperturbed.
  */
-int __sched __lock_page_or_retry(struct page *page, struct mm_struct *mm,
+int __lock_page_or_retry(struct page *page, struct mm_struct *mm,
 			 unsigned int flags)
 {
 	if (fault_flag_allow_retry_first(flags)) {
@@ -2095,7 +2096,7 @@ find_page:
 					!mapping->a_ops->is_partially_uptodate)
 				goto page_not_up_to_date;
 			/* pipes can't handle partially uptodate pages */
-			if (unlikely(iov_iter_is_pipe(iter)))
+			if (unlikely(iter->type & ITER_PIPE))
 				goto page_not_up_to_date;
 			if (!trylock_page(page))
 				goto page_not_up_to_date;
@@ -2332,6 +2333,7 @@ generic_file_read_iter(struct kiocb *iocb, struct iov_iter *iter)
 		    IS_DAX(inode))
 			goto out;
 	}
+
 #ifdef CONFIG_FSCRYPT_SDP
 	//Check after writeback is completed.
 	if (fscrypt_sdp_file_not_readable(iocb->ki_filp)) {
@@ -2339,6 +2341,7 @@ generic_file_read_iter(struct kiocb *iocb, struct iov_iter *iter)
 		goto out;
 	}
 #endif
+
 	retval = generic_file_buffered_read(iocb, iter, retval);
 #ifdef CONFIG_FSCRYPT_SDP
 	fscrypt_sdp_unset_file_io_ongoing(iocb->ki_filp);
@@ -2414,28 +2417,6 @@ static int lock_page_maybe_drop_mmap(struct vm_fault *vmf, struct page *page,
 	return 1;
 }
 
-static noinline void tracing_mark_write(bool start, struct file *file, pgoff_t offset, unsigned int size, bool sync)
-{
-	char buf[256], *path;
-
-	if (!tracing_is_on() || file == NULL || file->f_path.dentry == NULL)
-		return;
-
-	if (start) {
-		path = dentry_path(file->f_path.dentry, buf, 256);
-
-		if (!IS_ERR(path))
-			trace_printk("B|%d|%d , %s , %lu , %d\n", current->tgid, sync, path, offset, size);
-		else
-			trace_printk("B|%d|%d , %s , %lu , %d\n", current->tgid, sync, "dentry_path failed", offset, size);
-	} else {
-		trace_printk("E|%d\n", current->tgid);
-	}
-}
-
-#define trace_fault_file_path_start(...) tracing_mark_write(1, ##__VA_ARGS__)
-#define trace_fault_file_path_end(...) tracing_mark_write(0, ##__VA_ARGS__)
-
 #if CONFIG_MMAP_READAROUND_LIMIT == 0
 int mmap_readaround_limit = (VM_MAX_READAHEAD / 4); 		/* page */
 #else
@@ -2466,10 +2447,8 @@ static struct file *do_sync_mmap_readahead(struct vm_fault *vmf)
 
 	if (vmf->vma->vm_flags & VM_SEQ_READ) {
 		fpin = maybe_unlock_mmap_for_io(vmf, fpin);
-		trace_fault_file_path_start(file, offset, ra->ra_pages, 1);
 		page_cache_sync_readahead(mapping, ra, file, offset,
 					  ra->ra_pages);
-		trace_fault_file_path_end(file, offset, ra->ra_pages, 1);
 		return fpin;
 	}
 
@@ -2492,9 +2471,7 @@ static struct file *do_sync_mmap_readahead(struct vm_fault *vmf)
 	ra->start = max_t(long, 0, offset - ra_pages / 2);
 	ra->size = ra_pages;
 	ra->async_size = ra_pages / 4;
-	trace_fault_file_path_start(file, offset, ra_pages, 1);
 	ra_submit(ra, mapping, file);
-	trace_fault_file_path_end(file, offset, ra_pages, 1);
 	return fpin;
 }
 
@@ -2519,10 +2496,8 @@ static struct file *do_async_mmap_readahead(struct vm_fault *vmf,
 		ra->mmap_miss--;
 	if (PageReadahead(page)) {
 		fpin = maybe_unlock_mmap_for_io(vmf, fpin);
-		trace_fault_file_path_start(file, offset, ra->ra_pages, 0);
 		page_cache_async_readahead(mapping, ra, file,
 					   page, offset, ra->ra_pages);
-		trace_fault_file_path_end(file, offset, ra->ra_pages, 0);
 	}
 	return fpin;
 }
@@ -2645,9 +2620,7 @@ page_not_uptodate:
 	 */
 	ClearPageError(page);
 	fpin = maybe_unlock_mmap_for_io(vmf, fpin);
-	trace_fault_file_path_start(file, offset, 1, 1);
 	error = mapping->a_ops->readpage(file, page);
-	trace_fault_file_path_end(file, offset, 1, 1);
 	if (!error) {
 		wait_on_page_locked(page);
 		if (!PageUptodate(page))

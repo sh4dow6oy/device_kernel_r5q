@@ -2008,6 +2008,37 @@ int memblock_dump_aligned_blocks_num(char *buf)
 }
 #endif
 
+#if defined(CONFIG_DEBUG_FS) && !defined(CONFIG_ARCH_DISCARD_MEMBLOCK)
+
+static int memblock_debug_show(struct seq_file *m, void *private)
+{
+	struct memblock_type *type = m->private;
+	struct memblock_region *reg;
+	int i;
+	phys_addr_t end;
+
+	for (i = 0; i < type->cnt; i++) {
+		reg = &type->regions[i];
+		end = reg->base + reg->size - 1;
+
+		seq_printf(m, "%4d: ", i);
+		seq_printf(m, "%pa..%pa\n", &reg->base, &end);
+	}
+	return 0;
+}
+
+static int memblock_debug_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, memblock_debug_show, inode->i_private);
+}
+
+static const struct file_operations memblock_debug_fops = {
+	.open = memblock_debug_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
+
 static int memsize_kernel_show(struct seq_file *m, void *private)
 {
 	int i;
@@ -2170,49 +2201,6 @@ static const struct file_operations proc_memsize_reserved_fops = {
 	.llseek = seq_lseek,
 	.release = single_release,
 };
-
-static int __init memblock_memsize_init(void)
-{
-	if (proc_mkdir("memsize", NULL)) {
-		proc_create("memsize/kernel", 0, NULL, &proc_memsize_kernel_fops);
-		proc_create("memsize/reserved", 0, NULL, &proc_memsize_reserved_fops);
-	}
-
-	return 0;
-}
-__initcall(memblock_memsize_init);
-
-#if defined(CONFIG_DEBUG_FS) && !defined(CONFIG_ARCH_DISCARD_MEMBLOCK)
-
-static int memblock_debug_show(struct seq_file *m, void *private)
-{
-	struct memblock_type *type = m->private;
-	struct memblock_region *reg;
-	int i;
-	phys_addr_t end;
-
-	for (i = 0; i < type->cnt; i++) {
-		reg = &type->regions[i];
-		end = reg->base + reg->size - 1;
-
-		seq_printf(m, "%4d: ", i);
-		seq_printf(m, "%pa..%pa\n", &reg->base, &end);
-	}
-	return 0;
-}
-
-static int memblock_debug_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, memblock_debug_show, inode->i_private);
-}
-
-static const struct file_operations memblock_debug_fops = {
-	.open = memblock_debug_open,
-	.read = seq_read,
-	.llseek = seq_lseek,
-	.release = single_release,
-};
-
 static int __init memblock_init_debugfs(void)
 {
 	struct dentry *root = debugfs_create_dir("memblock", NULL);
@@ -2220,6 +2208,10 @@ static int __init memblock_init_debugfs(void)
 		return -ENXIO;
 	debugfs_create_file("memory", S_IRUGO, root, &memblock.memory, &memblock_debug_fops);
 	debugfs_create_file("reserved", S_IRUGO, root, &memblock.reserved, &memblock_debug_fops);
+	if (proc_mkdir("memsize", NULL)) {
+		proc_create("memsize/kernel", 0, NULL, &proc_memsize_kernel_fops);
+		proc_create("memsize/reserved", 0, NULL, &proc_memsize_reserved_fops);
+	}
 #ifdef CONFIG_HAVE_MEMBLOCK_PHYS_MAP
 	debugfs_create_file("physmem", S_IRUGO, root, &memblock.physmem, &memblock_debug_fops);
 #endif
