@@ -247,8 +247,8 @@ config ARCH_HAS_CPU_FINALIZE_INIT
 config ARCH_HAS_SET_DIRECT_MAP
 	bool
 
-# Select if arch init_task must go in the __init_task_data section
-config ARCH_TASK_STRUCT_ON_STACK
+# Select if arch init_task initializer is different to init/init_task.c
+config ARCH_INIT_TASK
        bool
 
 # Select if arch has its private alloc_task_struct() function
@@ -606,6 +606,12 @@ config CC_STACKPROTECTOR_STRONG
 	  size by about 2%.
 
 endchoice
+
+config THIN_ARCHIVES
+	def_bool y
+	help
+	  Select this if the architecture wants to use thin archives
+	  instead of ld -r to create the built-in.o files.
 
 config LD_DEAD_CODE_DATA_ELIMINATION
 	bool
@@ -1147,14 +1153,5 @@ config RELR
 	  format. Requires a compatible linker (LLD supports this feature), as
 	  well as compatible NM and OBJCOPY utilities (llvm-nm and llvm-objcopy
 	  are compatible).
-
-config ARCH_HAS_NONLEAF_PMD_YOUNG
-	bool
-	depends on PGTABLE_LEVELS > 2
-	help
-	  Architectures that select this option are capable of setting the
-	  accessed bit in non-leaf PMD entries when using them as part of linear
-	  address translations. Page table walkers that clear the accessed bit
-	  may use this capability to reduce their search space.
 
 source "kernel/gcov/Kconfig"
