@@ -10,7 +10,6 @@
 #include <linux/fs.h>
 #include <linux/mm.h>
 #include <linux/scs.h>
-#include <linux/task_integrity.h>
 
 #include <asm/pgtable.h>
 #include <linux/uaccess.h>
