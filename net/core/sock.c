@@ -141,13 +141,14 @@
 
 #include <trace/events/sock.h>
 
-#ifdef CONFIG_MPTCP
-#include <net/mptcp.h>
-#include <net/inet_common.h>
-#endif
-
 #include <net/tcp.h>
 #include <net/busy_poll.h>
+
+/* START_OF_KNOX_NPA */
+#include <linux/sched.h>
+#include <linux/pid.h>
+#include <net/ncm.h>
+/* END_OF_KNOX_NPA */
 
 static DEFINE_MUTEX(proto_list_mutex);
 static LIST_HEAD(proto_list);
@@ -865,6 +866,15 @@ int sock_setsockopt(struct socket *sock, int level, int optname,
 
 	if (optname == SO_BINDTODEVICE)
 		return sock_setbindtodevice(sk, optval, optlen);
+	
+	/* START_OF_KNOX_NPA */
+	if (optname == SO_SET_DOMAIN_NAME)
+		return sock_set_domain_name(sk, optval, optlen);
+	if (optname == SO_SET_DNS_UID)
+		return sock_set_dns_uid(sk, optval, optlen);
+	if (optname == SO_SET_DNS_PID)
+		return sock_set_dns_pid(sk, optval, optlen);
+	/* END_OF_KNOX_NPA */
 
 	if (optlen < sizeof(int))
 		return -EINVAL;
@@ -1618,28 +1628,8 @@ int sock_getsockopt(struct socket *sock, int level, int optname,
  *
  * (We also register the sk_lock with the lock validator.)
  */
-#ifndef CONFIG_MPTCP
-static inline
-#endif
-void sock_lock_init(struct sock *sk)
+static inline void sock_lock_init(struct sock *sk)
 {
-#ifdef CONFIG_MPTCP
-	/* Reclassify the lock-class for subflows */
-	if (sk->sk_type == SOCK_STREAM && sk->sk_protocol == IPPROTO_TCP)
-		if (mptcp(tcp_sk(sk)) || tcp_sk(sk)->is_master_sk) {
-			sock_lock_init_class_and_name(sk, meta_slock_key_name,
-						      &meta_slock_key,
-						      meta_key_name,
-						      &meta_key);
-
-			/* We don't yet have the mptcp-point.
-			 * Thus we still need inet_sock_destruct
-			 */
-			sk->sk_destruct = inet_sock_destruct;
-			return;
-		}
-#endif
-
 	if (sk->sk_kern_sock)
 		sock_lock_init_class_and_name(
 			sk,
@@ -1689,16 +1679,7 @@ static struct sock *sk_prot_alloc(struct proto *prot, gfp_t priority,
 		if (!sk)
 			return sk;
 		if (want_init_on_alloc(priority))
-#ifdef CONFIG_MPTCP
-		{
-		if (prot->clear_sk)
-			prot->clear_sk(sk, prot->obj_size);
-		else
-#endif
 			sk_prot_clear_nulls(sk, prot->obj_size);
-#ifdef CONFIG_MPTCP
-	}
-#endif
 	} else
 		sk = kmalloc(prot->obj_size, priority);
 
@@ -1753,14 +1734,65 @@ struct sock *sk_alloc(struct net *net, int family, gfp_t priority,
 		      struct proto *prot, int kern)
 {
 	struct sock *sk;
+	
+	/* START_OF_KNOX_NPA */
+	struct pid *pid_struct = NULL;
+	struct task_struct *task = NULL;
+	int process_returnValue = -1;
+	char full_process_name[PROCESS_NAME_LEN_NAP] = {0};
+	struct pid *parent_pid_struct = NULL;
+	struct task_struct *parent_task = NULL;
+	int parent_returnValue = -1;
+	char full_parent_process_name[PROCESS_NAME_LEN_NAP] = {0};
+	/* END_OF_KNOX_NPA */
 
 	sk = sk_prot_alloc(prot, priority | __GFP_ZERO, family);
 	if (sk) {
 		sk->sk_family = family;
-		/*
-		 * See comment in struct sock definition to understand
-		 * why we need sk_prot_creator -acme
-		 */
+		/* START_OF_KNOX_NPA */
+		/* assign values to members of sock structure when npa flag is present */
+		sk->knox_uid = current->cred->uid.val;
+		sk->knox_pid = current->tgid;
+		sk->knox_puid = 0;
+		sk->knox_ppid = 0;
+		sk->knox_dns_uid = 0;
+		sk->knox_dns_pid = 0;
+		memset(sk->process_name,'\0',sizeof(sk->process_name));
+		memset(sk->parent_process_name,'\0',sizeof(sk->parent_process_name));
+		memset(sk->dns_process_name,'\0',sizeof(sk->dns_process_name));
+		memset(sk->domain_name,'\0',sizeof(sk->domain_name));
+		if (check_ncm_flag()) {
+			pid_struct = find_get_pid(current->tgid);
+			if (pid_struct != NULL) {
+				task = pid_task(pid_struct, PIDTYPE_PID);
+				if (task != NULL) {
+					process_returnValue = get_cmdline(task, full_process_name, sizeof(full_process_name)-1);
+					if (process_returnValue > 0) {
+						memcpy(sk->process_name, full_process_name, sizeof(sk->process_name)-1);
+					} else {
+						memcpy(sk->process_name, task->comm, sizeof(task->comm)-1);
+					}
+					if (task->parent != NULL) {
+						parent_pid_struct = find_get_pid(task->parent->tgid);
+						if (parent_pid_struct != NULL) {
+							parent_task = pid_task(parent_pid_struct, PIDTYPE_PID);
+							if (parent_task != NULL) {
+								parent_returnValue = get_cmdline(parent_task, full_parent_process_name, sizeof(full_parent_process_name)-1);
+								if (parent_returnValue > 0) {
+									memcpy(sk->parent_process_name, full_parent_process_name, sizeof(sk->parent_process_name)-1);
+								} else {
+									memcpy(sk->parent_process_name, parent_task->comm, sizeof(parent_task->comm)-1);
+								}
+								sk->knox_puid = parent_task->cred->uid.val;
+								sk->knox_ppid = parent_task->tgid;
+							}
+						}
+					}
+				}
+			}
+		}
+		/* END_OF_KNOX_NPA */
+		
 		sk->sk_prot = sk->sk_prot_creator = prot;
 		sk->sk_kern_sock = kern;
 		sock_lock_init(sk);
@@ -1926,9 +1958,6 @@ struct sock *sk_clone_lock(const struct sock *sk, const gfp_t priority)
 		atomic_set(&newsk->sk_zckey, 0);
 
 		sock_reset_flag(newsk, SOCK_DONE);
-#ifdef CONFIG_MPTCP
-		sock_reset_flag(newsk, SOCK_MPTCP);
-#endif
 
 		/* sk->sk_memcg will be populated at accept() time */
 		newsk->sk_memcg = NULL;
