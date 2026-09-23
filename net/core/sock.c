@@ -150,6 +150,11 @@
 #include <net/ncm.h>
 /* END_OF_KNOX_NPA */
 
+bool __attribute__((weak)) check_ncm_flag(void)
+{
+	return false;
+}
+
 static DEFINE_MUTEX(proto_list_mutex);
 static LIST_HEAD(proto_list);
 
