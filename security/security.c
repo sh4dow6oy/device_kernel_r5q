@@ -24,7 +24,6 @@
 #include <linux/integrity.h>
 #include <linux/ima.h>
 #include <linux/evm.h>
-#include <linux/task_integrity.h>
 #include <linux/fsnotify.h>
 #include <linux/mman.h>
 #include <linux/mount.h>
