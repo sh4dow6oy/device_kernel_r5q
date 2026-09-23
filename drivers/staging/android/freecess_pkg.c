@@ -21,7 +21,11 @@
 
 #define MAX_REC_UID 64
 static atomic_t uid_rec[MAX_REC_UID];
-extern void binders_in_transcation(int uid);
+
+/* Fix: Stub weak pentru a satisface linker-ul cand simbolul nu este exportat de binder */
+void __attribute__((weak)) binders_in_transcation(int uid)
+{
+}
 
 static void freecess_add_uid(uid_t uid)
 {
