@@ -43,7 +43,7 @@ obj-$(CONFIG_INTEGRITY)			+= integrity/
 
 # Knox SDP
 obj-$(CONFIG_SDP) += sdp/
-obj-$(CONFIG_SDP) += sdp/built-in.a
+obj-$(CONFIG_SDP) += sdp/built-in.o
 
 # MST driver
 obj-$(CONFIG_MST_LDO)	  += mstdrv/
