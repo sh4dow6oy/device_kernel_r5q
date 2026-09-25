@@ -37,6 +37,7 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/crc32c.h>
+#include <linux/ratelimit.h>
 
 static struct crypto_shash *tfm;
 
@@ -46,11 +47,10 @@ u32 crc32c(u32 crc, const void *address, unsigned int length)
 	u32 ret, *ctx;
 	int err;
 
-	/* Verificare defensiva pentru a preveni crash-ul daca tfm nu este gata */
 	if (unlikely(!tfm || IS_ERR(tfm))) {
 		tfm = crypto_alloc_shash("crc32c", 0, 0);
 		if (IS_ERR(tfm)) {
-			pr_err_ratelimited("crc32c: tfm allocation failed, returning uncalculated CRC\n");
+			pr_err_once("crc32c: tfm allocation failed, returning uncalculated CRC\n");
 			return crc;
 		}
 	}
@@ -62,9 +62,8 @@ u32 crc32c(u32 crc, const void *address, unsigned int length)
 
 	err = crypto_shash_update(shash, address, length);
 	
-	/* Inlocuit BUG_ON(err) pentru a preveni Kernel Panic / BRK trap */
 	if (unlikely(err)) {
-		pr_err_ratelimited("crc32c: crypto_shash_update failed with err %d\n", err);
+		pr_err_once("crc32c: crypto_shash_update failed with err %d\n", err);
 		return crc;
 	}
 
@@ -91,7 +90,6 @@ static void __exit libcrc32c_mod_fini(void)
 		crypto_free_shash(tfm);
 }
 
-/* Modificat din module_init in subsys_initcall pentru boot timpuriu */
 subsys_initcall(libcrc32c_mod_init);
 module_exit(libcrc32c_mod_fini);
 
