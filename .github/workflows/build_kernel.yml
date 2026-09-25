@@ -46,6 +46,11 @@ jobs:
             libncurses5-dev libssl-dev rsync zip unzip wget curl ca-certificates dwarves\
             gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu device-tree-compiler libelf-dev
 
+      - name: Install updated pahole
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dwarves 
+
       - name: Build New DTC
         run: |
           git clone --depth=1 https://git.kernel.org/pub/scm/utils/dtc/dtc.git
