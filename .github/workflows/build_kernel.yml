@@ -3,7 +3,7 @@ name: Galaxy S10 Lite (SM-G770F) Build
 on:
   workflow_dispatch:
   push:
-    branches: [ "main", "master", "copilot/**" ]
+    branches: [ "oneui" ]
 
 jobs:
   build:
@@ -16,18 +16,12 @@ jobs:
       - name: Checkout Source
         uses: actions/checkout@v4
         with:
+          repository: sh4dow6oy/device_kernel_r5q
+          ref: oneui
           submodules: recursive
           fetch-depth: 1
 
-      - name: Cache Proton Clang
-        id: cache-clang
-        uses: actions/cache@v4
-        with:
-          path: ~/toolchains/clang
-          key: ${{ runner.os }}-proton-clang-v1
-
       - name: Setup Proton Clang
-        if: steps.cache-clang.outputs.cache-hit != 'true'
         run: |
           mkdir -p ~/toolchains
           echo "Cloning Proton Clang..."
@@ -38,8 +32,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y bc bison build-essential ccache cpio flex git kmod \
             libncurses5-dev libssl-dev rsync zip unzip wget curl ca-certificates \
-            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu device-tree-compiler \
-            libelf-dev cmake libdw-dev
+            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
+            gcc-arm-linux-gnueabi binutils-arm-linux-gnueabi \
+            device-tree-compiler libelf-dev cmake libdw-dev
 
       # -----------------------------------------------------------------------
       # PAHOLE modern (v1.25) din surse pentru suport BTF complet
@@ -70,9 +65,9 @@ jobs:
           git clone --depth=1 https://github.com/AlfCraft07/AnyKernel3.git ~/AnyKernel3
           cd ~/AnyKernel3
           cat > anykernel.sh << 'EOF'
-          #!/sbin/sh
+          #! /sbin/sh
           # AnyKernel3 Script for R5Q
-          
+
           properties() { '
           kernel.string=sh4dow6oy Kernel for r5q platform - Built for r5q (SM-G770F)
           do.devicecheck=0
@@ -122,9 +117,6 @@ jobs:
 
           echo "--> Generating Base Config: r5q_eur_open_defconfig"
           make O=out r5q_eur_open_defconfig
-
-          # Aplicăm fix-ul pentru KGSL (Adreno SVM symbol error)
-          ./scripts/config --file out/.config --enable CONFIG_MSM_KGSL_SVM
 
           echo "--> Compiling Image.gz..."
           set -o pipefail
