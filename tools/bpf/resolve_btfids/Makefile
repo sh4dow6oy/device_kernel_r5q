@@ -6,6 +6,8 @@ OUTPUT ?= $(if $(O),$(abspath $(O)),$(CURDIR))
 HOSTCC ?= gcc
 HOSTCFLAGS ?=
 CFLAGS := $(HOSTCFLAGS) -O2 -g -Wall -Wextra -std=gnu11
+CFLAGS := $(filter-out -maarch64linux,$(CFLAGS))
+
 CFLAGS += -idirafter $(srctree)/include/uapi
 LDFLAGS ?=
 
