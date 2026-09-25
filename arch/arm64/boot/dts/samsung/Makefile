@@ -10,8 +10,8 @@ else ifeq ($(filter y,$(CONFIG_SEC_BLOOMQ_PROJECT)),y)
 dts-dirs += bloom
 else ifeq ($(filter y,$(CONFIG_SEC_BOLTQ5G_PROJECT)),y)
 dts-dirs += bolt
-else ifeq ($(filter y,$(CONFIG_SEC_R5Q_PROJECT) $(CONFIG_SEC_R3Q_PROJECT)),y)
-dts-dirs += renovation
+#else ifeq ($(filter y,$(CONFIG_SEC_R5Q_PROJECT) $(CONFIG_SEC_R3Q_PROJECT)),y)
+#dts-dirs += renovation
 else ifeq ($(filter y,$(CONFIG_SEC_ZODIAC_PROJECT)),y)
 dts-dirs += zodiac
 else ifeq ($(filter y,$(CONFIG_SEC_A82XQ_PROJECT)),y)
