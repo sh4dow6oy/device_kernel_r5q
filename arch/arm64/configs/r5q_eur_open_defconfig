@@ -6887,3 +6887,4 @@ CONFIG_OPLUS_BLK_MONITOR=y
 CONFIG_OPLUS_FEATURE_SIGKILL_DIAGNOSIS=y
 CONFIG_LSM="lockdown,yama,loadpin,safesetid,integrity,selinux,smack,tomoyo,apparmour,bpf"
 DEBUG_INFO_BTF_MODULES=y
+CONFIG_NET_ACT_BPF=y
