@@ -177,8 +177,8 @@ jobs:
           rm -rf out && mkdir -p out
 
           # 3. Build Base Config (TARGET_KERNEL_CONFIG)
-          echo "--> Generating Base Config: arch/arm64/configs/r5q_eur_open_defconfig"
-          make O=out arch/arm64/configs/r5q_eur_open_defconfig
+          echo "--> Generating Base Config: r5q_eur_open_defconfig"
+          make O=out r5q_eur_open_defconfig
 
           # 5. Compile (KERNEL_MAKE_CMD)
           # For devices with CONFIG_BUILD_ARM64_DT_OVERLAY=y (overlay mode):
