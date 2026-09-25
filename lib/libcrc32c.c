@@ -3,7 +3,7 @@
  *@Article{castagnoli-crc,
  * author =       { Guy Castagnoli and Stefan Braeuer and Martin Herrman},
  * title =        {{Optimization of Cyclic Redundancy-Check Codes with 24
- *                  and 32 Parity Bits}},
+ *                 and 32 Parity Bits}},
  * journal =      IEEE Transactions on Communication,
  * year =         {1993},
  * volume =       {41},
@@ -37,35 +37,21 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/crc32c.h>
-#include <linux/ratelimit.h>
 
 static struct crypto_shash *tfm;
 
 u32 crc32c(u32 crc, const void *address, unsigned int length)
 {
 	SHASH_DESC_ON_STACK(shash, tfm);
-	u32 ret, *ctx;
+	u32 ret, *ctx = (u32 *)shash_desc_ctx(shash);
 	int err;
 
-	if (unlikely(!tfm || IS_ERR(tfm))) {
-		tfm = crypto_alloc_shash("crc32c", 0, 0);
-		if (IS_ERR(tfm)) {
-			pr_err_once("crc32c: tfm allocation failed, returning uncalculated CRC\n");
-			return crc;
-		}
-	}
-
-	ctx = (u32 *)shash_desc_ctx(shash);
 	shash->tfm = tfm;
 	shash->flags = 0;
 	*ctx = crc;
 
 	err = crypto_shash_update(shash, address, length);
-	
-	if (unlikely(err)) {
-		pr_err_once("crc32c: crypto_shash_update failed with err %d\n", err);
-		return crc;
-	}
+	BUG_ON(err);
 
 	ret = *ctx;
 	barrier_data(ctx);
@@ -77,20 +63,15 @@ EXPORT_SYMBOL(crc32c);
 static int __init libcrc32c_mod_init(void)
 {
 	tfm = crypto_alloc_shash("crc32c", 0, 0);
-	if (IS_ERR(tfm)) {
-		pr_err("libcrc32c: Failed to allocate crc32c transform: %ld\n", PTR_ERR(tfm));
-		return PTR_ERR(tfm);
-	}
-	return 0;
+	return PTR_ERR_OR_ZERO(tfm);
 }
 
 static void __exit libcrc32c_mod_fini(void)
 {
-	if (tfm && !IS_ERR(tfm))
-		crypto_free_shash(tfm);
+	crypto_free_shash(tfm);
 }
 
-subsys_initcall(libcrc32c_mod_init);
+module_init(libcrc32c_mod_init);
 module_exit(libcrc32c_mod_fini);
 
 MODULE_AUTHOR("Clay Haapala <chaapala@cisco.com>");
