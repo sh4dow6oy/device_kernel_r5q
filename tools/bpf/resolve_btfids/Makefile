@@ -4,8 +4,8 @@ srctree := $(abspath $(CURDIR)/../../../)
 OUTPUT ?= $(if $(O),$(abspath $(O)),$(CURDIR))
 
 HOSTCC ?= gcc
-HOSTCFLAGS ?=
-CFLAGS := $(HOSTCFLAGS) -O2 -g -Wall -Wextra -std=gnu11
+# Forțăm CFLAGS doar cu opțiuni curate pentru gazdă, ignorând flag-urile de target
+CFLAGS := -O2 -g -Wall -Wextra -std=gnu11
 CFLAGS += -idirafter $(srctree)/include/uapi
 LDFLAGS ?=
 
@@ -23,3 +23,4 @@ $(TARGET): $(srctree)/tools/bpf/resolve_btfids/main.c | $(OUTPUT)
 
 clean:
 	rm -f $(TARGET)
+EOF
