@@ -38,11 +38,8 @@ static struct sync_file *sync_file_alloc(void)
 
 	sync_file->file = anon_inode_getfile("sync_file", &sync_file_fops,
 					     sync_file, 0);
-	if (IS_ERR(sync_file->file)) {
-		pr_err("%s: anon_inode_getfile failed: %d\n", __func__,
-			PTR_ERR(sync_file->file));
+	if (IS_ERR(sync_file->file))
 		goto err;
-	}
 
 	init_waitqueue_head(&sync_file->wq);
 
@@ -78,10 +75,8 @@ struct sync_file *sync_file_create(struct dma_fence *fence)
 	struct sync_file *sync_file;
 
 	sync_file = sync_file_alloc();
-	if (!sync_file) {
-		pr_err("%s: sync_file_alloc failed\n", __func__);
+	if (!sync_file)
 		return NULL;
-	}
 
 	sync_file->fence = dma_fence_get(fence);
 
