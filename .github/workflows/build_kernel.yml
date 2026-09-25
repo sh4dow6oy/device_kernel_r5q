@@ -46,65 +46,6 @@ jobs:
             libncurses5-dev libssl-dev rsync zip unzip wget curl ca-certificates dwarves\
             gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu device-tree-compiler libelf-dev
 
-      # -----------------------------------------------------------------------
-      # KERNELSU-NEXT: Using Legacy Setup Script
-      # -----------------------------------------------------------------------
-      - name: Setup KernelSU-Next
-        run: |
-          echo "=========================================="
-          echo "KernelSU-Next Setup (Legacy)"
-          echo "=========================================="
-          
-          # Download and run KernelSU-Next legacy setup script
-          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/legacy/kernel/setup.sh" | bash -s legacy
-          
-          # --------------------------------------------------------------
-          # Compatibility patches applied on top of the freshly-pulled,
-          # unpinned KernelSU-Next `legacy` source.
-          # --------------------------------------------------------------
-          python3 - <<'PYEOF'
-          import sys
-
-          def patch(path, old, new, label):
-              with open(path) as f:
-                  content = f.read()
-              if old not in content:
-                  print(f"::error::[{label}] target string not found in {path} - "
-                        f"KernelSU-Next source has changed upstream, patch needs review")
-                  sys.exit(1)
-              with open(path, "w") as f:
-                  f.write(content.replace(old, new))
-              print(f"[{label}] applied to {path}")
-
-          # This vendor's 4.14.357 tree only exposes ktime_get_boottime_ts64()/
-          # get_monotonic_boottime64(); it does NOT define the plain
-          # get_monotonic_boottime() that KernelSU-Next's own
-          # "#if KERNEL_VERSION(4,19,0) <= LINUX_VERSION_CODE" check falls back
-          # to on pre-4.19-numbered kernels. Force the modern call unconditionally.
-          patch(
-              "KernelSU-Next/kernel/sulog/event.c",
-              "get_monotonic_boottime(&ts)",
-              "ktime_get_boottime_ts64(&ts)",
-              "event.c timespec64",
-          )
-
-          # Fix KernelSU-Next selinux_hide so app processes don't crash:
-          # selinuxfs expects filp->private_data to be `struct page *`, but
-          # KernelSU-Next passes `page_address(data)` (kernel virtual address),
-          # causing page_to_pfn() to map an invalid physical address and trigger
-          # a Synchronous External Abort (ESR 0x92000006) on app launch.
-          patch(
-              "KernelSU-Next/kernel/feature/selinux_hide.c",
-              "filp->private_data = page_address(data);",
-              "filp->private_data = data;",
-              "selinux_hide page pointer",
-          )
-          PYEOF
-          
-          echo "=========================================="
-          echo "✓ KernelSU-Next setup complete"
-          echo "=========================================="
-
       - name: Setup AnyKernel3
         run: |
           git clone --depth=1 https://github.com/AlfCraft07/AnyKernel3.git ~/AnyKernel3
@@ -116,7 +57,7 @@ jobs:
           ## AnyKernel setup
           # begin properties
           properties() { '
-          kernel.string=Legion Kernel for atoll platform - Built for r5q (SM-G770F)
+          kernel.string=sh4dow6oy Kernel for r5q platform - Built for r5q (SM-G770F)
           do.devicecheck=0
           do.modules=0
           do.systemless=1
