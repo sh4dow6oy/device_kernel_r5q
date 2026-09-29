@@ -26,33 +26,16 @@
 #include <linux/hashtable.h>
 #include <linux/scatterlist.h>
 #include <linux/bio-crypt-ctx.h>
+#include <linux/siphash.h>
+#include <crypto/sha.h>
 
 #include "fscrypt_private.h"
-#ifdef CONFIG_FS_CRYPTO_SEC_EXTENSION
-#include "crypto_sec.h"
-static int derive_key_aes(const u8 *master_key,
-			  const u8 nonce[FS_KEY_DERIVATION_NONCE_SIZE],
-			  u8 *derived_key, unsigned int derived_keysize) __attribute__((unused));
-static int setup_v1_file_key_derived(struct fscrypt_info *ci,
-				     const u8 *raw_master_key) __attribute__((unused));
-#endif
-#ifdef CONFIG_FSCRYPT_SDP
-#ifdef CONFIG_FS_CRYPTO_SEC_EXTENSION
-static int __find_and_derive_v1_file_key_iv(
-					struct fscrypt_key *key,
-					struct fscrypt_info *ci,
-					const u8 *raw_master_key);
-#else
-static int __find_and_derive_v1_file_key(
-					struct fscrypt_key *key,
-					struct fscrypt_info *ci,
-					const u8 *raw_master_key);
-#endif
-#endif
 
 /* Table of keys referenced by DIRECT_KEY policies */
 static DEFINE_HASHTABLE(fscrypt_direct_keys, 6); /* 6 bits = 64 buckets */
 static DEFINE_SPINLOCK(fscrypt_direct_keys_lock);
+
+static struct crypto_shash *essiv_hash_tfm;
 
 /*
  * v1 key derivation function.  This generates the derived key by encrypting the
@@ -103,6 +86,36 @@ out:
 	skcipher_request_free(req);
 	crypto_free_skcipher(tfm);
 	return res;
+}
+
+static int fscrypt_do_sha256(const u8 *src, int srclen, u8 *dst)
+{
+	struct crypto_shash *tfm = READ_ONCE(essiv_hash_tfm);
+
+	/* init hash transform on demand */
+	if (unlikely(!tfm)) {
+		struct crypto_shash *prev_tfm;
+
+		tfm = crypto_alloc_shash("sha256", 0, 0);
+		if (IS_ERR(tfm)) {
+			fscrypt_warn(NULL,
+				     "error allocating SHA-256 transform: %ld",
+				     PTR_ERR(tfm));
+			return PTR_ERR(tfm);
+		}
+		prev_tfm = cmpxchg(&essiv_hash_tfm, NULL, tfm);
+		if (prev_tfm) {
+			crypto_free_shash(tfm);
+			tfm = prev_tfm;
+		}
+	}
+
+	{
+		SHASH_DESC_ON_STACK(desc, tfm);
+		desc->tfm = tfm;
+		desc->flags = 0;
+		return crypto_shash_digest(desc, src, srclen, dst);
+	}
 }
 
 /*
@@ -284,88 +297,6 @@ static int setup_v1_file_key_direct(struct fscrypt_info *ci,
 	return 0;
 }
 
-static int setup_v1_file_key_derived_iv(struct fscrypt_info *ci,
-				     const u8 *raw_master_key)
-{
-	u8 *derived_key;
-	int err;
-	int i;
-	union {
-		u8 bytes[FSCRYPT_MAX_HW_WRAPPED_KEY_SIZE];
-		u32 words[FSCRYPT_MAX_HW_WRAPPED_KEY_SIZE / sizeof(u32)];
-	} key_new;
-#ifdef CONFIG_FSCRYPT_SDP
-	sdp_fs_command_t *cmd = NULL;
-#endif
-	u8 *iv_key = NULL;
-
-	derived_key = kmalloc(ci->ci_mode->keysize, GFP_NOFS);
-	if (!derived_key)
-		return -ENOMEM;	
-
-#ifdef CONFIG_FSCRYPT_SDP
-	if (fscrypt_sdp_is_classified(ci)) {
-		err = derive_fek_v1(ci->ci_inode, ci, derived_key, ci->ci_mode->keysize);
-		if (err) {
-			if (fscrypt_sdp_is_sensitive(ci)) {
-				cmd = sdp_fs_command_alloc(FSOP_AUDIT_FAIL_DECRYPT,
-						current->tgid, ci->ci_sdp_info->engine_id, -1,
-						ci->ci_inode->i_ino, err, GFP_NOFS);
-				if (cmd) {
-					sdp_fs_request(cmd, NULL);
-					sdp_fs_command_free(cmd);
-				}
-			}
-
-			goto out;
-		}
-
-		memcpy(key_new.bytes, derived_key, ci->ci_mode->keysize);
-		for (i = 0; i < ARRAY_SIZE(key_new.words); i++)
-			__cpu_to_be32s(&key_new.words[i]);
-		memcpy(derived_key, key_new.bytes, ci->ci_mode->keysize);
-		memzero_explicit(key_new.bytes, sizeof(key_new.bytes));
-
-		fscrypt_sdp_update_conv_status(ci);
-		goto sdp_dek;
-	}
-#endif
-	if (!S_ISREG(ci->ci_inode->i_mode))
-		iv_key = ci->ci_iv_key;
-
-	err = fscrypt_sec_get_key_aes(ci, raw_master_key, iv_key, derived_key);
-	if (err)
-		goto out;
-
-	/*Support legacy ice based content encryption mode*/
-	if ((fscrypt_policy_contents_mode(&ci->ci_policy) ==
-					  FSCRYPT_MODE_PRIVATE) &&
-					  fscrypt_using_inline_encryption(ci)) {
-
-		ci->ci_owns_key = true;
-		memcpy(key_new.bytes, derived_key, ci->ci_mode->keysize); 
-
-		for (i = 0; i < ARRAY_SIZE(key_new.words); i++)
-			__cpu_to_be32s(&key_new.words[i]);
-
-		err = fscrypt_prepare_inline_crypt_key(&ci->ci_key,
-						       key_new.bytes,
-						       ci->ci_mode->keysize,
-						       false,
-						       ci); 
-		goto out;
-	}
-
-#ifdef CONFIG_FSCRYPT_SDP
-sdp_dek:
-#endif
-
-	err = fscrypt_set_per_file_enc_key(ci, derived_key);
-out:
-	kzfree(derived_key);
-	return err;
-}
-
 /* v1 policy, !DIRECT_KEY: derive the file's encryption key */
 static int setup_v1_file_key_derived(struct fscrypt_info *ci,
 				     const u8 *raw_master_key)
@@ -404,6 +335,26 @@ static int setup_v1_file_key_derived(struct fscrypt_info *ci,
 			goto out;
 		}
 
+		if (ci->ci_policy.v1.flags &
+		    FSCRYPT_POLICY_FLAG_IV_INO_LBLK_32) {
+			union {
+				siphash_key_t k;
+				u8 bytes[SHA256_DIGEST_SIZE];
+			} ino_hash_key;
+			int err;
+
+			/* hashed_ino = SipHash(key=SHA256(master_key),
+			 * data=i_ino)
+			 */
+			err = fscrypt_do_sha256(derived_key,
+						ci->ci_mode->keysize / 2,
+						ino_hash_key.bytes);
+			if (err)
+				return err;
+			ci->ci_hashed_ino = siphash_1u64(ci->ci_inode->i_ino,
+							 &ino_hash_key.k);
+		}
+
 		memcpy(key_new.bytes, derived_key, ci->ci_mode->keysize);
 		for (i = 0; i < ARRAY_SIZE(key_new.words); i++)
 			__cpu_to_be32s(&key_new.words[i]);
@@ -420,6 +371,25 @@ static int setup_v1_file_key_derived(struct fscrypt_info *ci,
 					  FSCRYPT_MODE_PRIVATE) &&
 					  fscrypt_using_inline_encryption(ci)) {
 		ci->ci_owns_key = true;
+		if (ci->ci_policy.v1.flags &
+		    FSCRYPT_POLICY_FLAG_IV_INO_LBLK_32) {
+			union {
+				siphash_key_t k;
+				u8 bytes[SHA256_DIGEST_SIZE];
+			} ino_hash_key;
+			int err;
+
+			/* hashed_ino = SipHash(key=SHA256(master_key),
+			 * data=i_ino)
+			 */
+			err = fscrypt_do_sha256(raw_master_key,
+						ci->ci_mode->keysize / 2,
+						ino_hash_key.bytes);
+			if (err)
+				return err;
+			ci->ci_hashed_ino = siphash_1u64(ci->ci_inode->i_ino,
+							 &ino_hash_key.k);
+		}
 		memcpy(key_new.bytes, raw_master_key, ci->ci_mode->keysize);
 
 		for (i = 0; i < ARRAY_SIZE(key_new.words); i++)
@@ -460,11 +430,7 @@ int fscrypt_setup_v1_file_key(struct fscrypt_info *ci, const u8 *raw_master_key)
 	if (ci->ci_policy.v1.flags & FSCRYPT_POLICY_FLAG_DIRECT_KEY)
 		return setup_v1_file_key_direct(ci, raw_master_key);
 	else
-#ifdef CONFIG_FS_CRYPTO_SEC_EXTENSION
-		return setup_v1_file_key_derived_iv(ci, raw_master_key);
-#else
 		return setup_v1_file_key_derived(ci, raw_master_key);
-#endif
 }
 
 int fscrypt_setup_v1_file_key_via_subscribed_keyrings(struct fscrypt_info *ci)
@@ -491,35 +457,6 @@ int fscrypt_setup_v1_file_key_via_subscribed_keyrings(struct fscrypt_info *ci)
 }
 
 #ifdef CONFIG_FSCRYPT_SDP
-#ifdef CONFIG_FS_CRYPTO_SEC_EXTENSION
-static int __find_and_derive_v1_file_key_iv(
-					struct fscrypt_key *key,
-					struct fscrypt_info *ci,
-					const u8 *raw_master_key)
-{
-	u8 *derived_key;
-	int err;
-	u8 *iv_key = NULL;
-
-	derived_key = kmalloc(ci->ci_mode->keysize, GFP_NOFS);
-	if (!derived_key)
-		return -ENOMEM;
-
-	if (!S_ISREG(ci->ci_inode->i_mode))
-		iv_key = ci->ci_iv_key;
-
-	err = fscrypt_sec_get_key_aes(ci, raw_master_key, iv_key, derived_key);
-	if (err)
-		goto out;
-
-	memcpy(key->raw, derived_key, ci->ci_mode->keysize);
-	key->size = ci->ci_mode->keysize;
-
-out:
-	kzfree(derived_key);
-	return err;
-}
-#else
 static int __find_and_derive_v1_file_key(
 					struct fscrypt_key *key,
 					struct fscrypt_info *ci,
@@ -553,7 +490,6 @@ out:
 	kzfree(derived_key);
 	return err;
 }
-#endif
 
 static inline int __find_and_derive_v1_fskey_via_subscribed_keyrings(
 					const struct fscrypt_info *ci,
@@ -679,11 +615,7 @@ int find_and_derive_v1_file_key(
 					struct fscrypt_info *ci,
 					const u8 *raw_master_key)
 {
-#ifdef CONFIG_FS_CRYPTO_SEC_EXTENSION
-	return __find_and_derive_v1_file_key_iv(key, ci, raw_master_key);
-#else
 	return __find_and_derive_v1_file_key(key, ci, raw_master_key);
-#endif
 }
 
 int find_and_derive_v1_fskey_via_subscribed_keyrings(

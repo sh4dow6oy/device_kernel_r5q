@@ -30,13 +30,6 @@ config FS_ENCRYPTION_INLINE_CRYPT
 	help
 	  Enable fscrypt to use inline encryption hardware if available.
 
-config FS_CRYPTO_SEC_EXTENSION
-	bool "FS crypto extension for Samsung Mobile"
-	default n
-	depends on FS_ENCRYPTION
-	help
-	  This option enable the cc certification logic for file based encryption.
-
 config FSCRYPT_SDP
 	bool "Sensitive Data Protection for Per-file-encryption"
 	depends on FS_ENCRYPTION

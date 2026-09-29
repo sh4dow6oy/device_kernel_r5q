@@ -27,11 +27,7 @@
 #include <crypto/skcipher.h>
 #include "fscrypt_private.h"
 #include <linux/genhd.h>
-#ifdef CONFIG_FS_CRYPTO_SEC_EXTENSION
-#include "crypto_sec.h"
-#else
-static inline int __init fscrypt_sec_crypto_init(void) { return 0; }
-#endif
+
 #ifdef CONFIG_FSCRYPT_SDP
 #include "sdp/sdp_crypto.h"
 #endif
@@ -97,25 +93,31 @@ void fscrypt_generate_iv(union fscrypt_iv *iv, u64 lblk_num,
 #endif
 	memset(iv, 0, ci->ci_mode->ivsize);
 
-	if (flags & FSCRYPT_POLICY_FLAG_IV_INO_LBLK_64) {
-		WARN_ON_ONCE(lblk_num > U32_MAX);
-		WARN_ON_ONCE(ci->ci_inode->i_ino > U32_MAX);
-		lblk_num |= (u64)ci->ci_inode->i_ino << 32;
-	} else if (flags & FSCRYPT_POLICY_FLAG_IV_INO_LBLK_32) {
-		WARN_ON_ONCE(lblk_num > U32_MAX);
-		lblk_num = (u32)(ci->ci_hashed_ino + lblk_num);
-	} else if (flags & FSCRYPT_POLICY_FLAG_DIRECT_KEY) {
-		memcpy(iv->nonce, ci->ci_nonce, FS_KEY_DERIVATION_NONCE_SIZE);
-	} else if ((fscrypt_policy_contents_mode(&ci->ci_policy) ==
-						 FSCRYPT_MODE_PRIVATE)
-						 && inlinecrypt) {
-		if (ci->ci_inode->i_sb->s_type->name) {
-			if (!strcmp(ci->ci_inode->i_sb->s_type->name, "f2fs")) {
+	if ((fscrypt_policy_contents_mode(&ci->ci_policy) ==
+					  FSCRYPT_MODE_PRIVATE)
+					  && inlinecrypt) {
+		if (ci->ci_inode->i_sb->s_type->name &&
+		    !strcmp(ci->ci_inode->i_sb->s_type->name, "f2fs")) {
+			if (flags & FSCRYPT_POLICY_FLAG_IV_INO_LBLK_32) {
+				WARN_ON_ONCE(lblk_num > U32_MAX);
+				lblk_num = (u32)(ci->ci_hashed_ino + lblk_num);
+			} else {
 				WARN_ON_ONCE(lblk_num > U32_MAX);
 				WARN_ON_ONCE(ci->ci_inode->i_ino > U32_MAX);
 				lblk_num |= (u64)ci->ci_inode->i_ino << 32;
 			}
 		}
+	} else if (flags & FSCRYPT_POLICY_FLAG_IV_INO_LBLK_64) {
+		WARN_ON_ONCE(lblk_num > U32_MAX);
+		WARN_ON_ONCE(ci->ci_inode->i_ino > U32_MAX);
+		lblk_num |= (u64)ci->ci_inode->i_ino << 32;
+	} else if ((flags & FSCRYPT_POLICY_FLAG_IV_INO_LBLK_32) &&
+		   !(fscrypt_policy_contents_mode(&ci->ci_policy) ==
+		     FSCRYPT_MODE_PRIVATE)) {
+		WARN_ON_ONCE(lblk_num > U32_MAX);
+		lblk_num = (u32)(ci->ci_hashed_ino + lblk_num);
+	} else if (flags & FSCRYPT_POLICY_FLAG_DIRECT_KEY) {
+		memcpy(iv->nonce, ci->ci_nonce, FS_KEY_DERIVATION_NONCE_SIZE);
 	}
 	iv->lblk_num = cpu_to_le64(lblk_num);
 }
@@ -230,13 +232,6 @@ struct page *fscrypt_encrypt_pagecache_blocks(struct page *page,
 	unsigned int i;
 	int err;
 
-#ifdef CONFIG_DDAR
-	if (fscrypt_dd_encrypted_inode(inode)) {
-		// Invert crypto order. OEM crypto must perform after 3rd party crypto
-		return NULL;
-	}
-#endif
-
 	if (WARN_ON_ONCE(!PageLocked(page)))
 		return ERR_PTR(-EINVAL);
 
@@ -321,13 +316,6 @@ int fscrypt_decrypt_pagecache_blocks(struct page *page, unsigned int len,
 
 	if (WARN_ON_ONCE(len <= 0 || !IS_ALIGNED(len | offs, blocksize)))
 		return -EINVAL;
-
-#ifdef CONFIG_DDAR
-	if (fscrypt_dd_encrypted_inode(inode)) {
-		// Invert crypto order. OEM crypto must perform after 3rd party crypto
-		return 0;
-	}
-#endif
 
 	for (i = offs; i < offs + len; i += blocksize, lblk_num++) {
 		err = fscrypt_crypt_block(inode, FS_DECRYPT, lblk_num, page,
@@ -453,25 +441,10 @@ static int __init fscrypt_init(void)
 #ifdef CONFIG_FSCRYPT_SDP
 	if (!fscrypt_sdp_init_sdp_info_cachep())
 		goto fail_free_info;
-#endif
 
-	err = fscrypt_sec_crypto_init();
-	if (err)
-#ifndef CONFIG_FSCRYPT_SDP
-		goto fail_free_info;
-#else
-		goto fail_free_sdp_info;
-#endif
-
-#ifdef CONFIG_FSCRYPT_SDP
 	err = sdp_crypto_init();
 #endif
 	return 0;
-
-#ifdef CONFIG_FSCRYPT_SDP
-fail_free_sdp_info:
-	fscrypt_sdp_release_sdp_info_cachep();
-#endif
 
 fail_free_info:
 	kmem_cache_destroy(fscrypt_info_cachep);
