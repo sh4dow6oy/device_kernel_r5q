@@ -51,6 +51,10 @@ u32 crc32c(u32 crc, const void *address, unsigned int length)
 	*ctx = crc;
 
 	err = crypto_shash_update(shash, address, length);
+	
+	if (err)
+	    pr_err("CRC32C: crypto_shash_update() failed = %d\n", err);
+	
 	BUG_ON(err);
 
 	ret = *ctx;
