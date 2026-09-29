@@ -22,6 +22,12 @@
 #include <linux/pm_runtime.h>
 #include <linux/badblocks.h>
 
+#ifdef CONFIG_BLOCK_SUPPORT_STLOG
+#include <linux/fslog.h>
+#else
+#define ST_LOG(fmt, ...)
+#endif
+
 #include "blk.h"
 
 static DEFINE_MUTEX(block_class_lock);
@@ -572,7 +578,13 @@ static void register_disk(struct device *parent, struct gendisk *disk)
 	struct device *ddev = disk_to_dev(disk);
 	struct block_device *bdev;
 	struct disk_part_iter piter;
+	struct hd_struct *part;
 	int err;
+
+#ifdef CONFIG_BLOCK_SUPPORT_STLOG
+	int major = disk->major;
+	int first_minor = disk->first_minor;
+#endif
 
 	ddev->parent = parent;
 
@@ -624,9 +636,15 @@ exit:
 	/* announce disk after possible partitions are created */
 	dev_set_uevent_suppress(ddev, 0);
 	kobject_uevent(&ddev->kobj, KOBJ_ADD);
+	ST_LOG("<%s> KOBJ_ADD %d:%d", __func__, major, first_minor);
 
 	/* announce possible partitions */
 	disk_part_iter_init(&piter, disk, 0);
+	while ((part = disk_part_iter_next(&piter))) {
+		kobject_uevent(&part_to_dev(part)->kobj, KOBJ_ADD);
+		ST_LOG("<%s> KOBJ_ADD %d:%d", __func__, major,
+					first_minor + part->partno);
+	}
 	disk_part_iter_exit(&piter);
 }
 
@@ -702,6 +720,10 @@ void del_gendisk(struct gendisk *disk)
 	struct disk_part_iter piter;
 	struct hd_struct *part;
 
+#ifdef CONFIG_BLOCK_SUPPORT_STLOG
+	struct device *dev;
+#endif
+
 	blk_integrity_del(disk);
 	disk_del_events(disk);
 
@@ -741,6 +763,11 @@ void del_gendisk(struct gendisk *disk)
 	if (!sysfs_deprecated)
 		sysfs_remove_link(block_depr, dev_name(disk_to_dev(disk)));
 	pm_runtime_set_memalloc_noio(disk_to_dev(disk), false);
+#ifdef CONFIG_BLOCK_SUPPORT_STLOG
+	dev = disk_to_dev(disk);
+	ST_LOG("<%s> KOBJ_REMOVE %d:%d %s", __func__,
+		MAJOR(dev->devt), MINOR(dev->devt), dev->kobj.name);
+#endif
 	device_del(disk_to_dev(disk));
 }
 EXPORT_SYMBOL(del_gendisk);
@@ -1136,10 +1163,18 @@ static ssize_t disk_discard_alignment_show(struct device *dev,
 	return sprintf(buf, "%d\n", queue_discard_alignment(disk->queue));
 }
 
+/* IOPP-bigdata-v1.0.4.14 */
 #undef DISCARD
 
 #define DISCARD	(WRITE + 1)
-#define UNSIGNED_DIFF(n, o) (((n) >= (o)) ? ((n) - (o)) : ((n) + (0 - (o))))
+#define DIFF_IOs(n, o, i) ( \
+	((n)->ios[(i)] >= (o)->ios[(i)]) ? \
+	((n)->ios[(i)] - (o)->ios[(i)]) : \
+	((n)->sectors[(i)] + (0 - (o)->sectors[(i)])))
+#define DIFF_KBs(n, o, i) ( \
+	((n)->sectors[(i)] >= (o)->sectors[(i)]) ? \
+	((n)->sectors[(i)] - (o)->sectors[(i)]) / 2 : \
+	((n)->sectors[(i)] + (0 - (o)->sectors[(i)])) / 2)
 
 static ssize_t disk_ios_show(struct device *dev,
 			     struct device_attribute *attr,
@@ -1164,7 +1199,6 @@ static ssize_t disk_ios_show(struct device *dev,
 	new.sectors[READ] = part_stat_read(hd, sectors[READ]);
 	new.sectors[WRITE] = part_stat_read(hd, sectors[WRITE]);
 	new.sectors[DISCARD] = part_stat_read(hd, discard_sectors);
-	new.iot = (unsigned long)(disk->queue->in_flight_time / USEC_PER_SEC);
 
 	get_monotonic_boottime(&(new.uptime));
 	hours = (new.uptime.tv_sec - old->uptime.tv_sec) / 60; /* to minutes */
@@ -1173,16 +1207,14 @@ static ssize_t disk_ios_show(struct device *dev,
 	ret = sprintf(buf, "\"ReadC\":\"%lu\",\"ReadKB\":\"%lu\","
 			   "\"WriteC\":\"%lu\",\"WriteKB\":\"%lu\","
 			   "\"DiscardC\":\"%lu\",\"DiscardKB\":\"%lu\","
-			   "\"IOT\":\"%lu\","
 			   "\"Hours\":\"%ld\"\n",
-			UNSIGNED_DIFF(new.ios[READ], old->ios[READ]),
-			UNSIGNED_DIFF(new.sectors[READ], old->sectors[READ]) / 2, /* KB */
-			UNSIGNED_DIFF(new.ios[WRITE], old->ios[WRITE]),
-			UNSIGNED_DIFF(new.sectors[WRITE], old->sectors[WRITE]) / 2,
-			UNSIGNED_DIFF(new.ios[DISCARD], old->ios[DISCARD]),
-			UNSIGNED_DIFF(new.sectors[DISCARD], old->sectors[DISCARD]) / 2,
-			UNSIGNED_DIFF(new.iot, old->iot),
-			hours);
+			   DIFF_IOs(&new, old, READ),
+			   DIFF_KBs(&new, old, READ),
+			   DIFF_IOs(&new, old, WRITE),
+			   DIFF_KBs(&new, old, WRITE),
+			   DIFF_IOs(&new, old, DISCARD),
+			   DIFF_KBs(&new, old, DISCARD),
+			   hours);
 
 	disk->accios.ios[READ] = new.ios[READ];
 	disk->accios.ios[WRITE] = new.ios[WRITE];
@@ -1191,11 +1223,10 @@ static ssize_t disk_ios_show(struct device *dev,
 	disk->accios.sectors[WRITE] = new.sectors[WRITE];
 	disk->accios.sectors[DISCARD] = new.sectors[DISCARD];
 	disk->accios.uptime = new.uptime;
-	disk->accios.iot = new.iot;
 
 	return ret;
 }
-
+#undef DISCARD
 
 /* IOPP-iomon-v1.0.4.14 */
 #define SEC2MB(x) ((unsigned long)((x) / 2 / 1024))
@@ -1260,139 +1291,6 @@ static ssize_t iomon_store(struct device *dev,
 	return count;
 }
 
-enum {
-	HIOTIME_LOW = 5000,
-	HIOTIME_MID = 10000,
-	HIOTIME_HIGH = 30000
-};
-
-static ssize_t hiotime_show(struct device *dev,
-			  struct device_attribute *attr,
-			  char *buf)
-{
-	struct gendisk *disk = dev_to_disk(dev);
-	int ret;
-
-	ret = sprintf(buf, "%lu, %lu, %lu\n",
-			disk->hiotime[0],
-			disk->hiotime[1],
-			disk->hiotime[2]);
-
-	return ret;
-}
-
-static ssize_t hiotime_store(struct device *dev,
-			   struct device_attribute *attr,
-			   const char *buf, size_t count)
-{
-	struct gendisk *disk = dev_to_disk(dev);
-	int heavy_io_time;
-	char dev_name[20];
-
-	sscanf(buf, "%19s %d", dev_name, &heavy_io_time);
-
-	/* It only supports sda now */
-	if (strcmp(dev_name, "sda") || count < 2)
-		return -EINVAL;
-
-	if (heavy_io_time < HIOTIME_LOW)
-		return -EINVAL;
-	else if (heavy_io_time < HIOTIME_MID)
-		disk->hiotime[0]++;
-	else if (heavy_io_time < HIOTIME_HIGH)
-		disk->hiotime[1]++;
-	else
-		disk->hiotime[2]++;
-
-	return count;
-}
-
-static ssize_t iobd_show(struct device *dev,
-			  struct device_attribute *attr,
-			  char *buf)
-{
-	struct gendisk *disk = dev_to_disk(dev);
-	struct hd_struct *hd = dev_to_part(dev);
-	struct accumulated_stats *old = &(disk->accios);
-	struct accumulated_stats new;
-	int cpu;
-	int ret;
-	int idx, sg;
-
-	cpu = part_stat_lock();
-	part_round_stats(disk->queue, cpu, hd);
-	part_stat_unlock();
-
-	for (idx = 0; idx < FSYNC_TIME_GROUP_MAX; idx++)
-		new.fsync_time_cnt[idx] = read_fsync_time_cnt(idx);
-
-	for (idx = 0; idx < 3; idx++) /* READ, WRITE and DISCARD */
-		for (sg = 0; sg < IO_SIZE_GROUP_MAX; sg++)
-			new.size_cnt[idx][sg] = part_stat_read(hd, size_cnt[idx][sg]);
-
-	ret = sprintf(buf, "\"FTC0\":\"%lu\",\"FTC1\":\"%lu\","
-			   "\"FTC2\":\"%lu\",\"FTC3\":\"%lu\","
-			   "\"RSC2\":\"%lu\",\"RSC3\":\"%lu\","
-			   "\"RSC4\":\"%lu\",\"RSC5\":\"%lu\","
-			   "\"RSC6\":\"%lu\",\"RSC7\":\"%lu\","
-			   "\"RSC8\":\"%lu\",\"RSC9\":\"%lu\","
-			   "\"WSC2\":\"%lu\",\"WSC3\":\"%lu\","
-			   "\"WSC4\":\"%lu\",\"WSC5\":\"%lu\","
-			   "\"WSC6\":\"%lu\",\"WSC7\":\"%lu\","
-			   "\"WSC8\":\"%lu\",\"WSC9\":\"%lu\","
-			   "\"DSC5\":\"%lu\",\"DSC6\":\"%lu\","
-			   "\"DSC7\":\"%lu\",\"DSC8\":\"%lu\","
-			   "\"DSC9\":\"%lu\",\"DSC10\":\"%lu\","
-			   "\"DSC11\":\"%lu\",\"DSC12\":\"%lu\","
-			   "\"HIOT0\":\"%lu\",\"HIOT1\":\"%lu\","
-			   "\"HIOT2\":\"%lu\"\n",
-			UNSIGNED_DIFF(new.fsync_time_cnt[0], old->fsync_time_cnt[0]),
-			UNSIGNED_DIFF(new.fsync_time_cnt[1], old->fsync_time_cnt[1]),
-			UNSIGNED_DIFF(new.fsync_time_cnt[2], old->fsync_time_cnt[2]),
-			UNSIGNED_DIFF(new.fsync_time_cnt[3], old->fsync_time_cnt[3]),
-			UNSIGNED_DIFF(new.size_cnt[READ][0], old->size_cnt[READ][0]),
-			UNSIGNED_DIFF(new.size_cnt[READ][1], old->size_cnt[READ][1]),
-			UNSIGNED_DIFF(new.size_cnt[READ][2], old->size_cnt[READ][2]),
-			UNSIGNED_DIFF(new.size_cnt[READ][3], old->size_cnt[READ][3]),
-			UNSIGNED_DIFF(new.size_cnt[READ][4], old->size_cnt[READ][4]),
-			UNSIGNED_DIFF(new.size_cnt[READ][5], old->size_cnt[READ][5]),
-			UNSIGNED_DIFF(new.size_cnt[READ][6], old->size_cnt[READ][6]),
-			UNSIGNED_DIFF(new.size_cnt[READ][7], old->size_cnt[READ][7]),
-			UNSIGNED_DIFF(new.size_cnt[WRITE][0], old->size_cnt[WRITE][0]),
-			UNSIGNED_DIFF(new.size_cnt[WRITE][1], old->size_cnt[WRITE][1]),
-			UNSIGNED_DIFF(new.size_cnt[WRITE][2], old->size_cnt[WRITE][2]),
-			UNSIGNED_DIFF(new.size_cnt[WRITE][3], old->size_cnt[WRITE][3]),
-			UNSIGNED_DIFF(new.size_cnt[WRITE][4], old->size_cnt[WRITE][4]),
-			UNSIGNED_DIFF(new.size_cnt[WRITE][5], old->size_cnt[WRITE][5]),
-			UNSIGNED_DIFF(new.size_cnt[WRITE][6], old->size_cnt[WRITE][6]),
-			UNSIGNED_DIFF(new.size_cnt[WRITE][7], old->size_cnt[WRITE][7]),
-			UNSIGNED_DIFF(new.size_cnt[DISCARD][0], old->size_cnt[DISCARD][0]),
-			UNSIGNED_DIFF(new.size_cnt[DISCARD][1], old->size_cnt[DISCARD][1]),
-			UNSIGNED_DIFF(new.size_cnt[DISCARD][2], old->size_cnt[DISCARD][2]),
-			UNSIGNED_DIFF(new.size_cnt[DISCARD][3], old->size_cnt[DISCARD][3]),
-			UNSIGNED_DIFF(new.size_cnt[DISCARD][4], old->size_cnt[DISCARD][4]),
-			UNSIGNED_DIFF(new.size_cnt[DISCARD][5], old->size_cnt[DISCARD][5]),
-			UNSIGNED_DIFF(new.size_cnt[DISCARD][6], old->size_cnt[DISCARD][6]),
-			UNSIGNED_DIFF(new.size_cnt[DISCARD][7], old->size_cnt[DISCARD][7]),
-			disk->hiotime[0],
-			disk->hiotime[1],
-			disk->hiotime[2]);
-
-	for (idx = 0; idx < FSYNC_TIME_GROUP_MAX; idx++)
-		disk->accios.fsync_time_cnt[idx] = new.fsync_time_cnt[idx];
-
-	for (idx = 0; idx < 3; idx++) /* READ, WRITE and DISCARD */
-		for (sg = 0; sg < IO_SIZE_GROUP_MAX; sg++)
-			disk->accios.size_cnt[idx][sg] = new.size_cnt[idx][sg];
-
-	disk->hiotime[0] = 0;
-	disk->hiotime[1] = 0;
-	disk->hiotime[2] = 0;
-
-	return ret;
-}
-#undef DISCARD
-
 
 static DEVICE_ATTR(range, S_IRUGO, disk_range_show, NULL);
 static DEVICE_ATTR(ext_range, S_IRUGO, disk_ext_range_show, NULL);
@@ -1407,10 +1305,8 @@ static DEVICE_ATTR(stat, S_IRUGO, part_stat_show, NULL);
 static DEVICE_ATTR(inflight, S_IRUGO, part_inflight_show, NULL);
 static DEVICE_ATTR(badblocks, S_IRUGO | S_IWUSR, disk_badblocks_show,
 		disk_badblocks_store);
-static DEVICE_ATTR(diskios, 0600, disk_ios_show, NULL);
+static DEVICE_ATTR(diskios, 0400, disk_ios_show, NULL);
 static DEVICE_ATTR(iomon, 0660, iomon_show, iomon_store);
-static DEVICE_ATTR(iobd, 0660, iobd_show, NULL);
-static DEVICE_ATTR(hiotime, 0660, hiotime_show, hiotime_store);
 #ifdef CONFIG_FAIL_MAKE_REQUEST
 static struct device_attribute dev_attr_fail =
 	__ATTR(make-it-fail, S_IRUGO|S_IWUSR, part_fail_show, part_fail_store);
@@ -1435,8 +1331,6 @@ static struct attribute *disk_attrs[] = {
 	&dev_attr_badblocks.attr,
 	&dev_attr_diskios.attr,
 	&dev_attr_iomon.attr,
-	&dev_attr_iobd.attr,
-	&dev_attr_hiotime.attr,
 #ifdef CONFIG_FAIL_MAKE_REQUEST
 	&dev_attr_fail.attr,
 #endif
@@ -1558,7 +1452,6 @@ static void disk_release(struct device *dev)
 	kfree(disk);
 }
 
-#ifdef CONFIG_USB_STORAGE_DETECT
 static int disk_uevent(struct device *dev, struct kobj_uevent_env *env)
 {
 	struct gendisk *disk = dev_to_disk(dev);
@@ -1571,15 +1464,15 @@ static int disk_uevent(struct device *dev, struct kobj_uevent_env *env)
 		cnt++;
 	disk_part_iter_exit(&piter);
 	add_uevent_var(env, "NPARTS=%u", cnt);
-
+#ifdef CONFIG_USB_STORAGE_DETECT
 	if (disk->interfaces == GENHD_IF_USB) {
 		add_uevent_var(env, "MEDIAPRST=%d", disk->media_present);
 		pr_info("%s %d, disk->media_present=%d, cnt=%d, disk->disk_name=%s\n",
 				__func__, __LINE__, disk->media_present, cnt, disk->disk_name);
 	}
+#endif
 	return 0;
 }
-#endif
 
 struct class block_class = {
 	.name		= "block",
@@ -1600,9 +1493,7 @@ static const struct device_type disk_type = {
 	.groups		= disk_attr_groups,
 	.release	= disk_release,
 	.devnode	= block_devnode,
-#ifdef CONFIG_USB_STORAGE_DETECT
 	.uevent		= disk_uevent,
-#endif
 };
 
 #ifdef CONFIG_PROC_FS
@@ -2193,7 +2084,7 @@ static void disk_check_events(struct disk_events *ev,
 	events = 0;
 	if (disk->interfaces != GENHD_IF_USB)
 	/* check events */
-		events = disk->fops->check_events(disk, clearing);
+	events = disk->fops->check_events(disk, clearing);
 #else
 	/* check events */
 	events = disk->fops->check_events(disk, clearing);
