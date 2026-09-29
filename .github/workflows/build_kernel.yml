@@ -2,12 +2,10 @@ name: Galaxy S10 Lite (SM-G770F) Build
 
 on:
   workflow_dispatch:
-  push:
-    branches: [ "oneui" ]
 
 jobs:
   build:
-    name: Build Kernel (LineageOS Logic)
+    name: Build Kernel
     runs-on: ubuntu-22.04
     permissions:
       contents: write
