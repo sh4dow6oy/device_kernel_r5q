@@ -263,11 +263,13 @@ retry:
 				err = -EAGAIN;
 				goto next;
 			}
+
 			err = f2fs_get_node_info(sbi, dn.nid, &ni);
 			if (err) {
 				f2fs_put_dnode(&dn);
 				return err;
 			}
+
 			if (cur->old_addr == NEW_ADDR) {
 				f2fs_invalidate_blocks(sbi, dn.data_blkaddr);
 				f2fs_update_data_blkaddr(&dn, NEW_ADDR);
@@ -299,7 +301,6 @@ void f2fs_drop_inmem_pages_all(struct f2fs_sb_info *sbi, bool gc_failure)
 	struct f2fs_inode_info *fi;
 	unsigned int count = sbi->atomic_files;
 	unsigned int looped = 0;
-
 	sbi->sec_stat.drop_inmem_all++;
 next:
 	spin_lock(&sbi->inode_lock[ATOMIC_FILE]);
@@ -1085,7 +1086,6 @@ static void __check_sit_bitmap(struct f2fs_sb_info *sbi,
 #endif
 }
 
-/* @fs.sec -- cc451a59f2de8918b30cc7c0bef20871 -- */
 static void __init_discard_policy(struct f2fs_sb_info *sbi,
 				struct discard_policy *dpolicy,
 				int discard_type, unsigned int granularity)
@@ -1525,7 +1525,6 @@ retry:
 			if (dpolicy->timeout &&
 				f2fs_time_over(sbi, UMOUNT_DISCARD_TIMEOUT))
 				break;
-
 #if 0
 			if (dpolicy->io_aware && i < dpolicy->io_aware_gran &&
 						!is_idle(sbi, DISCARD_TIME)) {
@@ -1533,7 +1532,6 @@ retry:
 				break;
 			}
 #endif
-
 			__submit_discard_cmd(sbi, dpolicy, dc, &issued);
 
 			if (issued >= dpolicy->max_requests)
@@ -2623,7 +2621,7 @@ static void change_curseg(struct f2fs_sb_info *sbi, int type)
 
 	/* W/A - prevent panic while shutdown */
 	if (unlikely(ignore_fs_panic && IS_ERR(sum_page))) {
-		//pr_err("%s: Ignore panic err=%ld\n", __func__, PTR_ERR(sum_page));
+		pr_err("%s: Ignore panic err=%ld\n", __func__, PTR_ERR(sum_page));
 		return;
 	}
 
@@ -3172,6 +3170,7 @@ void f2fs_allocate_data_block(struct f2fs_sb_info *sbi, struct page *page,
 
 	stat_inc_block_count(sbi, curseg);
 	sbi->sec_stat.alloc_blk_count[curseg->alloc_type]++;
+
 	/*
 	 * SIT information should be updated before segment allocation,
 	 * since SSR needs latest valid block information.
@@ -3954,7 +3953,6 @@ void f2fs_flush_sit_entries(struct f2fs_sb_info *sbi, struct cp_control *cpc)
 		unsigned int end = min(start_segno + SIT_ENTRY_PER_BLOCK,
 						(unsigned long)MAIN_SEGS(sbi));
 		unsigned int segno = start_segno;
-		int err = 0;
 
 		if (to_journal &&
 			!__has_cursum_space(journal, ses->entry_cnt, SIT_JOURNAL))
@@ -3992,16 +3990,16 @@ void f2fs_flush_sit_entries(struct f2fs_sb_info *sbi, struct cp_control *cpc)
 							cpu_to_le32(segno);
 				seg_info_to_raw_sit(se,
 					&sit_in_journal(journal, offset));
-				err = check_block_count(sbi, segno,
+				check_block_count(sbi, segno,
 					&sit_in_journal(journal, offset));
 			} else {
 				sit_offset = SIT_ENTRY_OFFSET(sit_i, segno);
 				seg_info_to_raw_sit(se,
 						&raw_sit->entries[sit_offset]);
-				err = check_block_count(sbi, segno,
+				check_block_count(sbi, segno,
 						&raw_sit->entries[sit_offset]);
 			}
-			f2fs_bug_on(sbi, err);
+
 			__clear_bit(segno, bitmap);
 			sit_i->dirty_sentries--;
 			ses->entry_cnt--;
@@ -4235,7 +4233,7 @@ static int build_sit_entries(struct f2fs_sb_info *sbi)
 			err = check_block_count(sbi, start, &sit);
 			if (err) {
 				print_block_data(sbi->sb, current_sit_addr(sbi, start),
-						 page_address(page), 0,  F2FS_BLKSIZE);
+						page_address(page), 0,  F2FS_BLKSIZE);
 				return err;
 			}
 			seg_info_from_raw_sit(se, &sit);
@@ -4374,8 +4372,8 @@ static int init_victim_secmap(struct f2fs_sb_info *sbi)
 	if (!dirty_i->victim_secmap)
 		return -ENOMEM;
 
-	/* W/A for FG_GC failure due to Atomic Write File and Pinned File */
-	dirty_i->blacklist_victim_secmap = f2fs_kvzalloc(sbi, bitmap_size,
+	/* W/A for FG_GC failure due to Atomic Write File */    
+	dirty_i->blacklist_victim_secmap = f2fs_kvzalloc(sbi, bitmap_size, 
 								GFP_KERNEL);
 	if (!dirty_i->blacklist_victim_secmap)
 		return -ENOMEM;
@@ -4562,7 +4560,7 @@ static void destroy_victim_secmap(struct f2fs_sb_info *sbi)
 	struct dirty_seglist_info *dirty_i = DIRTY_I(sbi);
 	kvfree(dirty_i->victim_secmap);
 
-	/* W/A for FG_GC failure due to Atomic Write File and Pinned File */
+	/* W/A for FG_GC failure due to Atomic Write File */    
 	kvfree(dirty_i->blacklist_victim_secmap);
 }
 

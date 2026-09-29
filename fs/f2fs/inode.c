@@ -26,9 +26,6 @@ void f2fs_mark_inode_dirty_sync(struct inode *inode, bool sync)
 	if (f2fs_readonly(F2FS_I_SB(inode)->sb))
 		return;
 
-	if (IS_I_VERSION(inode))
-		inode_inc_iversion(inode);
-
 	if (f2fs_inode_dirtied(inode, sync))
 		return;
 
@@ -369,7 +366,6 @@ static int do_read_inode(struct inode *inode)
 	inode->i_ctime.tv_nsec = le32_to_cpu(ri->i_ctime_nsec);
 	inode->i_mtime.tv_nsec = le32_to_cpu(ri->i_mtime_nsec);
 	inode->i_generation = le32_to_cpu(ri->i_generation);
-
 	if (IS_I_VERSION(inode))
 		inode->i_version++;
 
@@ -469,12 +465,6 @@ static int do_read_inode(struct inode *inode)
 			fi->i_cluster_size = 1 << fi->i_log_cluster_size;
 			set_inode_flag(inode, FI_COMPRESSED_FILE);
 		}
-	}
-
-	if (unlikely((inode->i_mode & S_IFMT) == 0)) {
-		print_block_data(sbi->sb, inode->i_ino, page_address(node_page),
-				0, F2FS_BLKSIZE);
-		f2fs_bug_on(sbi, 1);
 	}
 
 	init_idisk_time(inode);
@@ -792,14 +782,11 @@ no_delete:
 	stat_sub_compr_blocks(inode,
 			atomic_read(&F2FS_I(inode)->i_compr_blocks));
 
-	if (unlikely(is_inode_flag_set(inode, FI_DIRTY_INODE))) {
+	if (likely(!is_set_ckpt_flags(sbi, CP_ERROR_FLAG) &&
+				!is_sbi_flag_set(sbi, SBI_CP_DISABLED)))
+		f2fs_bug_on(sbi, is_inode_flag_set(inode, FI_DIRTY_INODE));
+	else
 		f2fs_inode_synced(inode);
-		f2fs_warn(sbi, "inconsistent dirty inode:%lu entry found during eviction\n",
-			 inode->i_ino);
-		if (!is_set_ckpt_flags(sbi, CP_ERROR_FLAG) &&
-		    !is_sbi_flag_set(sbi, SBI_CP_DISABLED))
-			f2fs_bug_on(sbi, 1);
-	}
 
 	/* for the case f2fs_new_inode() was failed, .i_ino is zero, skip it */
 	if (inode->i_ino)
@@ -876,6 +863,7 @@ void f2fs_handle_failed_inode(struct inode *inode)
 	} else {
 		set_inode_flag(inode, FI_FREE_NID);
 	}
+
 out:
 	f2fs_unlock_op(sbi);
 
