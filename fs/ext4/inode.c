@@ -422,9 +422,6 @@ static int __check_block_validity(struct inode *inode, const char *func,
 	     le32_to_cpu(EXT4_SB(inode->i_sb)->s_es->s_journal_inum)))
 		return 0;
 	if (!ext4_inode_block_valid(inode, map->m_pblk, map->m_len)) {
-		printk(KERN_ERR "printing inode..\n");
-		print_block_data(inode->i_sb, 0, (unsigned char *)inode, 0,
-				EXT4_INODE_SIZE(inode->i_sb));
 		ext4_error_inode(inode, func, line, map->m_pblk,
 				 "lblock %lu mapped to illegal pblock %llu "
 				 "(length %d)", (unsigned long) map->m_lblk,
@@ -1185,9 +1182,6 @@ static int ext4_block_write_begin(struct page *page, loff_t pos, unsigned len,
 	unsigned bbits;
 	struct buffer_head *bh, *head, *wait[2], **wait_bh = wait;
 	bool decrypt = false;
-#ifdef CONFIG_DDAR
-	bool dd_decrypt = false;
-#endif
 
 	BUG_ON(!PageLocked(page));
 	BUG_ON(from > PAGE_SIZE);
@@ -1242,9 +1236,6 @@ static int ext4_block_write_begin(struct page *page, loff_t pos, unsigned len,
 			ll_rw_block(REQ_OP_READ, 0, 1, &bh);
 			*wait_bh++ = bh;
 			decrypt = fscrypt_inode_uses_fs_layer_crypto(inode);
-#ifdef CONFIG_DDAR
-			dd_decrypt = fscrypt_dd_encrypted_inode(inode);
-#endif
 		}
 	}
 	/*
@@ -1259,12 +1250,6 @@ static int ext4_block_write_begin(struct page *page, loff_t pos, unsigned len,
 		page_zero_new_buffers(page, from, to);
 	else if (decrypt)
 		err = fscrypt_decrypt_pagecache_blocks(page, PAGE_SIZE, 0);
-
-#ifdef CONFIG_DDAR
-	if (dd_decrypt)
-		err = fscrypt_dd_decrypt_page(inode, page);
-#endif
-
 	return err;
 }
 #endif
@@ -2250,10 +2235,7 @@ static int ext4_writepage(struct page *page,
 		return -ENOMEM;
 	}
 	ret = ext4_bio_write_page(&io_submit, page, len, wbc, keep_towrite);
-
-	if (ext4_io_submit_to_dd(inode, &io_submit) == -EOPNOTSUPP)
-		ext4_io_submit(&io_submit);
-
+	ext4_io_submit(&io_submit);
 	/* Drop io_end reference we got from init */
 	ext4_put_io_end_defer(io_submit.io_end);
 	return ret;
@@ -2927,9 +2909,7 @@ retry:
 	}
 	ret = mpage_prepare_extent_to_map(&mpd);
 	/* Submit prepared bio */
-	if (ext4_io_submit_to_dd(inode, &mpd.io_submit) == -EOPNOTSUPP)
-		ext4_io_submit(&mpd.io_submit);
-
+	ext4_io_submit(&mpd.io_submit);
 	ext4_put_io_end_defer(mpd.io_submit.io_end);
 	mpd.io_submit.io_end = NULL;
 	/* Unlock pages we didn't use */
@@ -3002,9 +2982,7 @@ retry:
 			mpd.do_map = 0;
 		}
 		/* Submit prepared bio */
-		if (ext4_io_submit_to_dd(inode, &mpd.io_submit) == -EOPNOTSUPP)
-			ext4_io_submit(&mpd.io_submit);
-
+		ext4_io_submit(&mpd.io_submit);
 		/* Unlock pages we didn't use */
 		mpage_release_unused_pages(&mpd, give_up_on_write);
 		/*
@@ -4137,10 +4115,6 @@ static int __ext4_block_zero_page_range(handle_t *handle,
 			BUG_ON(blocksize != PAGE_SIZE);
 			WARN_ON_ONCE(fscrypt_decrypt_pagecache_blocks(
 						page, PAGE_SIZE, 0));
-#ifdef CONFIG_DDAR
-			if (fscrypt_dd_encrypted_inode(inode))
-				WARN_ON_ONCE(fscrypt_dd_decrypt_page(page->mapping->host, page));
-#endif
 		}
 	}
 	if (ext4_should_journal_data(inode)) {
@@ -4987,7 +4961,6 @@ struct inode *__ext4_iget(struct super_block *sb, unsigned long ino,
 				ret = -EFSCORRUPTED;
 			} else
 				ret = -ESTALE;
-			print_iloc_info(sb, iloc);
 			goto bad_inode;
 		}
 		/* The only unlinked inodes we let through here have
@@ -5019,7 +4992,6 @@ struct inode *__ext4_iget(struct super_block *sb, unsigned long ino,
 	 */
 	if (!ext4_has_feature_dir_index(sb) && ext4_has_metadata_csum(sb) &&
 	    ext4_test_inode_flag(inode, EXT4_INODE_INDEX)) {
-		print_iloc_info(sb, iloc);
 		EXT4_ERROR_INODE(inode,
 				 "iget: Dir with htree data on filesystem without dir_index feature.");
 		ret = -EFSCORRUPTED;
@@ -5095,7 +5067,6 @@ struct inode *__ext4_iget(struct super_block *sb, unsigned long ino,
 	ret = 0;
 	if (ei->i_file_acl &&
 	    !ext4_inode_block_valid(inode, ei->i_file_acl, 1)) {
-		print_iloc_info(sb, iloc);
 		ext4_error_inode(inode, function, line, 0,
 				 "iget: bad extended attribute block %llu",
 				 ei->i_file_acl);
