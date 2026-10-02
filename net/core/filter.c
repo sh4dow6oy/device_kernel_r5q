@@ -4103,11 +4103,8 @@ static int xdp_do_generic_redirect_map(struct net_device *dev,
 		if (err)
 			goto err;
 		consume_skb(skb);
-	} else if (map->map_type == BPF_MAP_TYPE_CPUMAP) {
-		err = cpu_map_generic_redirect(fwd, skb);
-		if (unlikely(err))
-			goto err;
 	} else {
+		/* TODO: Handle BPF_MAP_TYPE_CPUMAP */
 		err = -EBADRQC;
 		goto err;
 	}
@@ -4703,7 +4700,7 @@ static const struct bpf_func_proto bpf_get_socket_cookie_sock_ops_proto = {
 	.arg1_type	= ARG_PTR_TO_CTX,
 };
 
-u64 __bpf_get_netns_cookie(struct sock *sk)
+static u64 __bpf_get_netns_cookie(struct sock *sk)
 {
 	const struct net *net = sk ? sock_net(sk) : &init_net;
 
@@ -5642,113 +5639,6 @@ static const struct bpf_func_proto bpf_skb_fib_lookup_proto = {
 	.arg2_type      = ARG_PTR_TO_MEM,
 	.arg3_type      = ARG_CONST_SIZE,
 	.arg4_type	= ARG_ANYTHING,
-};
-
-static struct net_device *__dev_via_ifindex(struct net_device *dev_curr,
-					    u32 ifindex)
-{
-	struct net *netns = dev_net(dev_curr);
-
-	/* Non-redirect use cases can use ifindex 0 and avoid a lookup. */
-	if (ifindex == 0)
-		return dev_curr;
-
-	return dev_get_by_index_rcu(netns, ifindex);
-}
-
-BPF_CALL_5(bpf_skb_check_mtu, struct sk_buff *, skb,
-	   u32, ifindex, u32 *, mtu_len, s32, len_diff, u64, flags)
-{
-	int ret = BPF_MTU_CHK_RET_FRAG_NEEDED;
-	struct net_device *dev = skb->dev;
-	int skb_len, dev_len;
-	int mtu;
-
-	if (unlikely(flags & ~BPF_MTU_CHK_SEGS))
-		return -EINVAL;
-
-	if (unlikely(flags & BPF_MTU_CHK_SEGS && (len_diff || *mtu_len)))
-		return -EINVAL;
-
-	dev = __dev_via_ifindex(dev, ifindex);
-	if (unlikely(!dev))
-		return -ENODEV;
-
-	mtu = READ_ONCE(dev->mtu);
-	dev_len = mtu + dev->hard_header_len;
-
-	/* A non-zero input is an L3 length, like bpf_fib_lookup(). */
-	skb_len = *mtu_len ? *mtu_len + dev->hard_header_len : skb->len;
-	skb_len += len_diff;
-	if (skb_len <= dev_len) {
-		ret = BPF_MTU_CHK_RET_SUCCESS;
-		goto out;
-	}
-
-	/* skb->len may include GSO segments that will be re-segmented later. */
-	if (skb_is_gso(skb)) {
-		ret = BPF_MTU_CHK_RET_SUCCESS;
-		if ((flags & BPF_MTU_CHK_SEGS) &&
-		    !skb_gso_validate_network_len(skb, mtu))
-			ret = BPF_MTU_CHK_RET_SEGS_TOOBIG;
-	}
-out:
-	/* The verifier guarantees that mtu_len is a valid writable pointer. */
-	*mtu_len = mtu;
-	return ret;
-}
-
-BPF_CALL_5(bpf_xdp_check_mtu, struct xdp_buff *, xdp,
-	   u32, ifindex, u32 *, mtu_len, s32, len_diff, u64, flags)
-{
-	struct net_device *dev = xdp->rxq->dev;
-	int xdp_len = xdp->data_end - xdp->data;
-	int ret = BPF_MTU_CHK_RET_SUCCESS;
-	int mtu, dev_len;
-
-	/* XDP does not support the multi-buffer segment check yet. */
-	if (unlikely(flags))
-		return -EINVAL;
-
-	dev = __dev_via_ifindex(dev, ifindex);
-	if (unlikely(!dev))
-		return -ENODEV;
-
-	mtu = READ_ONCE(dev->mtu);
-	dev_len = mtu + dev->hard_header_len;
-
-	/* A non-zero input is an L3 length, like bpf_fib_lookup(). */
-	if (*mtu_len)
-		xdp_len = *mtu_len + dev->hard_header_len;
-	xdp_len += len_diff;
-	if (xdp_len > dev_len)
-		ret = BPF_MTU_CHK_RET_FRAG_NEEDED;
-
-	/* The verifier guarantees that mtu_len is a valid writable pointer. */
-	*mtu_len = mtu;
-	return ret;
-}
-
-static const struct bpf_func_proto bpf_skb_check_mtu_proto = {
-	.func		= bpf_skb_check_mtu,
-	.gpl_only	= true,
-	.ret_type	= RET_INTEGER,
-	.arg1_type	= ARG_PTR_TO_CTX,
-	.arg2_type	= ARG_ANYTHING,
-	.arg3_type	= ARG_PTR_TO_INT,
-	.arg4_type	= ARG_ANYTHING,
-	.arg5_type	= ARG_ANYTHING,
-};
-
-static const struct bpf_func_proto bpf_xdp_check_mtu_proto = {
-	.func		= bpf_xdp_check_mtu,
-	.gpl_only	= true,
-	.ret_type	= RET_INTEGER,
-	.arg1_type	= ARG_PTR_TO_CTX,
-	.arg2_type	= ARG_ANYTHING,
-	.arg3_type	= ARG_PTR_TO_INT,
-	.arg4_type	= ARG_ANYTHING,
-	.arg5_type	= ARG_ANYTHING,
 };
 
 #if IS_ENABLED(CONFIG_IPV6_SEG6_BPF)
@@ -7344,8 +7234,6 @@ tc_cls_act_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_get_socket_uid_proto;
 	case BPF_FUNC_fib_lookup:
 		return &bpf_skb_fib_lookup_proto;
-	case BPF_FUNC_check_mtu:
-		return &bpf_skb_check_mtu_proto;
 	case BPF_FUNC_sk_fullsock:
 		return &bpf_sk_fullsock_proto;
 	case BPF_FUNC_sk_storage_get:
@@ -7415,8 +7303,6 @@ xdp_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_xdp_adjust_tail_proto;
 	case BPF_FUNC_fib_lookup:
 		return &bpf_xdp_fib_lookup_proto;
-	case BPF_FUNC_check_mtu:
-		return &bpf_xdp_check_mtu_proto;
 #ifdef CONFIG_INET
 	case BPF_FUNC_sk_lookup_udp:
 		return &bpf_xdp_sk_lookup_udp_proto;
@@ -8924,6 +8810,24 @@ u32 bpf_sock_convert_ctx_access(enum bpf_access_type type,
 				       target_size));
 		break;
 
+	case bpf_ctx_range_till(struct bpf_sock, src_ip6[0], src_ip6[3]):
+#if IS_ENABLED(CONFIG_IPV6)
+		off = si->off;
+		off -= offsetof(struct bpf_sock, src_ip6[0]);
+		*insn++ = BPF_LDX_MEM(
+			BPF_SIZE(si->code), si->dst_reg, si->src_reg,
+			bpf_target_off(
+				struct sock_common,
+				skc_v6_rcv_saddr.s6_addr32[0],
+				FIELD_SIZEOF(struct sock_common,
+					     skc_v6_rcv_saddr.s6_addr32[0]),
+				target_size) + off);
+#else
+		(void)off;
+		*insn++ = BPF_MOV32_IMM(si->dst_reg, 0);
+#endif
+		break;
+
 	case bpf_ctx_range_till(struct bpf_sock, dst_ip6[0], dst_ip6[3]):
 #if IS_ENABLED(CONFIG_IPV6)
 		off = si->off;
@@ -8939,6 +8843,16 @@ u32 bpf_sock_convert_ctx_access(enum bpf_access_type type,
 		*insn++ = BPF_MOV32_IMM(si->dst_reg, 0);
 		*target_size = 4;
 #endif
+		break;
+
+	case offsetof(struct bpf_sock, src_port):
+		*insn++ = BPF_LDX_MEM(
+			BPF_FIELD_SIZEOF(struct sock_common, skc_num),
+			si->dst_reg, si->src_reg,
+			bpf_target_off(struct sock_common, skc_num,
+				       FIELD_SIZEOF(struct sock_common,
+						    skc_num),
+				       target_size));
 		break;
 
 	case offsetof(struct bpf_sock, dst_port):
@@ -8960,7 +8874,6 @@ u32 bpf_sock_convert_ctx_access(enum bpf_access_type type,
 						    skc_state),
 				       target_size));
 		break;
-
 	case offsetof(struct bpf_sock, rx_queue_mapping):
 #ifdef CONFIG_XPS
 		*insn++ = BPF_LDX_MEM(
@@ -8977,34 +8890,6 @@ u32 bpf_sock_convert_ctx_access(enum bpf_access_type type,
 		*insn++ = BPF_MOV64_IMM(si->dst_reg, -1);
 		*target_size = 2;
 #endif
-		break;
-
-	case bpf_ctx_range_till(struct bpf_sock, src_ip6[0], src_ip6[3]):
-#if IS_ENABLED(CONFIG_IPV6)
-		off = si->off;
-		off -= offsetof(struct bpf_sock, src_ip6[0]);
-		*insn++ = BPF_LDX_MEM(
-			BPF_SIZE(si->code), si->dst_reg, si->src_reg,
-			bpf_target_off(
-				struct sock_common,
-				skc_v6_rcv_saddr.s6_addr32[0],
-				FIELD_SIZEOF(struct sock_common,
-					     skc_v6_rcv_saddr.s6_addr32[0]),
-				target_size) + off);
-#else
-		(void)off;
-		*insn++ = BPF_MOV32_IMM(si->dst_reg, 0);
-#endif
-		break;
-
-	case offsetof(struct bpf_sock, src_port):
-		*insn++ = BPF_LDX_MEM(
-			BPF_FIELD_SIZEOF(struct sock_common, skc_num),
-			si->dst_reg, si->src_reg,
-			bpf_target_off(struct sock_common, skc_num,
-				       FIELD_SIZEOF(struct sock_common,
-						    skc_num),
-				       target_size));
 		break;
 	}
 
