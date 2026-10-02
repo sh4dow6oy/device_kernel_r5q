@@ -433,13 +433,8 @@ static cpumask_var_t perf_online_mask;
  *   0 - disallow raw tracepoint access for unpriv
  *   1 - disallow cpu events for unpriv
  *   2 - disallow kernel profiling for unpriv
- *   3 - disallow all unpriv perf event use
  */
-#ifdef CONFIG_SECURITY_PERF_EVENTS_RESTRICT
-int sysctl_perf_event_paranoid __read_mostly = 3;
-#else
 int sysctl_perf_event_paranoid __read_mostly = 2;
-#endif
 
 /* Minimum for 512 kiB + 1 user control page */
 int sysctl_perf_event_mlock __read_mostly = 512 + (PAGE_SIZE / 1024); /* 'free' kiB per user */
@@ -4146,7 +4141,7 @@ errout:
 }
 
 static void perf_event_free_filter(struct perf_event *event);
-void perf_event_free_bpf_prog(struct perf_event *event);
+static void perf_event_free_bpf_prog(struct perf_event *event);
 
 static void free_event_rcu(struct rcu_head *head)
 {
@@ -5049,10 +5044,7 @@ static inline int perf_fget_light(int fd, struct fd *p)
 static int perf_event_set_output(struct perf_event *event,
 				 struct perf_event *output_event);
 static int perf_event_set_filter(struct perf_event *event, void __user *arg);
-static int __perf_event_set_bpf_prog(struct perf_event *event,
-				     struct bpf_prog *prog, u64 bpf_cookie);
-static int perf_copy_attr(struct perf_event_attr __user *uattr,
-			  struct perf_event_attr *attr);
+static int perf_event_set_bpf_prog(struct perf_event *event, u32 prog_fd);
 
 static long _perf_ioctl(struct perf_event *event, unsigned int cmd, unsigned long arg)
 {
@@ -5106,18 +5098,8 @@ static long _perf_ioctl(struct perf_event *event, unsigned int cmd, unsigned lon
 	case PERF_EVENT_IOC_SET_FILTER:
 		return perf_event_set_filter(event, (void __user *)arg);
 
-	case PERF_EVENT_IOC_SET_BPF: {
-		struct bpf_prog *prog;
-		int ret;
-
-		prog = bpf_prog_get(arg);
-		if (IS_ERR(prog))
-			return PTR_ERR(prog);
-		ret = __perf_event_set_bpf_prog(event, prog, 0);
-		if (ret)
-			bpf_prog_put(prog);
-		return ret;
-	}
+	case PERF_EVENT_IOC_SET_BPF:
+		return perf_event_set_bpf_prog(event, arg);
 
 	case PERF_EVENT_IOC_PAUSE_OUTPUT: {
 		struct ring_buffer *rb;
@@ -8803,7 +8785,6 @@ static void bpf_overflow_handler(struct perf_event *event,
 		.data = data,
 		.event = event,
 	};
-	struct bpf_prog *prog;
 	int ret = 0;
 
 	ctx.regs = perf_arch_bpf_user_pt_regs(regs);
@@ -8811,9 +8792,7 @@ static void bpf_overflow_handler(struct perf_event *event,
 	if (unlikely(__this_cpu_inc_return(bpf_prog_active) != 1))
 		goto out;
 	rcu_read_lock();
-	prog = READ_ONCE(event->prog);
-	if (prog)
-		ret = BPF_PROG_RUN(prog, &ctx);
+	ret = BPF_PROG_RUN(event->prog, &ctx);
 	rcu_read_unlock();
 out:
 	__this_cpu_dec(bpf_prog_active);
@@ -8824,10 +8803,10 @@ out:
 	event->orig_overflow_handler(event, data, regs);
 }
 
-static int perf_event_set_bpf_handler(struct perf_event *event,
-				      struct bpf_prog *prog,
-				      u64 bpf_cookie)
+static int perf_event_set_bpf_handler(struct perf_event *event, u32 prog_fd)
 {
+	struct bpf_prog *prog;
+
 	if (event->overflow_handler_context)
 		/* hw breakpoint or kernel counter */
 		return -EINVAL;
@@ -8835,8 +8814,9 @@ static int perf_event_set_bpf_handler(struct perf_event *event,
 	if (event->prog)
 		return -EEXIST;
 
-	if (prog->type != BPF_PROG_TYPE_PERF_EVENT)
-		return -EINVAL;
+	prog = bpf_prog_get_type(prog_fd, BPF_PROG_TYPE_PERF_EVENT);
+	if (IS_ERR(prog))
+		return PTR_ERR(prog);
 
 	if (event->attr.precise_ip &&
 	    prog->call_get_stack &&
@@ -8852,11 +8832,11 @@ static int perf_event_set_bpf_handler(struct perf_event *event,
 		 * attached to perf_sample_data, do not allow attaching BPF
 		 * program that calls bpf_get_[stack|stackid].
 		 */
+		bpf_prog_put(prog);
 		return -EPROTO;
 	}
 
 	event->prog = prog;
-	event->bpf_cookie = bpf_cookie;
 	event->orig_overflow_handler = READ_ONCE(event->overflow_handler);
 	WRITE_ONCE(event->overflow_handler, bpf_overflow_handler);
 	return 0;
@@ -8871,13 +8851,10 @@ static void perf_event_free_bpf_handler(struct perf_event *event)
 
 	WRITE_ONCE(event->overflow_handler, event->orig_overflow_handler);
 	event->prog = NULL;
-	event->bpf_cookie = 0;
 	bpf_prog_put(prog);
 }
 #else
-static int perf_event_set_bpf_handler(struct perf_event *event,
-				      struct bpf_prog *prog,
-				      u64 bpf_cookie)
+static int perf_event_set_bpf_handler(struct perf_event *event, u32 prog_fd)
 {
 	return -EOPNOTSUPP;
 }
@@ -8905,14 +8882,14 @@ static inline bool perf_event_is_tracing(struct perf_event *event)
 	return false;
 }
 
-static int __perf_event_set_bpf_prog(struct perf_event *event,
-				     struct bpf_prog *prog,
-				     u64 bpf_cookie)
+static int perf_event_set_bpf_prog(struct perf_event *event, u32 prog_fd)
 {
 	bool is_kprobe, is_tracepoint, is_syscall_tp;
+	struct bpf_prog *prog;
+	int ret;
 
 	if (!perf_event_is_tracing(event))
-		return perf_event_set_bpf_handler(event, prog, bpf_cookie);
+		return perf_event_set_bpf_handler(event, prog_fd);
 
 	is_kprobe = event->tp_event->flags & TRACE_EVENT_FL_UKPROBE;
 	is_tracepoint = event->tp_event->flags & TRACE_EVENT_FL_TRACEPOINT;
@@ -8921,42 +8898,41 @@ static int __perf_event_set_bpf_prog(struct perf_event *event,
 		/* bpf programs can only be attached to u/kprobe or tracepoint */
 		return -EINVAL;
 
+	prog = bpf_prog_get(prog_fd);
+	if (IS_ERR(prog))
+		return PTR_ERR(prog);
+
 	if ((is_kprobe && prog->type != BPF_PROG_TYPE_KPROBE) ||
 	    (is_tracepoint && prog->type != BPF_PROG_TYPE_TRACEPOINT) ||
 	    (is_syscall_tp && prog->type != BPF_PROG_TYPE_TRACEPOINT)) {
+		/* valid fd, but invalid bpf program type */
+		bpf_prog_put(prog);
 		return -EINVAL;
 	}
 
 	/* Kprobe override only works for kprobes, not uprobes. */
 	if (prog->kprobe_override &&
 	    !(event->tp_event->flags & TRACE_EVENT_FL_KPROBE)) {
+		bpf_prog_put(prog);
 		return -EINVAL;
 	}
 
 	if (is_tracepoint || is_syscall_tp) {
 		int off = trace_event_get_offsets(event->tp_event);
 
-		if (prog->aux->max_ctx_offset > off)
+		if (prog->aux->max_ctx_offset > off) {
+			bpf_prog_put(prog);
 			return -EACCES;
+		}
 	}
 
-	return perf_event_attach_bpf_prog(event, prog, bpf_cookie);
-}
-
-int perf_event_set_bpf_prog(struct perf_event *event,
-			    struct bpf_prog *prog, u64 bpf_cookie)
-{
-	struct perf_event_context *ctx;
-	int ret;
-
-	ctx = perf_event_ctx_lock(event);
-	ret = __perf_event_set_bpf_prog(event, prog, bpf_cookie);
-	perf_event_ctx_unlock(event, ctx);
-
+	ret = perf_event_attach_bpf_prog(event, prog);
+	if (ret)
+		bpf_prog_put(prog);
 	return ret;
 }
 
-void perf_event_free_bpf_prog(struct perf_event *event)
+static void perf_event_free_bpf_prog(struct perf_event *event)
 {
 	if (!perf_event_is_tracing(event)) {
 		perf_event_free_bpf_handler(event);
@@ -8975,19 +8951,12 @@ static void perf_event_free_filter(struct perf_event *event)
 {
 }
 
-static int __perf_event_set_bpf_prog(struct perf_event *event,
-				     struct bpf_prog *prog, u64 bpf_cookie)
+static int perf_event_set_bpf_prog(struct perf_event *event, u32 prog_fd)
 {
 	return -ENOENT;
 }
 
-int perf_event_set_bpf_prog(struct perf_event *event,
-			    struct bpf_prog *prog, u64 bpf_cookie)
-{
-	return -ENOENT;
-}
-
-void perf_event_free_bpf_prog(struct perf_event *event)
+static void perf_event_free_bpf_prog(struct perf_event *event)
 {
 }
 #endif /* CONFIG_EVENT_TRACING */
@@ -10911,9 +10880,6 @@ SYSCALL_DEFINE5(perf_event_open,
 	/* for future expandability... */
 	if (flags & ~PERF_FLAG_ALL)
 		return -EINVAL;
-
-	if (perf_paranoid_any() && !capable(CAP_SYS_ADMIN))
-		return -EACCES;
 
 	/* Do we allow access to perf_event_open(2) ? */
 	err = security_perf_event_open(&attr, PERF_SECURITY_OPEN);
