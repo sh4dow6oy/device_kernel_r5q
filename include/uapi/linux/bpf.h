@@ -1656,10 +1656,10 @@ union bpf_attr {
  * 	Return
  * 		A 8-byte long non-decreasing number.
  *
- * u64 bpf_get_socket_cookie(struct bpf_sock_ops *ctx)
+ * u64 bpf_get_socket_cookie( *ctx)
  * 	Description
  * 		Equivalent to **bpf_get_socket_cookie**\ () helper that accepts
- * 		*skb*, but gets socket from **struct bpf_sock_ops** context.
+ * 		*skb*, but gets socket from **** context.
  * 	Return
  * 		A 8-byte long non-decreasing number.
  *
@@ -1688,7 +1688,7 @@ union bpf_attr {
  *
  * 		*bpf_socket* should be one of the following:
  *
- * 		* **struct bpf_sock_ops** for **BPF_PROG_TYPE_SOCK_OPS**.
+ * 		* **** for **BPF_PROG_TYPE_SOCK_OPS**.
  * 		* **struct bpf_sock_addr** for **BPF_CGROUP_INET4_CONNECT**
  * 		  and **BPF_CGROUP_INET6_CONNECT**.
  *
@@ -1787,7 +1787,7 @@ union bpf_attr {
  * 	Return
  * 		**SK_PASS** on success, or **SK_DROP** on error.
  *
- * long bpf_sock_map_update(struct bpf_sock_ops *skops, struct bpf_map *map, void *key, u64 flags)
+ * long bpf_sock_map_update( *skops, struct bpf_map *map, void *key, u64 flags)
  * 	Description
  * 		Add an entry to, or update a *map* referencing sockets. The
  * 		*skops* is used as a new value for the entry associated to
@@ -1907,7 +1907,7 @@ union bpf_attr {
  *
  * 		*bpf_socket* should be one of the following:
  *
- * 		* **struct bpf_sock_ops** for **BPF_PROG_TYPE_SOCK_OPS**.
+ * 		* **** for **BPF_PROG_TYPE_SOCK_OPS**.
  * 		* **struct bpf_sock_addr** for **BPF_CGROUP_INET4_CONNECT**
  * 		  and **BPF_CGROUP_INET6_CONNECT**.
  *
@@ -1946,7 +1946,7 @@ union bpf_attr {
  * 	Return
  * 		0
  *
- * long bpf_sock_ops_cb_flags_set(struct bpf_sock_ops *bpf_sock, int argval)
+ * long bpf_sock_ops_cb_flags_set( *bpf_sock, int argval)
  * 	Description
  * 		Attempt to set the value of the **bpf_sock_ops_cb_flags** field
  * 		for the full TCP socket associated to *bpf_sock_ops* to
@@ -2221,7 +2221,7 @@ union bpf_attr {
  *		* > 0 one of **BPF_FIB_LKUP_RET_** codes explaining why the
  *		  packet is not forwarded or needs assist from full stack
  *
- * long bpf_sock_hash_update(struct bpf_sock_ops *skops, struct bpf_map *map, void *key, u64 flags)
+ * long bpf_sock_hash_update( *skops, struct bpf_map *map, void *key, u64 flags)
  *	Description
  *		Add an entry to, or update a sockhash *map* referencing sockets.
  *		The *skops* is used as a new value for the entry associated to
@@ -3456,13 +3456,13 @@ union bpf_attr {
  * 		The non-negative copied *buf* length equal to or less than
  * 		*size* on success, or a negative error in case of failure.
  *
- * long bpf_load_hdr_opt(struct bpf_sock_ops *skops, void *searchby_res, u32 len, u64 flags)
+ * long bpf_load_hdr_opt( *skops, void *searchby_res, u32 len, u64 flags)
  *	Description
  *		Load header option.  Support reading a particular TCP header
  *		option for bpf program (**BPF_PROG_TYPE_SOCK_OPS**).
  *
  *		If *flags* is 0, it will search the option from the
- *		*skops*\ **->skb_data**.  The comment in **struct bpf_sock_ops**
+ *		*skops*\ **->skb_data**.  The comment in ****
  *		has details on what skb_data contains under different
  *		*skops*\ **->op**.
  *
@@ -3519,7 +3519,7 @@ union bpf_attr {
  *		**-EPERM** if the helper cannot be used under the current
  *		*skops*\ **->op**.
  *
- * long bpf_store_hdr_opt(struct bpf_sock_ops *skops, const void *from, u32 len, u64 flags)
+ * long bpf_store_hdr_opt( *skops, const void *from, u32 len, u64 flags)
  *	Description
  *		Store header option.  The data will be copied
  *		from buffer *from* with length *len* to the TCP header.
@@ -3552,7 +3552,7 @@ union bpf_attr {
  *		**-EPERM** if the helper cannot be used under the current
  *		*skops*\ **->op**.
  *
- * long bpf_reserve_hdr_opt(struct bpf_sock_ops *skops, u32 len, u64 flags)
+ * long bpf_reserve_hdr_opt( *skops, u32 len, u64 flags)
  *	Description
  *		Reserve *len* bytes for the bpf header option.  The
  *		space will be used by **bpf_store_hdr_opt**\ () later in
@@ -4568,6 +4568,7 @@ struct bpf_sock_ops {
 				 * the outgoing header has not
 				 * been written yet.
 				 */
+	__u32 hdr_len;
 };
 
 /* Definitions for bpf_sock_ops_cb_flags */
