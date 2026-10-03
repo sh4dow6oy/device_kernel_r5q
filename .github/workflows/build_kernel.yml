@@ -26,7 +26,7 @@ jobs:
             libncurses5-dev libssl-dev rsync zip unzip wget curl ca-certificates \
             gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
             gcc-arm-linux-gnueabi binutils-arm-linux-gnueabi \
-            device-tree-compiler libelf-dev cmake libdw-dev pahole
+            device-tree-compiler libelf-dev cmake libdw-dev pahole dwarves
 
       - name: Download latest Google clang
         run: |
@@ -34,21 +34,6 @@ jobs:
           mkdir llvm-22; cd llvm-22
           tar -xf ../llvm.tar.gz
           rm ../llvm.tar.gz
-
-      # -----------------------------------------------------------------------
-      # PAHOLE v1.25 (Păstrat pentru suport BTF / eBPF)
-      # -----------------------------------------------------------------------
-      - name: Build Updated Pahole
-        run: |
-          git clone --recursive https://git.kernel.org/pub/scm/devel/pahole/pahole.git
-          cd pahole
-          mkdir build
-          cd build
-          cmake -DBUILD_SHARED_LIBS=OFF -DCMAKE_INSTALL_PREFIX=/usr ..
-          make -j$(nproc)
-          sudo make install
-          cd ../.. && rm -rf pahole
-          pahole --version
 
       # -----------------------------------------------------------------------
       # Build DTC modern
@@ -110,15 +95,17 @@ jobs:
           
           export LLVM=1
           export LLVM_IAS=1
+          export PAHOLE=/usr/bin/pahole
 
           rm -rf out && mkdir -p out
 
           echo "--> Generating Base Config: r5q_eur_open_defconfig"
           make O=out r5q_eur_open_defconfig
 
-          # Injectare opțiuni BTF pentru eBPF
+          # Setăm DWARF 4 pentru a evita neconcordanțele cu pahole pe LLVM 22
           echo "CONFIG_DEBUG_INFO_BTF=y" >> out/.config
           echo "CONFIG_DEBUG_INFO_BTF_MODULES=y" >> out/.config
+          echo "CONFIG_DEBUG_INFO_DWARF4=y" >> out/.config
           make O=out olddefconfig
 
           echo "--> Compiling Uncompressed Kernel Image..."
