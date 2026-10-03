@@ -1897,13 +1897,6 @@ int file_update_time(struct file *file)
 	if (!timespec64_equal(&inode->i_ctime, &now))
 		sync_it |= S_CTIME;
 
-	/* iversion impacts on "write" performance. This code just filter inodes
-	 * by presence in integrity cache (S_IMA flag, security/integrity/iint.c).
-	 * Because only FIVE uses iversion in Samsung Kernel this patch shouldn't
-	 * affect other code.
-	 * NOTICE: iversion code has been optimized in v4.17-rc4. So this patch should be
-	 * removed since v4.17-rc4
-	 */
 	need_sync = IS_I_VERSION(inode);
 	if (need_sync)
 		sync_it |= S_VERSION;
@@ -2150,53 +2143,6 @@ void inode_nohighmem(struct inode *inode)
 	mapping_set_gfp_mask(inode->i_mapping, GFP_USER);
 }
 EXPORT_SYMBOL(inode_nohighmem);
-
-/**
- * timespec64_trunc - Truncate timespec64 to a granularity
- * @t: Timespec64
- * @gran: Granularity in ns.
- *
- * Truncate a timespec64 to a granularity. Always rounds down. gran must
- * not be 0 nor greater than a second (NSEC_PER_SEC, or 10^9 ns).
- */
-struct timespec64 timespec64_trunc(struct timespec64 t, unsigned gran)
-{
-	/* Avoid division in the common cases 1 ns and 1 s. */
-	if (gran == 1) {
-		/* nothing */
-	} else if (gran == NSEC_PER_SEC) {
-		t.tv_nsec = 0;
-	} else if (gran > 1 && gran < NSEC_PER_SEC) {
-		t.tv_nsec -= t.tv_nsec % gran;
-	} else {
-		WARN(1, "illegal file time granularity: %u", gran);
-	}
-	return t;
-}
-EXPORT_SYMBOL(timespec64_trunc);
-
-/**
- * current_time - Return FS time
- * @inode: inode.
- *
- * Return the current time truncated to the time granularity supported by
- * the fs.
- *
- * Note that inode and inode->sb cannot be NULL.
- * Otherwise, the function warns and returns time without truncation.
- */
-struct timespec64 current_time(struct inode *inode)
-{
-	struct timespec64 now = current_kernel_time64();
-
-	if (unlikely(!inode->i_sb)) {
-		WARN(1, "current_time() called with uninitialized super_block in the inode");
-		return now;
-	}
-
-	return timespec64_trunc(now, inode->i_sb->s_time_gran);
-}
-EXPORT_SYMBOL(current_time);
 
 /*
  * Generic function to check FS_IOC_SETFLAGS values and reject any invalid
