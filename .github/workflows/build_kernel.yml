@@ -19,12 +19,6 @@ jobs:
           submodules: recursive
           fetch-depth: 1
 
-      - name: Setup Proton Clang
-        run: |
-          mkdir -p ~/toolchains
-          echo "Cloning Proton Clang..."
-          git clone https://github.com/kdrag0n/proton-clang.git --depth=1 ~/toolchains/clang
-
       - name: Install Build Dependencies
         run: |
           sudo apt-get update
@@ -32,10 +26,17 @@ jobs:
             libncurses5-dev libssl-dev rsync zip unzip wget curl ca-certificates \
             gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
             gcc-arm-linux-gnueabi binutils-arm-linux-gnueabi \
-            device-tree-compiler libelf-dev cmake libdw-dev
+            device-tree-compiler libelf-dev cmake libdw-dev pahole
+
+      - name: Download latest Google clang
+        run: |
+          wget -O llvm.tar.gz https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/mirror-goog-main-llvm-toolchain-source/clang-r596125.tar.gz
+          mkdir llvm-22; cd llvm-22
+          tar -xf ../llvm.tar.gz
+          rm ../llvm.tar.gz
 
       # -----------------------------------------------------------------------
-      # PAHOLE modern (v1.25) din surse pentru suport BTF complet
+      # PAHOLE v1.25 (Sursă pentru BTF complet)
       # -----------------------------------------------------------------------
       - name: Build Updated Pahole
         run: |
@@ -98,8 +99,8 @@ jobs:
       # -----------------------------------------------------------------------
       - name: Compile Kernel
         run: |
-          # Adăugăm DTC-ul nou și Proton Clang în capul PATH-ului
-          export PATH=~/dtc:~/toolchains/clang/bin:$PATH
+          # Adăugăm DTC și Google Clang r596125 în PATH
+          export PATH=$GITHUB_WORKSPACE/llvm-22/bin:~/dtc:$PATH
           export ARCH=arm64
           export SUBARCH=arm64
           export CC=clang
@@ -108,6 +109,7 @@ jobs:
           export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
           export CLANG_TRIPLE=aarch64-linux-gnu-
           
+          # LLVM Flags
           export LLVM=1
           export LLVM_IAS=1
 
@@ -116,9 +118,14 @@ jobs:
           echo "--> Generating Base Config: r5q_eur_open_defconfig"
           make O=out r5q_eur_open_defconfig
 
-          echo "--> Compiling Image.gz..."
+          # Forțare opțiuni BTF pentru eBPF NetBpfLoad
+          echo "CONFIG_DEBUG_INFO_BTF=y" >> out/.config
+          echo "CONFIG_DEBUG_INFO_BTF_MODULES=y" >> out/.config
+          make O=out olddefconfig
+
+          echo "--> Compiling Kernel Image..."
           set -o pipefail
-          make O=out -j$(nproc) Image.gz 2>&1 | tee build.log
+          make O=out -j$(nproc) Image.gz-dtb dtbo.img 2>&1 | tee build.log
           BUILD_STATUS=$?
           
           if [ $BUILD_STATUS -ne 0 ]; then
@@ -133,12 +140,20 @@ jobs:
           cd ~/AnyKernel3
           rm -rf .git* README.md
           
-          if [ -f $GITHUB_WORKSPACE/out/arch/arm64/boot/Image.gz ]; then
+          if [ -f $GITHUB_WORKSPACE/out/arch/arm64/boot/Image.gz-dtb ]; then
+             cp $GITHUB_WORKSPACE/out/arch/arm64/boot/Image.gz-dtb ./Image.gz-dtb
+             echo "✓ Copied Image.gz-dtb"
+          elif [ -f $GITHUB_WORKSPACE/out/arch/arm64/boot/Image.gz ]; then
              cp $GITHUB_WORKSPACE/out/arch/arm64/boot/Image.gz .
              echo "✓ Copied Image.gz"
           else
-             echo "Build Failed: Image.gz not found"
+             echo "Build Failed: Kernel image binary not found"
              exit 1
+          fi
+
+          if [ -f $GITHUB_WORKSPACE/out/arch/arm64/boot/dtbo.img ]; then
+             cp $GITHUB_WORKSPACE/out/arch/arm64/boot/dtbo.img .
+             echo "✓ Copied dtbo.img"
           fi
           
           ZIPNAME="sh4dow6oy-r5q-$(date +%Y%m%d).zip"
