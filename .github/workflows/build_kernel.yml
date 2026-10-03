@@ -36,7 +36,7 @@ jobs:
           rm ../llvm.tar.gz
 
       # -----------------------------------------------------------------------
-      # PAHOLE v1.25 (Sursă pentru BTF complet)
+      # PAHOLE v1.25 (Păstrat pentru suport BTF / eBPF)
       # -----------------------------------------------------------------------
       - name: Build Updated Pahole
         run: |
@@ -95,11 +95,10 @@ jobs:
           chmod +x anykernel.sh
 
       # -----------------------------------------------------------------------
-      # COMPILARE KERNEL
+      # COMPILARE KERNEL (DOAR IMAGE)
       # -----------------------------------------------------------------------
       - name: Compile Kernel
         run: |
-          # Adăugăm DTC și Google Clang r596125 în PATH
           export PATH=$GITHUB_WORKSPACE/llvm-22/bin:~/dtc:$PATH
           export ARCH=arm64
           export SUBARCH=arm64
@@ -109,7 +108,6 @@ jobs:
           export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
           export CLANG_TRIPLE=aarch64-linux-gnu-
           
-          # LLVM Flags
           export LLVM=1
           export LLVM_IAS=1
 
@@ -118,14 +116,14 @@ jobs:
           echo "--> Generating Base Config: r5q_eur_open_defconfig"
           make O=out r5q_eur_open_defconfig
 
-          # Forțare opțiuni BTF pentru eBPF NetBpfLoad
+          # Injectare opțiuni BTF pentru eBPF
           echo "CONFIG_DEBUG_INFO_BTF=y" >> out/.config
           echo "CONFIG_DEBUG_INFO_BTF_MODULES=y" >> out/.config
           make O=out olddefconfig
 
-          echo "--> Compiling Kernel Image..."
+          echo "--> Compiling Uncompressed Kernel Image..."
           set -o pipefail
-          make O=out -j$(nproc) Image.gz-dtb dtbo.img 2>&1 | tee build.log
+          make O=out -j$(nproc) Image 2>&1 | tee build.log
           BUILD_STATUS=$?
           
           if [ $BUILD_STATUS -ne 0 ]; then
@@ -140,22 +138,14 @@ jobs:
           cd ~/AnyKernel3
           rm -rf .git* README.md
           
-          if [ -f $GITHUB_WORKSPACE/out/arch/arm64/boot/Image.gz-dtb ]; then
-             cp $GITHUB_WORKSPACE/out/arch/arm64/boot/Image.gz-dtb ./Image.gz-dtb
-             echo "✓ Copied Image.gz-dtb"
-          elif [ -f $GITHUB_WORKSPACE/out/arch/arm64/boot/Image.gz ]; then
-             cp $GITHUB_WORKSPACE/out/arch/arm64/boot/Image.gz .
-             echo "✓ Copied Image.gz"
+          if [ -f $GITHUB_WORKSPACE/out/arch/arm64/boot/Image ]; then
+             cp $GITHUB_WORKSPACE/out/arch/arm64/boot/Image .
+             echo "✓ Copied Image"
           else
-             echo "Build Failed: Kernel image binary not found"
+             echo "Build Failed: Image file not found"
              exit 1
           fi
 
-          if [ -f $GITHUB_WORKSPACE/out/arch/arm64/boot/dtbo.img ]; then
-             cp $GITHUB_WORKSPACE/out/arch/arm64/boot/dtbo.img .
-             echo "✓ Copied dtbo.img"
-          fi
-          
           ZIPNAME="sh4dow6oy-r5q-$(date +%Y%m%d).zip"
           zip -r9 $GITHUB_WORKSPACE/$ZIPNAME *
           echo "✓ Created $ZIPNAME"
