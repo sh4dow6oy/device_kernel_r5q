@@ -4401,7 +4401,7 @@ static int pca9468_charger_probe(struct i2c_client *client,
 	pca9468_chg->wdt_kick = false;
 #endif
 
-	wakeup_source_init(&pca9468_chg->monitor_wake_lock, "pca9468-charger-monitor");
+	pca9468_chg->monitor_wake_lock = wakeup_source_register(pca9468_chg->dev, "pca9468-charger-monitor");
 
 	/* initialize work */
 	INIT_DELAYED_WORK(&pca9468_chg->timer_work, pca9468_timer_work);
