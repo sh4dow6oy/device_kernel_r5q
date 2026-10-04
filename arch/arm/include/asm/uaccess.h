@@ -149,10 +149,10 @@ extern int __get_user_64t_4(void *);
 	   __asm__ __volatile__ (					\
 		__asmeq("%0", "r0") __asmeq("%1", "r2")			\
 		__asmeq("%3", "r1")					\
-		__asmbl("", "ip", "__get_user_" #__s)			\
+		"bl	__get_user_" #__s				\
 		: "=&r" (__e), "=r" (__r2)				\
 		: "0" (__p), "r" (__l)					\
-		: __asmbl_clobber("ip"), "lr", "cc")
+		: "ip", "lr", "cc")
 
 /* narrowing a double-word get into a single 32bit word register: */
 #ifdef __ARMEB__
@@ -171,10 +171,10 @@ extern int __get_user_64t_4(void *);
 	   __asm__ __volatile__ (					\
 		__asmeq("%0", "r0") __asmeq("%1", "r2")			\
 		__asmeq("%3", "r1")					\
-		__asmbl("", "ip", "__get_user_64t_" #__s)		\
+		"bl	__get_user_64t_" #__s				\
 		: "=&r" (__e), "=r" (__r2)				\
 		: "0" (__p), "r" (__l)					\
-		: __asmbl_clobber("ip"), "lr", "cc")
+		: "ip", "lr", "cc")
 #else
 #define __get_user_x_64t __get_user_x
 #endif
@@ -183,7 +183,7 @@ extern int __get_user_64t_4(void *);
 #define __get_user_check(x, p)						\
 	({								\
 		unsigned long __limit = current_thread_info()->addr_limit - 1; \
-		register const typeof(*(p)) __user *__p asm("r0") = (p);\
+		register typeof(*(p)) __user *__p asm("r0") = (p);	\
 		register __inttype(x) __r2 asm("r2");			\
 		register unsigned long __l asm("r1") = __limit;		\
 		register int __e asm("r0");				\
@@ -241,7 +241,7 @@ extern int __put_user_8(void *, unsigned long long);
 		__asm__ __volatile__ (					\
 			__asmeq("%0", "r0") __asmeq("%2", "r2")		\
 			__asmeq("%3", "r1")				\
-			__asmbl("", "ip", "__put_user_" #__s)		\
+			"bl	__put_user_" #__s			\
 			: "=&r" (__e)					\
 			: "0" (__p), "r" (__r2), "r" (__l)		\
 			: "ip", "lr", "cc");				\

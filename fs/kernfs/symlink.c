@@ -1,11 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * fs/kernfs/symlink.c - kernfs symlink implementation
  *
  * Copyright (c) 2001-3 Patrick Mochel
  * Copyright (c) 2007 SUSE Linux Products GmbH
  * Copyright (c) 2007, 2013 Tejun Heo <tj@kernel.org>
- *
- * This file is released under the GPLv2.
  */
 
 #include <linux/fs.h>
@@ -54,6 +53,7 @@ struct kernfs_node *kernfs_create_link(struct kernfs_node *parent,
 	kernfs_put(kn);
 	return ERR_PTR(error);
 }
+EXPORT_SYMBOL_GPL(kernfs_create_link);
 
 static int kernfs_get_target_path(struct kernfs_node *parent,
 				  struct kernfs_node *target, char *path)

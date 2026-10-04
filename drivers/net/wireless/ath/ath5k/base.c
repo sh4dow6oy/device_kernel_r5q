@@ -73,16 +73,16 @@
 #include "trace.h"
 
 bool ath5k_modparam_nohwcrypt;
-module_param_named(nohwcrypt, ath5k_modparam_nohwcrypt, bool, S_IRUGO);
+module_param_named(nohwcrypt, ath5k_modparam_nohwcrypt, bool, 0444);
 MODULE_PARM_DESC(nohwcrypt, "Disable hardware encryption.");
 
 static bool modparam_fastchanswitch;
-module_param_named(fastchanswitch, modparam_fastchanswitch, bool, S_IRUGO);
+module_param_named(fastchanswitch, modparam_fastchanswitch, bool, 0444);
 MODULE_PARM_DESC(fastchanswitch, "Enable fast channel switching for AR2413/AR5413 radios.");
 
 static bool ath5k_modparam_no_hw_rfkill_switch;
 module_param_named(no_hw_rfkill_switch, ath5k_modparam_no_hw_rfkill_switch,
-								bool, S_IRUGO);
+		   bool, 0444);
 MODULE_PARM_DESC(no_hw_rfkill_switch, "Ignore the GPIO RFKill switch state");
 
 
@@ -1694,7 +1694,8 @@ ath5k_tx_frame_completed(struct ath5k_hw *ah, struct sk_buff *skb,
 	}
 
 	info->status.rates[ts->ts_final_idx].count = ts->ts_final_retry;
-	info->status.rates[ts->ts_final_idx + 1].idx = -1;
+	if (ts->ts_final_idx + 1 < IEEE80211_TX_MAX_RATES)
+		info->status.rates[ts->ts_final_idx + 1].idx = -1;
 
 	if (unlikely(ts->ts_status)) {
 		ah->stats.ack_fail++;

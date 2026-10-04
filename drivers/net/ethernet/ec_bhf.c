@@ -433,7 +433,7 @@ static int ec_bhf_open(struct net_device *net_dev)
 
 error_rx_free:
 	dma_free_coherent(dev, priv->rx_buf.alloc_len, priv->rx_buf.alloc,
-			  priv->rx_buf.alloc_len);
+			  priv->rx_buf.alloc_phys);
 out:
 	return err;
 }
@@ -604,7 +604,7 @@ static struct pci_driver pci_driver = {
 };
 module_pci_driver(pci_driver);
 
-module_param(polling_frequency, long, S_IRUGO);
+module_param(polling_frequency, long, 0444);
 MODULE_PARM_DESC(polling_frequency, "Polling timer frequency in ns");
 
 MODULE_LICENSE("GPL");

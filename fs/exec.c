@@ -257,7 +257,7 @@ static struct page *get_arg_page(struct linux_binprm *bprm, unsigned long pos,
 		 *    to work from.
 		 */
 		limit = _STK_LIM / 4 * 3;
-		limit = min(limit, rlimit(RLIMIT_STACK) / 4);
+		limit = min(limit, bprm->rlim_stack.rlim_cur / 4);
 		if (size > limit)
 			goto fail;
 	}
@@ -290,15 +290,15 @@ static int __bprm_mm_init(struct linux_binprm *bprm)
 	struct vm_area_struct *vma = NULL;
 	struct mm_struct *mm = bprm->mm;
 
-	bprm->vma = vma = kmem_cache_zalloc(vm_area_cachep, GFP_KERNEL);
+	bprm->vma = vma = vm_area_alloc(mm);
 	if (!vma)
 		return -ENOMEM;
+	vma_set_anonymous(vma);
 
-	if (down_write_killable(&mm->mmap_sem)) {
+	if (mmap_write_lock_killable(mm)) {
 		err = -EINTR;
 		goto err_free;
 	}
-	vma->vm_mm = mm;
 
 	/*
 	 * Place the stack at the largest stack address the architecture
@@ -311,7 +311,6 @@ static int __bprm_mm_init(struct linux_binprm *bprm)
 	vma->vm_start = vma->vm_end - PAGE_SIZE;
 	vma->vm_flags = VM_SOFTDIRTY | VM_STACK_FLAGS | VM_STACK_INCOMPLETE_SETUP;
 	vma->vm_page_prot = vm_get_page_prot(vma->vm_flags);
-	INIT_LIST_HEAD(&vma->anon_vma_chain);
 
 	err = insert_vm_struct(mm, vma);
 	if (err)
@@ -319,14 +318,14 @@ static int __bprm_mm_init(struct linux_binprm *bprm)
 
 	mm->stack_vm = mm->total_vm = 1;
 	arch_bprm_mm_init(mm, vma);
-	up_write(&mm->mmap_sem);
+	mmap_write_unlock(mm);
 	bprm->p = vma->vm_end - sizeof(void *);
 	return 0;
 err:
-	up_write(&mm->mmap_sem);
+	mmap_write_unlock(mm);
 err_free:
 	bprm->vma = NULL;
-	kmem_cache_free(vm_area_cachep, vma);
+	vm_area_free(vma);
 	return err;
 }
 
@@ -410,6 +409,11 @@ static int bprm_mm_init(struct linux_binprm *bprm)
 	err = -ENOMEM;
 	if (!mm)
 		goto err;
+
+	/* Save current stack limit for all calculations made during exec. */
+	task_lock(current->group_leader);
+	bprm->rlim_stack = current->signal->rlim[RLIMIT_STACK];
+	task_unlock(current->group_leader);
 
 	err = __bprm_mm_init(bprm);
 	if (err)
@@ -684,7 +688,7 @@ int setup_arg_pages(struct linux_binprm *bprm,
 		    unsigned long stack_top,
 		    int executable_stack)
 {
-	unsigned long ret;
+	int ret;
 	unsigned long stack_shift;
 	struct mm_struct *mm = current->mm;
 	struct vm_area_struct *vma = bprm->vma;
@@ -697,7 +701,7 @@ int setup_arg_pages(struct linux_binprm *bprm,
 
 #ifdef CONFIG_STACK_GROWSUP
 	/* Limit stack size */
-	stack_base = rlimit_max(RLIMIT_STACK);
+	stack_base = bprm->rlim_stack.rlim_max;
 	if (stack_base > STACK_SIZE_MAX)
 		stack_base = STACK_SIZE_MAX;
 
@@ -731,7 +735,7 @@ int setup_arg_pages(struct linux_binprm *bprm,
 		bprm->loader -= stack_shift;
 	bprm->exec -= stack_shift;
 
-	if (down_write_killable(&mm->mmap_sem))
+	if (mmap_write_lock_killable(mm))
 		return -EINTR;
 
 	vm_flags = VM_STACK_FLAGS;
@@ -770,7 +774,7 @@ int setup_arg_pages(struct linux_binprm *bprm,
 	 * Align this down to a page boundary as expand_stack
 	 * will align it up.
 	 */
-	rlim_stack = rlimit(RLIMIT_STACK) & PAGE_MASK;
+	rlim_stack = bprm->rlim_stack.rlim_cur & PAGE_MASK;
 #ifdef CONFIG_STACK_GROWSUP
 	if (stack_size + stack_expand > rlim_stack)
 		stack_base = vma->vm_start + rlim_stack;
@@ -788,7 +792,7 @@ int setup_arg_pages(struct linux_binprm *bprm,
 		ret = -EFAULT;
 
 out_unlock:
-	up_write(&mm->mmap_sem);
+	mmap_write_unlock(mm);
 	return ret;
 }
 EXPORT_SYMBOL(setup_arg_pages);
@@ -808,7 +812,7 @@ int transfer_args_to_stack(struct linux_binprm *bprm,
 	stop = bprm->p >> PAGE_SHIFT;
 	sp = *sp_location;
 
-	for (index = MAX_ARG_PAGES - 1; index >= stop; index--) {
+	for (index = MAX_ARG_PAGES; index-- > stop; ) {
 		unsigned int offset = index == stop ? bprm->p & ~PAGE_MASK : 0;
 		char *src = kmap(bprm->page[index]) + offset;
 		sp -= PAGE_SIZE - offset;
@@ -896,13 +900,13 @@ int kernel_read_file(struct file *file, void **buf, loff_t *size,
 	if (!S_ISREG(file_inode(file)->i_mode) || max_size < 0)
 		return -EINVAL;
 
-	ret = security_kernel_read_file(file, id);
-	if (ret)
-		return ret;
-
 	ret = deny_write_access(file);
 	if (ret)
 		return ret;
+
+	ret = security_kernel_read_file(file, id);
+	if (ret)
+		goto out;
 
 	i_size = i_size_read(file_inode(file));
 	if (max_size > 0 && i_size > max_size) {
@@ -1018,9 +1022,9 @@ static int exec_mmap(struct mm_struct *mm)
 		 * through with the exec.  We must hold mmap_sem around
 		 * checking core_state and changing tsk->mm.
 		 */
-		down_read(&old_mm->mmap_sem);
+		mmap_read_lock(old_mm);
 		if (unlikely(old_mm->core_state)) {
-			up_read(&old_mm->mmap_sem);
+			mmap_read_unlock(old_mm);
 			return -EINTR;
 		}
 	}
@@ -1046,7 +1050,7 @@ static int exec_mmap(struct mm_struct *mm)
 	vmacache_flush(tsk);
 	task_unlock(tsk);
 	if (old_mm) {
-		up_read(&old_mm->mmap_sem);
+		mmap_read_unlock(old_mm);
 		BUG_ON(active_mm != old_mm);
 		setmax_mm_hiwater_rss(&tsk->signal->maxrss, old_mm);
 		mm_update_next_owner(old_mm);
@@ -1285,7 +1289,6 @@ int flush_old_exec(struct linux_binprm * bprm)
 	 * Release all of the old mmap stuff
 	 */
 	acct_arg_size(bprm, 0);
-
 	retval = exec_mmap(bprm->mm);
 	if (retval)
 		goto out;
@@ -1359,11 +1362,11 @@ void setup_new_exec(struct linux_binprm * bprm)
 		 * RLIMIT_STACK, but after the point of no return to avoid
 		 * needing to clean up the change on failure.
 		 */
-		if (current->signal->rlim[RLIMIT_STACK].rlim_cur > _STK_LIM)
-			current->signal->rlim[RLIMIT_STACK].rlim_cur = _STK_LIM;
+		if (bprm->rlim_stack.rlim_cur > _STK_LIM)
+			bprm->rlim_stack.rlim_cur = _STK_LIM;
 	}
 
-	arch_pick_mmap_layout(current->mm);
+	arch_pick_mmap_layout(current->mm, &bprm->rlim_stack);
 
 	current->sas_ss_sp = current->sas_ss_size = 0;
 
@@ -1395,6 +1398,16 @@ void setup_new_exec(struct linux_binprm * bprm)
 	flush_signal_handlers(current, 0);
 }
 EXPORT_SYMBOL(setup_new_exec);
+
+/* Runs immediately before start_thread() takes over. */
+void finalize_exec(struct linux_binprm *bprm)
+{
+	/* Store any stack rlimit changes before starting thread. */
+	task_lock(current->group_leader);
+	current->signal->rlim[RLIMIT_STACK] = bprm->rlim_stack;
+	task_unlock(current->group_leader);
+}
+EXPORT_SYMBOL(finalize_exec);
 
 /*
  * Prepare credentials and lock ->cred_guard_mutex.
@@ -1680,8 +1693,7 @@ int search_binary_handler(struct linux_binprm *bprm)
 		if (printable(bprm->buf[0]) && printable(bprm->buf[1]) &&
 		    printable(bprm->buf[2]) && printable(bprm->buf[3]))
 			return retval;
-		if (request_module("binfmt-%04x",
-					*(ushort *)(bprm->buf + 2)) < 0)
+		if (request_module("binfmt-%04x", *(ushort *)(bprm->buf + 2)) < 0)
 			return retval;
 		need_retry = false;
 		goto retry;
@@ -1818,7 +1830,7 @@ static int __do_execve_file(int fd, struct filename *filename,
 	if (retval < 0)
 		goto out;
 
-    bprm->exec = bprm->p;
+	bprm->exec = bprm->p;
 	retval = copy_strings(bprm->envc, envp, bprm);
 	if (retval < 0)
 		goto out;
@@ -1826,7 +1838,7 @@ static int __do_execve_file(int fd, struct filename *filename,
 	retval = copy_strings(bprm->argc, argv, bprm);
 	if (retval < 0)
 		goto out;
-    
+
 	/*
 	 * When argv is empty, add an empty string ("") as argv[0] to
 	 * ensure confused userspace programs that start processing
@@ -1840,7 +1852,7 @@ static int __do_execve_file(int fd, struct filename *filename,
 			goto out;
 		bprm->argc = 1;
 	}
-	
+
 	retval = exec_binprm(bprm);
 	if (retval < 0)
 		goto out;
@@ -1849,6 +1861,7 @@ static int __do_execve_file(int fd, struct filename *filename,
 	current->fs->in_exec = 0;
 	current->in_execve = 0;
 	membarrier_execve(current);
+	rseq_execve(current);
 	acct_update_integrals(current);
 	task_numa_free(current, false);
 	free_bprm(bprm);
@@ -1975,7 +1988,7 @@ void set_dumpable(struct mm_struct *mm, int value)
 		return;
 
 	do {
-		old = ACCESS_ONCE(mm->flags);
+		old = READ_ONCE(mm->flags);
 		new = (old & ~MMF_DUMPABLE_MASK) | value;
 	} while (cmpxchg(&mm->flags, old, new) != old);
 }

@@ -1,18 +1,11 @@
-/* Copyright (c) 2011-2019, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
+// SPDX-License-Identifier: GPL-2.0-only
+
+/*
+ * Copyright (c) 2011-2018, The Linux Foundation. All rights reserved.
  */
 
 #define pr_fmt(fmt) "%s: " fmt, __func__
-#include <linux/string.h>
+
 #include <linux/init.h>
 #include <linux/io.h>
 #include <linux/kernel.h>
@@ -22,7 +15,7 @@
 #include <linux/of.h>
 #include <linux/uaccess.h>
 #include <asm/arch_timer.h>
-#include <soc/qcom/boot_stats.h>
+
 #define RPM_STATS_NUM_REC	2
 #define MSM_ARCH_TIMER_FREQ	19200000
 
@@ -62,18 +55,12 @@ struct msm_rpm_stats_data {
 #endif
 
 };
-static struct msm_rpmstats_platform_data *gpdata;
-static u64 deep_sleep_last_exited_time;
 
 struct msm_rpmstats_kobj_attr {
 	struct kobject *kobj;
 	struct kobj_attribute ka;
 	struct msm_rpmstats_platform_data *pd;
 };
-
-#ifdef CONFIG_SEC_PM
-struct msm_rpmstats_platform_data *debug_pdata;
-#endif
 
 static inline u64 get_time_in_sec(u64 counter)
 {
@@ -97,7 +84,6 @@ static inline int msm_rpmstats_append_data_to_buf(char *buf,
 	u64 time_in_last_mode;
 	u64 time_since_last_mode;
 	u64 actual_last_sleep;
-	static u32 saved_deep_sleep_count;
 
 	stat_type[4] = 0;
 	memcpy(stat_type, &data->stat_type, sizeof(u32));
@@ -108,17 +94,8 @@ static inline int msm_rpmstats_append_data_to_buf(char *buf,
 	time_since_last_mode = get_time_in_sec(time_since_last_mode);
 	actual_last_sleep = get_time_in_msec(data->accumulated);
 
-	if (!memcmp((const void *)stat_type, (const void *)"aosd", 4)) {
-		if (saved_deep_sleep_count == data->count)
-			deep_sleep_last_exited_time = 0;
-		else {
-			saved_deep_sleep_count = data->count;
-			deep_sleep_last_exited_time = data->last_exited_at;
-		}
-	}
-
 #if defined(CONFIG_MSM_RPM_SMD)
-	return snprintf(buf, buflength,
+	return scnprintf(buf, buflength,
 		"RPM Mode:%s\n\t count:%d\ntime in last mode(msec):%llu\n"
 		"time since last mode(sec):%llu\nactual last sleep(msec):%llu\n"
 		"client votes: %#010x\n\n",
@@ -126,7 +103,7 @@ static inline int msm_rpmstats_append_data_to_buf(char *buf,
 		time_since_last_mode, actual_last_sleep,
 		data->client_votes);
 #else
-	return snprintf(buf, buflength,
+	return scnprintf(buf, buflength,
 		"RPM Mode:%s\n\t count:%d\ntime in last mode(msec):%llu\n"
 		"time since last mode(sec):%llu\nactual last sleep(msec):%llu\n\n",
 		stat_type, data->count, time_in_last_mode,
@@ -189,107 +166,6 @@ static inline int msm_rpmstats_copy_stats(
 
 	return length;
 }
-static ssize_t msm_rpmstats_populate_stats(void)
-{
-	struct msm_rpmstats_private_data prvdata;
-
-	if (!gpdata) {
-		pr_err("ERROR could not get rpm data memory\n");
-		return -ENOMEM;
-	}
-	prvdata.reg_base = ioremap_nocache(gpdata->phys_addr_base,
-					gpdata->phys_size);
-	if (!prvdata.reg_base) {
-		pr_err("ERROR could not ioremap start=%pa, len=%u\n",
-				gpdata->phys_addr_base, gpdata->phys_size);
-		return -EBUSY;
-	}
-	prvdata.read_idx = prvdata.len = 0;
-	prvdata.platform_data = gpdata;
-	prvdata.num_records = gpdata->num_records;
-
-	if (prvdata.read_idx < prvdata.num_records)
-		prvdata.len = msm_rpmstats_copy_stats(&prvdata);
-	iounmap(prvdata.reg_base);
-	return prvdata.len;
-}
-
-uint64_t get_sleep_exit_time(void)
-{
-	if (msm_rpmstats_populate_stats() < 0)
-		return 0;
-	else
-		return deep_sleep_last_exited_time;
-}
-EXPORT_SYMBOL(get_sleep_exit_time);
-
-#ifdef CONFIG_SEC_PM
-void debug_rpmstats_show(char *annotation)
-{
-	void __iomem *reg;
-	struct msm_rpm_stats_data data;
-	int i;
-	char stat_type[5];
-	u64 time_in_last_mode;
-	u64 time_since_last_mode;
-	u64 actual_last_sleep;
-	char buf[256];
-	char *buf_ptr = buf;
-
-	reg = ioremap_nocache(debug_pdata->phys_addr_base,
-					debug_pdata->phys_size);
-	if (!reg) {
-		pr_err("%s: ERROR could not ioremap start=%pa, len=%u\n",
-			__func__, &debug_pdata->phys_addr_base,
-			debug_pdata->phys_size);
-		return;
-	}
-
-	buf_ptr += sprintf(buf_ptr, "PM: %s:", annotation);
-	for (i = 0; i < debug_pdata->num_records; i++) {
-		data.stat_type = msm_rpmstats_read_long_register(reg, i,
-				offsetof(struct msm_rpm_stats_data,
-					stat_type));
-		data.count = msm_rpmstats_read_long_register(reg, i,
-				offsetof(struct msm_rpm_stats_data, count));
-		data.last_entered_at = msm_rpmstats_read_quad_register(reg,
-				i, offsetof(struct msm_rpm_stats_data,
-					last_entered_at));
-		data.last_exited_at = msm_rpmstats_read_quad_register(reg,
-				i, offsetof(struct msm_rpm_stats_data,
-					last_exited_at));
-		data.accumulated = msm_rpmstats_read_quad_register(reg,
-				i, offsetof(struct msm_rpm_stats_data,
-					accumulated));
-
-		stat_type[4] = 0;
-		memcpy(stat_type, &data.stat_type, sizeof(u32));
-
-		time_in_last_mode = data.last_exited_at - data.last_entered_at;
-		time_in_last_mode = get_time_in_sec(time_in_last_mode);
-		time_since_last_mode = arch_counter_get_cntvct()
-						- data.last_exited_at;
-		time_since_last_mode = get_time_in_sec(time_since_last_mode);
-		actual_last_sleep = get_time_in_sec(data.accumulated);
-
-		buf_ptr += sprintf(buf_ptr, " %s(%d, %llu, %llu, %llu)",
-			stat_type, data.count, time_in_last_mode,
-			time_since_last_mode, actual_last_sleep);
-
-		if (i < (debug_pdata->num_records - 1))
-			buf_ptr += sprintf(buf_ptr, ",");
-		else
-			buf_ptr += sprintf(buf_ptr, "\n");
-	}
-
-	iounmap(reg);
-
-	printk(KERN_INFO "%s", buf);
-
-	return;
-}
-EXPORT_SYMBOL(debug_rpmstats_show);
-#endif
 
 static ssize_t rpmstats_show(struct kobject *kobj,
 			struct kobj_attribute *attr, char *buf)
@@ -394,12 +270,7 @@ static int msm_rpmstats_probe(struct platform_device *pdev)
 	if (of_property_read_u32(pdev->dev.of_node, key, &pdata->num_records))
 		pdata->num_records = RPM_STATS_NUM_REC;
 
-#ifdef CONFIG_SEC_PM
-	debug_pdata = pdata;
-#endif
-
 	msm_rpmstats_create_sysfs(pdev, pdata);
-	gpdata = pdata;
 
 	return 0;
 }

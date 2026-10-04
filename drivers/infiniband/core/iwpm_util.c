@@ -56,14 +56,16 @@ int iwpm_init(u8 nl_client)
 	int ret = 0;
 	mutex_lock(&iwpm_admin_lock);
 	if (atomic_read(&iwpm_admin.refcount) == 0) {
-		iwpm_hash_bucket = kzalloc(IWPM_MAPINFO_HASH_SIZE *
-					sizeof(struct hlist_head), GFP_KERNEL);
+		iwpm_hash_bucket = kcalloc(IWPM_MAPINFO_HASH_SIZE,
+					   sizeof(struct hlist_head),
+					   GFP_KERNEL);
 		if (!iwpm_hash_bucket) {
 			ret = -ENOMEM;
 			goto init_exit;
 		}
-		iwpm_reminfo_bucket = kzalloc(IWPM_REMINFO_HASH_SIZE *
-					sizeof(struct hlist_head), GFP_KERNEL);
+		iwpm_reminfo_bucket = kcalloc(IWPM_REMINFO_HASH_SIZE,
+					      sizeof(struct hlist_head),
+					      GFP_KERNEL);
 		if (!iwpm_reminfo_bucket) {
 			kfree(iwpm_hash_bucket);
 			ret = -ENOMEM;
@@ -442,10 +444,9 @@ struct sk_buff *iwpm_create_nlmsg(u32 nl_op, struct nlmsghdr **nlh,
 	struct sk_buff *skb = NULL;
 
 	skb = dev_alloc_skb(IWPM_MSG_SIZE);
-	if (!skb) {
-		pr_err("%s Unable to allocate skb\n", __func__);
+	if (!skb)
 		goto create_nlmsg_exit;
-	}
+
 	if (!(ibnl_put_msg(skb, nlh, 0, 0, nl_client, nl_op,
 			   NLM_F_REQUEST))) {
 		pr_warn("%s: Unable to put the nlmsg header\n", __func__);
@@ -464,14 +465,14 @@ int iwpm_parse_nlmsg(struct netlink_callback *cb, int policy_max,
 	int ret;
 	const char *err_str = "";
 
-	ret = nlmsg_validate(cb->nlh, nlh_len, policy_max - 1, nlmsg_policy,
-			     NULL);
+	ret = nlmsg_validate_deprecated(cb->nlh, nlh_len, policy_max - 1,
+					nlmsg_policy, NULL);
 	if (ret) {
 		err_str = "Invalid attribute";
 		goto parse_nlmsg_error;
 	}
-	ret = nlmsg_parse(cb->nlh, nlh_len, nltb, policy_max - 1,
-			  nlmsg_policy, NULL);
+	ret = nlmsg_parse_deprecated(cb->nlh, nlh_len, nltb, policy_max - 1,
+				     nlmsg_policy, NULL);
 	if (ret) {
 		err_str = "Unable to parse the nlmsg";
 		goto parse_nlmsg_error;

@@ -132,7 +132,7 @@ static int emc_determine_rate(struct clk_hw *hw, struct clk_rate_request *req)
 		timing = tegra->timings + i;
 
 		if (timing->rate > req->max_rate) {
-			i = min(i, 1);
+			i = max(i, 1);
 			req->rate = tegra->timings[i - 1].rate;
 			return 0;
 		}
@@ -189,8 +189,8 @@ static struct tegra_emc *emc_ensure_emc_driver(struct tegra_clk_emc *tegra)
 	tegra->emc_node = NULL;
 
 	tegra->emc = platform_get_drvdata(pdev);
+	put_device(&pdev->dev);
 	if (!tegra->emc) {
-		put_device(&pdev->dev);
 		pr_err("%s: cannot find EMC driver\n", __func__);
 		return NULL;
 	}
@@ -474,7 +474,7 @@ struct clk *tegra_clk_register_emc(void __iomem *base, struct device_node *np,
 				   spinlock_t *lock)
 {
 	struct tegra_clk_emc *tegra;
-	struct clk_init_data init;
+	struct clk_init_data init = {};
 	struct device_node *node;
 	u32 node_ram_code;
 	struct clk *clk;
@@ -516,15 +516,17 @@ struct clk *tegra_clk_register_emc(void __iomem *base, struct device_node *np,
 
 	init.name = "emc";
 	init.ops = &tegra_clk_emc_ops;
-	init.flags = 0;
+	init.flags = CLK_IS_CRITICAL;
 	init.parent_names = emc_parent_clk_names;
 	init.num_parents = ARRAY_SIZE(emc_parent_clk_names);
 
 	tegra->hw.init = &init;
 
 	clk = clk_register(NULL, &tegra->hw);
-	if (IS_ERR(clk))
+	if (IS_ERR(clk)) {
+		kfree(tegra);
 		return clk;
+	}
 
 	tegra->prev_parent = clk_hw_get_parent_by_index(
 		&tegra->hw, emc_get_parent(&tegra->hw))->clk;

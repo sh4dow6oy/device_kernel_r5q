@@ -39,8 +39,7 @@ void scif_rma_ep_init(struct scif_endpt *ep)
 	struct scif_endpt_rma_info *rma = &ep->rma_info;
 
 	mutex_init(&rma->rma_lock);
-	init_iova_domain(&rma->iovad, PAGE_SIZE, SCIF_IOVA_START_PFN,
-			 SCIF_DMA_64BIT_PFN);
+	init_iova_domain(&rma->iovad, PAGE_SIZE, SCIF_IOVA_START_PFN);
 	spin_lock_init(&rma->tc_lock);
 	mutex_init(&rma->mmn_lock);
 	INIT_LIST_HEAD(&rma->reg_list);
@@ -278,16 +277,16 @@ __scif_dec_pinned_vm_lock(struct mm_struct *mm,
 	if (!mm || !nr_pages || !scif_ulimit_check)
 		return 0;
 	if (try_lock) {
-		if (!down_write_trylock(&mm->mmap_sem)) {
+		if (!mmap_write_trylock(mm)) {
 			dev_err(scif_info.mdev.this_device,
 				"%s %d err\n", __func__, __LINE__);
 			return -1;
 		}
 	} else {
-		down_write(&mm->mmap_sem);
+		mmap_write_lock(mm);
 	}
 	mm->pinned_vm -= nr_pages;
-	up_write(&mm->mmap_sem);
+	mmap_write_unlock(mm);
 	return 0;
 }
 
@@ -1386,11 +1385,11 @@ int __scif_pin_pages(void *addr, size_t len, int *out_prot,
 		prot |= SCIF_PROT_WRITE;
 retry:
 		mm = current->mm;
-		down_write(&mm->mmap_sem);
+		mmap_write_lock(mm);
 		if (ulimit) {
 			err = __scif_check_inc_pinned_vm(mm, nr_pages);
 			if (err) {
-				up_write(&mm->mmap_sem);
+				mmap_write_unlock(mm);
 				pinned_pages->nr_pages = 0;
 				goto error_unmap;
 			}
@@ -1402,7 +1401,7 @@ retry:
 				(prot & SCIF_PROT_WRITE) ? FOLL_WRITE : 0,
 				pinned_pages->pages,
 				NULL);
-		up_write(&mm->mmap_sem);
+		mmap_write_unlock(mm);
 		if (nr_pages != pinned_pages->nr_pages) {
 			if (pinned_pages->nr_pages < 0)
 				pinned_pages->nr_pages = 0;

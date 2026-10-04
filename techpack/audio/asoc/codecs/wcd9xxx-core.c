@@ -1,13 +1,5 @@
-/* Copyright (c) 2011-2018, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+// SPDX-License-Identifier: GPL-2.0-only
+/* Copyright (c) 2011-2021, The Linux Foundation. All rights reserved.
  */
 
 #include <linux/kernel.h>
@@ -23,14 +15,14 @@
 #include <linux/regmap.h>
 #include <linux/mfd/wcd9xxx/wcd9xxx_registers.h>
 #include <sound/soc.h>
-#include "core.h"
-#include "pdata.h"
-#include "msm-cdc-pinctrl.h"
-#include "msm-cdc-supply.h"
-#include "wcd9xxx-irq.h"
+#include <asoc/core.h>
+#include <asoc/pdata.h>
+#include <asoc/msm-cdc-pinctrl.h>
+#include <asoc/msm-cdc-supply.h>
+#include <asoc/wcd9xxx-irq.h>
 #include "wcd9xxx-utils.h"
-#include "wcd9xxx-regmap.h"
-#include "wcd9xxx-slimslave.h"
+#include <asoc/wcd9xxx-regmap.h>
+#include <asoc/wcd9xxx-slimslave.h>
 
 #define WCD9XXX_REGISTER_START_OFFSET 0x800
 #define WCD9XXX_SLIM_RW_MAX_TRIES 3
@@ -88,7 +80,6 @@ static const int wcd9xxx_cdc_types[] = {
 	[WCD9330] = WCD9330,
 	[WCD9335] = WCD9335,
 	[WCD934X] = WCD934X,
-	[WCD9360] = WCD9360,
 };
 
 static const struct of_device_id wcd9xxx_of_match[] = {
@@ -106,6 +97,65 @@ static int wcd9xxx_slim_device_up(struct slim_device *sldev);
 static int wcd9xxx_slim_device_down(struct slim_device *sldev);
 
 struct wcd9xxx_i2c wcd9xxx_modules[MAX_WCD9XXX_DEVICE];
+
+/*
+ * wcd9xxx_vote_ondemand_regulator: Initialize codec dynamic supplies
+ *
+ * @wcd9xxx: Pointer to wcd9xxx structure
+ * @wcd9xxx_pdata: Pointer to wcd9xxx_pdata structure
+ * @supply_name: supply parameter to initialize regulator
+ * @enable: flag to initialize/uninitialize supply
+ *
+ * Return error code if supply init is failed
+ */
+int wcd9xxx_vote_ondemand_regulator(struct wcd9xxx *wcd9xxx,
+				    struct wcd9xxx_pdata *pdata,
+				    const char *supply_name,
+				    bool enable)
+{
+	int i, rc, index = -EINVAL;
+
+	pr_debug("%s: enable %d\n", __func__, enable);
+
+	for (i = 0; i < wcd9xxx->num_of_supplies; ++i) {
+		if (pdata->regulator[i].ondemand &&
+		    wcd9xxx->supplies[i].supply &&
+		    !strcmp(wcd9xxx->supplies[i].supply, supply_name)) {
+			index = i;
+			break;
+		}
+	}
+
+	if (index < 0) {
+		pr_err("%s: no matching regulator found\n", __func__);
+		return -EINVAL;
+	}
+
+	if (enable) {
+		rc = regulator_set_voltage(wcd9xxx->supplies[index].consumer,
+					   pdata->regulator[index].min_uV,
+					   pdata->regulator[index].max_uV);
+		if (rc) {
+			pr_err("%s: set regulator voltage failed for %s, err:%d\n",
+				__func__, supply_name, rc);
+			return rc;
+		}
+		rc = regulator_set_load(wcd9xxx->supplies[index].consumer,
+					pdata->regulator[index].optimum_uA);
+		if (rc < 0) {
+			pr_err("%s: set regulator optimum mode failed for %s, err:%d\n",
+				__func__, supply_name, rc);
+			return rc;
+		}
+	} else {
+		regulator_set_voltage(wcd9xxx->supplies[index].consumer, 0,
+				      pdata->regulator[index].max_uV);
+		regulator_set_load(wcd9xxx->supplies[index].consumer, 0);
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL(wcd9xxx_vote_ondemand_regulator);
 
 static int wcd9xxx_slim_multi_reg_write(struct wcd9xxx *wcd9xxx,
 					const void *data, size_t count)
@@ -330,8 +380,7 @@ int wcd9xxx_slim_write_repeat(struct wcd9xxx *wcd9xxx, unsigned short reg,
 	struct slim_ele_access slim_msg;
 
 	mutex_lock(&wcd9xxx->io_lock);
-	if (wcd9xxx->type == WCD9335 || wcd9xxx->type == WCD934X ||
-		wcd9xxx->type == WCD9360) {
+	if (wcd9xxx->type == WCD9335 || wcd9xxx->type == WCD934X) {
 		ret = wcd9xxx_page_write(wcd9xxx, &reg);
 		if (ret)
 			goto done;
@@ -507,7 +556,6 @@ static int wcd9xxx_device_init(struct wcd9xxx *wcd9xxx)
 	struct wcd9xxx_core_resource *core_res = &wcd9xxx->core_res;
 	regmap_patch_fptr regmap_apply_patch = NULL;
 
-	dev_info(wcd9xxx->dev, "%s()\n", __func__);
 	mutex_init(&wcd9xxx->io_lock);
 	mutex_init(&wcd9xxx->xfer_lock);
 	mutex_init(&wcd9xxx->reset_lock);
@@ -576,7 +624,6 @@ static int wcd9xxx_device_init(struct wcd9xxx *wcd9xxx)
 		dev_err(wcd9xxx->dev, "Device wakeup init failed: %d\n", ret);
 		goto err_irq;
 	}
-	dev_info(wcd9xxx->dev, "%s() leave\n", __func__);
 
 	return ret;
 err_irq:
@@ -861,7 +908,7 @@ static int wcd9xxx_i2c_write_device(struct wcd9xxx *wcd9xxx, u16 reg, u8 *value,
 	struct i2c_msg *msg;
 	int ret = 0;
 	u8 reg_addr = 0;
-	u8 data[bytes + 1];
+	u8 *data = NULL;
 	struct wcd9xxx_i2c *wcd9xxx_i2c;
 
 	wcd9xxx_i2c = wcd9xxx_i2c_get_device_info(wcd9xxx, reg);
@@ -869,6 +916,11 @@ static int wcd9xxx_i2c_write_device(struct wcd9xxx *wcd9xxx, u16 reg, u8 *value,
 		pr_err("failed to get device info\n");
 		return -ENODEV;
 	}
+
+	data = kzalloc(bytes + 1, GFP_KERNEL);
+	if (!data)
+		return -ENOMEM;
+
 	reg_addr = (u8)reg;
 	msg = &wcd9xxx_i2c->xfer_msg[0];
 	msg->addr = wcd9xxx_i2c->client->addr;
@@ -885,11 +937,13 @@ static int wcd9xxx_i2c_write_device(struct wcd9xxx *wcd9xxx, u16 reg, u8 *value,
 						wcd9xxx_i2c->xfer_msg, 1);
 		if (ret != 1) {
 			pr_err("failed to write the device\n");
-			return ret;
+			goto fail;
 		}
 	}
 	pr_debug("write success register = %x val = %x\n", reg, data[1]);
-	return 0;
+fail:
+	kfree(data);
+	return ret;
 }
 
 
@@ -1079,9 +1133,10 @@ static int wcd9xxx_i2c_probe(struct i2c_client *client,
 			wcd9xxx->mclk_rate = pdata->mclk_rate;
 
 		wcd9xxx->num_of_supplies = pdata->num_supplies;
-		ret = msm_cdc_init_supplies(wcd9xxx->dev, &wcd9xxx->supplies,
-					    pdata->regulator,
-					    pdata->num_supplies);
+		ret = msm_cdc_init_supplies_v2(wcd9xxx->dev, &wcd9xxx->supplies,
+					       pdata->regulator,
+					       pdata->num_supplies,
+					       pdata->vote_regulator_on_demand);
 		if (!wcd9xxx->supplies) {
 			dev_err(wcd9xxx->dev, "%s: Cannot init wcd supplies\n",
 				__func__);
@@ -1142,9 +1197,12 @@ static int wcd9xxx_i2c_probe(struct i2c_client *client,
 		wcd9xxx_set_intf_type(WCD9XXX_INTERFACE_TYPE_I2C);
 
 		return ret;
+	} else {
+		ret = -EINVAL;
+		pr_err("%s: I2C probe in wrong state, ret %d\n", __func__, ret);
+		goto fail;
 	}
 
-	pr_err("%s: I2C probe in wrong state\n", __func__);
 
 
 err_device_init:
@@ -1234,7 +1292,6 @@ static int wcd9xxx_slim_probe(struct slim_device *slim)
 	int ret = 0;
 	int intf_type;
 
-	dev_info(&slim->dev, "%s()\n", __func__);
 	if (!slim)
 		return -EINVAL;
 
@@ -1334,9 +1391,10 @@ static int wcd9xxx_slim_probe(struct slim_device *slim)
 	}
 
 	wcd9xxx->num_of_supplies = pdata->num_supplies;
-	ret = msm_cdc_init_supplies(&slim->dev, &wcd9xxx->supplies,
-				    pdata->regulator,
-				    pdata->num_supplies);
+	ret = msm_cdc_init_supplies_v2(&slim->dev, &wcd9xxx->supplies,
+				       pdata->regulator,
+				       pdata->num_supplies,
+				       pdata->vote_regulator_on_demand);
 	if (!wcd9xxx->supplies) {
 		dev_err(wcd9xxx->dev, "%s: Cannot init wcd supplies\n",
 			__func__);
@@ -1357,8 +1415,7 @@ static int wcd9xxx_slim_probe(struct slim_device *slim)
 	 * Vout_D to be ready after BUCK_SIDO is powered up.
 	 * SYS_RST_N shouldn't be pulled high during this time
 	 */
-	if (wcd9xxx->type == WCD9335 || wcd9xxx->type == WCD934X ||
-	    wcd9xxx->type == WCD9360)
+	if (wcd9xxx->type == WCD9335 || wcd9xxx->type == WCD934X)
 		usleep_range(600, 650);
 	else
 		usleep_range(5, 10);
@@ -1375,10 +1432,6 @@ static int wcd9xxx_slim_probe(struct slim_device *slim)
 	if (ret) {
 		dev_err(&slim->dev, "%s: failed to get slimbus %s logical address: %d\n",
 		       __func__, wcd9xxx->slim->name, ret);
-#ifdef CONFIG_SEC_SND_DEBUG
-		panic("failed to get slimbus slimbus logical address\n");
-#endif /* CONFIG_SEC_SND_DEBUG */
-		ret = -EPROBE_DEFER;
 		goto err_reset;
 	}
 	wcd9xxx->read_dev = wcd9xxx_slim_read_device;
@@ -1393,9 +1446,6 @@ static int wcd9xxx_slim_probe(struct slim_device *slim)
 	if (ret) {
 		dev_err(&slim->dev, "%s: error, adding SLIMBUS device failed\n",
 			__func__);
-#ifdef CONFIG_SEC_SND_DEBUG
-		panic("adding SLIMBUS device failed\n");
-#endif /* CONFIG_SEC_SND_DEBUG */
 		goto err_reset;
 	}
 
@@ -1406,10 +1456,6 @@ static int wcd9xxx_slim_probe(struct slim_device *slim)
 	if (ret) {
 		dev_err(&slim->dev, "%s: failed to get slimbus %s logical address: %d\n",
 		       __func__, wcd9xxx->slim->name, ret);
-#ifdef CONFIG_SEC_SND_DEBUG
-		panic("failed to get slimbus slimbus slave logical address\n");
-#endif /* CONFIG_SEC_SND_DEBUG */
-		ret = -EPROBE_DEFER;
 		goto err_slim_add;
 	}
 	wcd9xxx_inf_la = wcd9xxx->slim_slave->laddr;
@@ -1419,9 +1465,6 @@ static int wcd9xxx_slim_probe(struct slim_device *slim)
 	if (ret) {
 		dev_err(&slim->dev, "%s: error, initializing device failed (%d)\n",
 			__func__, ret);
-#ifdef CONFIG_SEC_SND_DEBUG
-		panic("error, initializing device failed\n");
-#endif /* CONFIG_SEC_SND_DEBUG */
 		goto err_slim_add;
 	}
 #ifdef CONFIG_DEBUG_FS
@@ -1448,7 +1491,6 @@ static int wcd9xxx_slim_probe(struct slim_device *slim)
 	}
 #endif
 
-	dev_info(&slim->dev, "%s() leave\n", __func__);
 	return ret;
 
 err_slim_add:
@@ -1619,7 +1661,6 @@ static const struct slim_device_id wcd_slim_device_id[] = {
 	{"tomtom-slim-pgd", WCD9330},
 	{"tasha-slim-pgd", WCD9335},
 	{"tavil-slim-pgd", WCD934X},
-	{"pahu-slim-pgd", WCD9360},
 	{}
 };
 

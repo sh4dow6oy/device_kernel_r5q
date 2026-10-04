@@ -1,18 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * uprobes-based tracing events
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  *
  * Copyright (C) IBM Corporation, 2010-2012
  * Author:	Srikar Dronamraju <srikar@linux.vnet.ibm.com>
@@ -605,24 +593,9 @@ static int probes_seq_show(struct seq_file *m, void *v)
 	char c = is_ret_probe(tu) ? 'r' : 'p';
 	int i;
 
-	seq_printf(m, "%c:%s/%s", c, tu->tp.call.class->system,
-			trace_event_name(&tu->tp.call));
-	seq_printf(m, " %s:", tu->filename);
-
-	/* Don't print "0x  (null)" when offset is 0 */
-	if (tu->offset) {
-		seq_printf(m, "0x%0*lx", (int)(sizeof(void *) * 2), tu->offset);
-	} else {
-		switch (sizeof(void *)) {
-		case 4:
-			seq_printf(m, "0x00000000");
-			break;
-		case 8:
-		default:
-			seq_printf(m, "0x0000000000000000");
-			break;
-		}
-	}
+	seq_printf(m, "%c:%s/%s %s:0x%0*lx", c, tu->tp.call.class->system,
+			trace_event_name(&tu->tp.call), tu->filename,
+			(int)(sizeof(void *) * 2), tu->offset);
 
 	for (i = 0; i < tu->tp.nr_args; i++)
 		seq_printf(m, " %s=%s", tu->tp.args[i].name, tu->tp.args[i].comm);
@@ -654,7 +627,7 @@ static int probes_open(struct inode *inode, struct file *file)
 static ssize_t probes_write(struct file *file, const char __user *buffer,
 			    size_t count, loff_t *ppos)
 {
-	return traceprobe_probes_write(file, buffer, count, ppos, create_trace_uprobe);
+	return trace_parse_run_command(file, buffer, count, ppos, create_trace_uprobe);
 }
 
 static const struct file_operations uprobe_events_ops = {
@@ -1160,7 +1133,7 @@ static void __uprobe_perf_func(struct trace_uprobe *tu,
 	}
 
 	perf_trace_buf_submit(entry, size, rctx, call->event.type, 1, regs,
-			      head, NULL, NULL);
+			      head, NULL);
  out:
 	preempt_enable();
 }
@@ -1186,7 +1159,7 @@ static void uretprobe_perf_func(struct trace_uprobe *tu, unsigned long func,
 
 int bpf_get_uprobe_info(const struct perf_event *event, u32 *fd_type,
 			const char **filename, u64 *probe_offset,
-			bool perf_type_tracepoint)
+			u64 *probe_addr, bool perf_type_tracepoint)
 {
 	const char *pevent = trace_event_name(event->tp_event);
 	const char *group = event->tp_event->class->system;
@@ -1203,6 +1176,7 @@ int bpf_get_uprobe_info(const struct perf_event *event, u32 *fd_type,
 				    : BPF_FD_TYPE_UPROBE;
 	*filename = tu->filename;
 	*probe_offset = tu->offset;
+	*probe_addr = 0;
 	return 0;
 }
 #endif	/* CONFIG_PERF_EVENTS */
@@ -1249,6 +1223,7 @@ static int uprobe_dispatcher(struct uprobe_consumer *con, struct pt_regs *regs)
 	struct uprobe_dispatch_data udd;
 	struct uprobe_cpu_buffer *ucb;
 	int dsize, esize;
+	unsigned int flags;
 	int ret = 0;
 
 
@@ -1269,11 +1244,12 @@ static int uprobe_dispatcher(struct uprobe_consumer *con, struct pt_regs *regs)
 	ucb = uprobe_buffer_get();
 	store_trace_args(esize, &tu->tp, regs, ucb->buf, dsize);
 
-	if (tu->tp.flags & TP_FLAG_TRACE)
+	flags = trace_probe_load_flag(&tu->tp);
+	if (flags & TP_FLAG_TRACE)
 		ret |= uprobe_trace_func(tu, regs, ucb, dsize);
 
 #ifdef CONFIG_PERF_EVENTS
-	if (tu->tp.flags & TP_FLAG_PROFILE)
+	if (flags & TP_FLAG_PROFILE)
 		ret |= uprobe_perf_func(tu, regs, ucb, dsize);
 #endif
 	uprobe_buffer_put(ucb);
@@ -1287,6 +1263,7 @@ static int uretprobe_dispatcher(struct uprobe_consumer *con,
 	struct uprobe_dispatch_data udd;
 	struct uprobe_cpu_buffer *ucb;
 	int dsize, esize;
+	unsigned int flags;
 
 	tu = container_of(con, struct trace_uprobe, consumer);
 
@@ -1304,11 +1281,12 @@ static int uretprobe_dispatcher(struct uprobe_consumer *con,
 	ucb = uprobe_buffer_get();
 	store_trace_args(esize, &tu->tp, regs, ucb->buf, dsize);
 
-	if (tu->tp.flags & TP_FLAG_TRACE)
+	flags = trace_probe_load_flag(&tu->tp);
+	if (flags & TP_FLAG_TRACE)
 		uretprobe_trace_func(tu, func, regs, ucb, dsize);
 
 #ifdef CONFIG_PERF_EVENTS
-	if (tu->tp.flags & TP_FLAG_PROFILE)
+	if (flags & TP_FLAG_PROFILE)
 		uretprobe_perf_func(tu, func, regs, ucb, dsize);
 #endif
 	uprobe_buffer_put(ucb);
@@ -1377,7 +1355,6 @@ struct trace_event_call *
 create_local_trace_uprobe(char *name, unsigned long offs, bool is_return)
 {
 	struct trace_uprobe *tu;
-	struct inode *inode;
 	struct path path;
 	int ret;
 
@@ -1385,11 +1362,8 @@ create_local_trace_uprobe(char *name, unsigned long offs, bool is_return)
 	if (ret)
 		return ERR_PTR(ret);
 
-	inode = igrab(d_inode(path.dentry));
-	path_put(&path);
-
-	if (!inode || !S_ISREG(inode->i_mode)) {
-		iput(inode);
+	if (!d_is_reg(path.dentry)) {
+		path_put(&path);
 		return ERR_PTR(-EINVAL);
 	}
 
@@ -1404,11 +1378,12 @@ create_local_trace_uprobe(char *name, unsigned long offs, bool is_return)
 	if (IS_ERR(tu)) {
 		pr_info("Failed to allocate trace_uprobe.(%d)\n",
 			(int)PTR_ERR(tu));
+		path_put(&path);
 		return ERR_CAST(tu);
 	}
 
 	tu->offset = offs;
-	tu->inode = inode;
+	tu->path = path;
 	tu->filename = kstrdup(name, GFP_KERNEL);
 	init_trace_event_call(tu, &tu->tp.call);
 

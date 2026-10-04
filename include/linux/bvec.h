@@ -23,7 +23,6 @@
 #include <linux/kernel.h>
 #include <linux/bug.h>
 #include <linux/errno.h>
-#include <linux/mm.h>
 
 /*
  * was unsigned short, but we might as well be ready for > 64kB I/O pages
@@ -53,38 +52,15 @@ struct bvec_iter {
  */
 #define __bvec_iter_bvec(bvec, iter)	(&(bvec)[(iter).bi_idx])
 
-/* multi-page (mp_bvec) helpers */
-#define mp_bvec_iter_page(bvec, iter)				\
+#define bvec_iter_page(bvec, iter)				\
 	(__bvec_iter_bvec((bvec), (iter))->bv_page)
 
-#define mp_bvec_iter_len(bvec, iter)				\
+#define bvec_iter_len(bvec, iter)				\
 	min((iter).bi_size,					\
 	    __bvec_iter_bvec((bvec), (iter))->bv_len - (iter).bi_bvec_done)
 
-#define mp_bvec_iter_offset(bvec, iter)				\
+#define bvec_iter_offset(bvec, iter)				\
 	(__bvec_iter_bvec((bvec), (iter))->bv_offset + (iter).bi_bvec_done)
-
-#define mp_bvec_iter_page_idx(bvec, iter)			\
-	(mp_bvec_iter_offset((bvec), (iter)) / PAGE_SIZE)
-
-#define mp_bvec_iter_bvec(bvec, iter)				\
-((struct bio_vec) {						\
-	.bv_page	= mp_bvec_iter_page((bvec), (iter)),	\
-	.bv_len		= mp_bvec_iter_len((bvec), (iter)),	\
-	.bv_offset	= mp_bvec_iter_offset((bvec), (iter)),	\
-})
-
-/* For building single-page bvec in flight */
- #define bvec_iter_offset(bvec, iter)				\
-	(mp_bvec_iter_offset((bvec), (iter)) % PAGE_SIZE)
-
-#define bvec_iter_len(bvec, iter)				\
-	min_t(unsigned, mp_bvec_iter_len((bvec), (iter)),		\
-	      PAGE_SIZE - bvec_iter_offset((bvec), (iter)))
-
-#define bvec_iter_page(bvec, iter)				\
-	nth_page(mp_bvec_iter_page((bvec), (iter)),		\
-		 mp_bvec_iter_page_idx((bvec), (iter)))
 
 #define bvec_iter_bvec(bvec, iter)				\
 ((struct bio_vec) {						\
@@ -155,5 +131,14 @@ static inline void bvec_iter_skip_zero_bvec(struct bvec_iter *iter)
 		((bvl = bvec_iter_bvec((bio_vec), (iter))), 1);	\
 	     (bvl).bv_len ? (void)bvec_iter_advance((bio_vec), &(iter),	\
 		     (bvl).bv_len) : bvec_iter_skip_zero_bvec(&(iter)))
+
+/* for iterating one bio from start to end */
+#define BVEC_ITER_ALL_INIT (struct bvec_iter)				\
+{									\
+	.bi_sector	= 0,						\
+	.bi_size	= UINT_MAX,					\
+	.bi_idx		= 0,						\
+	.bi_bvec_done	= 0,						\
+}
 
 #endif /* __LINUX_BVEC_ITER_H */

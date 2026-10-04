@@ -41,18 +41,6 @@ static inline struct netns_ipvs *net_ipvs(struct net* net)
 	return net->ipvs;
 }
 
-/* This one needed for single_open_net since net is stored directly in
- * private not as a struct i.e. seq_file_net can't be used.
- */
-static inline struct net *seq_file_single_net(struct seq_file *seq)
-{
-#ifdef CONFIG_NET_NS
-	return (struct net *)seq->private;
-#else
-	return &init_net;
-#endif
-}
-
 /* Connections' size value needed by ip_vs_ctl.c */
 extern int ip_vs_conn_tab_size;
 
@@ -69,8 +57,7 @@ struct ip_vs_iphdr {
 };
 
 static inline void *frag_safe_skb_hp(const struct sk_buff *skb, int offset,
-				      int len, void *buffer,
-				      const struct ip_vs_iphdr *ipvsh)
+				      int len, void *buffer)
 {
 	return skb_header_pointer(skb, offset, len, buffer);
 }
@@ -348,6 +335,11 @@ enum ip_vs_sctp_states {
 	IP_VS_SCTP_S_LAST
 };
 
+/* Connection templates use bits from state */
+#define IP_VS_CTPL_S_NONE		0x0000
+#define IP_VS_CTPL_S_ASSURED		0x0001
+#define IP_VS_CTPL_S_LAST		0x0002
+
 /* Delta sequence info structure
  * Each ip_vs_conn has 2 (output AND input seq. changes).
  * Only used in the VS/NAT.
@@ -468,7 +460,8 @@ struct ip_vs_protocol {
 
 	void (*state_transition)(struct ip_vs_conn *cp, int direction,
 				 const struct sk_buff *skb,
-				 struct ip_vs_proto_data *pd);
+				 struct ip_vs_proto_data *pd,
+				 unsigned int iph_len);
 
 	int (*register_app)(struct netns_ipvs *ipvs, struct ip_vs_app *inc);
 
@@ -644,6 +637,7 @@ struct ip_vs_service {
 
 	/* alternate persistence engine */
 	struct ip_vs_pe __rcu	*pe;
+	int			conntrack_afmask;
 
 	struct rcu_head		rcu_head;
 };
@@ -669,6 +663,7 @@ struct ip_vs_dest {
 	volatile unsigned int	flags;		/* dest status flags */
 	atomic_t		conn_flags;	/* flags to copy to conn */
 	atomic_t		weight;		/* server weight */
+	atomic_t		last_weight;	/* server latest weight */
 
 	refcount_t		refcnt;		/* reference counter */
 	struct ip_vs_stats      stats;          /* statistics */
@@ -676,7 +671,7 @@ struct ip_vs_dest {
 
 	/* connection counters and thresholds */
 	atomic_t		activeconns;	/* active connections */
-	atomic_t		inactconns;	/* inactive connections */
+	atomic_t		totalconns;	/* total connections */
 	atomic_t		persistconns;	/* persistent connections */
 	__u32			u_threshold;	/* upper threshold */
 	__u32			l_threshold;	/* lower threshold */
@@ -763,14 +758,14 @@ struct ip_vs_app {
 	 *	   2=Mangled but checksum was not updated
 	 */
 	int (*pkt_out)(struct ip_vs_app *, struct ip_vs_conn *,
-		       struct sk_buff *, int *diff);
+		       struct sk_buff *, int *diff, struct ip_vs_iphdr *ipvsh);
 
 	/* input hook: Process packet in outin direction, diff set for TCP.
 	 * Return: 0=Error, 1=Payload Not Mangled/Mangled but checksum is ok,
 	 *	   2=Mangled but checksum was not updated
 	 */
 	int (*pkt_in)(struct ip_vs_app *, struct ip_vs_conn *,
-		      struct sk_buff *, int *diff);
+		      struct sk_buff *, int *diff, struct ip_vs_iphdr *ipvsh);
 
 	/* ip_vs_app initializer */
 	int (*init_conn)(struct ip_vs_app *, struct ip_vs_conn *);
@@ -987,12 +982,12 @@ static inline int sysctl_sync_threshold(struct netns_ipvs *ipvs)
 
 static inline int sysctl_sync_period(struct netns_ipvs *ipvs)
 {
-	return ACCESS_ONCE(ipvs->sysctl_sync_threshold[1]);
+	return READ_ONCE(ipvs->sysctl_sync_threshold[1]);
 }
 
 static inline unsigned int sysctl_sync_refresh_period(struct netns_ipvs *ipvs)
 {
-	return ACCESS_ONCE(ipvs->sysctl_sync_refresh_period);
+	return READ_ONCE(ipvs->sysctl_sync_refresh_period);
 }
 
 static inline int sysctl_sync_retries(struct netns_ipvs *ipvs)
@@ -1017,7 +1012,7 @@ static inline int sysctl_sloppy_sctp(struct netns_ipvs *ipvs)
 
 static inline int sysctl_sync_ports(struct netns_ipvs *ipvs)
 {
-	return ACCESS_ONCE(ipvs->sysctl_sync_ports);
+	return READ_ONCE(ipvs->sysctl_sync_ports);
 }
 
 static inline int sysctl_sync_persist_mode(struct netns_ipvs *ipvs)
@@ -1235,7 +1230,7 @@ struct ip_vs_conn *ip_vs_conn_new(const struct ip_vs_conn_param *p, int dest_af,
 				  struct ip_vs_dest *dest, __u32 fwmark);
 void ip_vs_conn_expire_now(struct ip_vs_conn *cp);
 
-const char *ip_vs_state_name(__u16 proto, int state);
+const char *ip_vs_state_name(const struct ip_vs_conn *cp);
 
 void ip_vs_tcp_conn_listen(struct ip_vs_conn *cp);
 int ip_vs_check_template(struct ip_vs_conn *ct, struct ip_vs_dest *cdest);
@@ -1303,6 +1298,17 @@ ip_vs_control_add(struct ip_vs_conn *cp, struct ip_vs_conn *ctl_cp)
 	atomic_inc(&ctl_cp->n_control);
 }
 
+/* Mark our template as assured */
+static inline void
+ip_vs_control_assure_ct(struct ip_vs_conn *cp)
+{
+	struct ip_vs_conn *ct = cp->control;
+
+	if (ct && !(ct->state & IP_VS_CTPL_S_ASSURED) &&
+	    (ct->flags & IP_VS_CONN_F_TEMPLATE))
+		ct->state |= IP_VS_CTPL_S_ASSURED;
+}
+
 /* IPVS netns init & cleanup functions */
 int ip_vs_estimator_net_init(struct netns_ipvs *ipvs);
 int ip_vs_control_net_init(struct netns_ipvs *ipvs);
@@ -1331,8 +1337,10 @@ int register_ip_vs_app_inc(struct netns_ipvs *ipvs, struct ip_vs_app *app, __u16
 int ip_vs_app_inc_get(struct ip_vs_app *inc);
 void ip_vs_app_inc_put(struct ip_vs_app *inc);
 
-int ip_vs_app_pkt_out(struct ip_vs_conn *, struct sk_buff *skb);
-int ip_vs_app_pkt_in(struct ip_vs_conn *, struct sk_buff *skb);
+int ip_vs_app_pkt_out(struct ip_vs_conn *, struct sk_buff *skb,
+		      struct ip_vs_iphdr *ipvsh);
+int ip_vs_app_pkt_in(struct ip_vs_conn *, struct sk_buff *skb,
+		     struct ip_vs_iphdr *ipvsh);
 
 int register_ip_vs_pe(struct ip_vs_pe *pe);
 int unregister_ip_vs_pe(struct ip_vs_pe *pe);
@@ -1371,8 +1379,7 @@ int register_ip_vs_scheduler(struct ip_vs_scheduler *scheduler);
 int unregister_ip_vs_scheduler(struct ip_vs_scheduler *scheduler);
 int ip_vs_bind_scheduler(struct ip_vs_service *svc,
 			 struct ip_vs_scheduler *scheduler);
-void ip_vs_unbind_scheduler(struct ip_vs_service *svc,
-			    struct ip_vs_scheduler *sched);
+void ip_vs_unbind_scheduler(struct ip_vs_service *svc);
 struct ip_vs_scheduler *ip_vs_scheduler_get(const char *sched_name);
 void ip_vs_scheduler_put(struct ip_vs_scheduler *scheduler);
 struct ip_vs_conn *
@@ -1622,17 +1629,53 @@ static inline bool ip_vs_conn_uses_old_conntrack(struct ip_vs_conn *cp,
 	return false;
 }
 
+static inline int ip_vs_register_conntrack(struct ip_vs_service *svc)
+{
+#if IS_ENABLED(CONFIG_NF_CONNTRACK)
+	int afmask = (svc->af == AF_INET6) ? 2 : 1;
+	int ret = 0;
+
+	if (!(svc->conntrack_afmask & afmask)) {
+		ret = nf_ct_netns_get(svc->ipvs->net, svc->af);
+		if (ret >= 0)
+			svc->conntrack_afmask |= afmask;
+	}
+	return ret;
+#else
+	return 0;
+#endif
+}
+
+static inline void ip_vs_unregister_conntrack(struct ip_vs_service *svc)
+{
+#if IS_ENABLED(CONFIG_NF_CONNTRACK)
+	int afmask = (svc->af == AF_INET6) ? 2 : 1;
+
+	if (svc->conntrack_afmask & afmask) {
+		nf_ct_netns_put(svc->ipvs->net, svc->af);
+		svc->conntrack_afmask &= ~afmask;
+	}
+#endif
+}
+
 static inline int
 ip_vs_dest_conn_overhead(struct ip_vs_dest *dest)
 {
-	/* We think the overhead of processing active connections is 256
+	/* We think the overhead of processing active connections is 257
 	 * times higher than that of inactive connections in average. (This
-	 * 256 times might not be accurate, we will change it later) We
+	 * 257 times might not be accurate, we will change it later) We
 	 * use the following formula to estimate the overhead now:
-	 *		  dest->activeconns*256 + dest->inactconns
+	 *		  dest->activeconns*256 + dest->totalconns
 	 */
 	return (atomic_read(&dest->activeconns) << 8) +
-		atomic_read(&dest->inactconns);
+		atomic_read(&dest->totalconns);
+}
+
+static inline int
+ip_vs_dest_inactconns(const struct ip_vs_dest *dest)
+{
+	return max(atomic_read(&dest->totalconns) -
+		   atomic_read(&dest->activeconns), 0);
 }
 
 #endif	/* _NET_IP_VS_H */

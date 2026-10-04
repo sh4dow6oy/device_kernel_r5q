@@ -1,13 +1,6 @@
-/* Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+// SPDX-License-Identifier: GPL-2.0-only
+/* Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2023, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/init.h>
@@ -31,8 +24,9 @@
 #include "msm-pcm-q6-v2.h"
 #include "msm-pcm-routing-v2.h"
 
+#define DRV_NAME "msm-pcm-voip-v2"
+
 #define SHARED_MEM_BUF 2
-#define VOIP_MIN_Q_LEN 2
 #define VOIP_MAX_Q_LEN 10
 #define VOIP_MAX_VOC_PKT_SIZE 4096
 #define VOIP_MIN_VOC_PKT_SIZE 320
@@ -206,10 +200,10 @@ static struct snd_pcm_hardware msm_pcm_hardware = {
 	.rate_max =             48000,
 	.channels_min =         1,
 	.channels_max =         1,
-	.buffer_bytes_max =	sizeof(struct voip_buf_node) * VOIP_MIN_Q_LEN,
+	.buffer_bytes_max =	sizeof(struct voip_buf_node) * VOIP_MAX_Q_LEN,
 	.period_bytes_min =	VOIP_MIN_VOC_PKT_SIZE,
 	.period_bytes_max =	VOIP_MAX_VOC_PKT_SIZE,
-	.periods_min =		VOIP_MIN_Q_LEN,
+	.periods_min =		VOIP_MAX_Q_LEN,
 	.periods_max =		VOIP_MAX_Q_LEN,
 	.fifo_size =            0,
 };
@@ -309,9 +303,9 @@ static struct snd_kcontrol_new msm_voip_controls[] = {
 		       msm_voip_dtx_mode_get, msm_voip_dtx_mode_put),
 };
 
-static int msm_pcm_voip_probe(struct snd_soc_platform *platform)
+static int msm_pcm_voip_probe(struct snd_soc_component *component)
 {
-	snd_soc_add_platform_controls(platform, msm_voip_controls,
+	snd_soc_add_component_controls(component, msm_voip_controls,
 					ARRAY_SIZE(msm_voip_controls));
 
 	return 0;
@@ -484,14 +478,14 @@ static void voip_process_ul_pkt(uint8_t *voc_pkt,
 							(*voc_pkt) & 0x03;
 				buf_node->frame.frm_hdr.timestamp = timestamp;
 				voc_pkt = voc_pkt + DSP_FRAME_HDR_LEN;
+
 				if (pkt_len <= 2 * DSP_FRAME_HDR_LEN) {
 					pr_err("%s: pkt_len %d is < required len\n",
-						__func__, pkt_len);
+							__func__, pkt_len);
 					spin_unlock_irqrestore(&prtd->dsp_ul_lock,
-							dsp_flags);
+								dsp_flags);
 					return;
 				}
-
 				/* There are two frames in the buffer. Length
 				 * of the second frame:
 				 */
@@ -1299,16 +1293,10 @@ static int msm_pcm_hw_params(struct snd_pcm_substream *substream,
 	struct snd_dma_buffer *dma_buf = &substream->dma_buffer;
 	struct voip_buf_node *buf_node = NULL;
 	int i = 0, offset = 0;
-	int periods = VOIP_MIN_Q_LEN;
 
 	pr_debug("%s: voip\n", __func__);
 
 	mutex_lock(&voip_info.lock);
-
-	/* Use various voip Q size */
-	periods = params_periods(params);
-	pr_info("%s: periods = %d\n", __func__, periods);
-	runtime->hw.buffer_bytes_max = sizeof(struct voip_buf_node) * periods;
 
 	dma_buf->dev.type = SNDRV_DMA_TYPE_DEV;
 	dma_buf->dev.dev = substream->pcm->card->dev;
@@ -1327,7 +1315,7 @@ static int msm_pcm_hw_params(struct snd_pcm_substream *substream,
 	memset(dma_buf->area, 0, runtime->hw.buffer_bytes_max);
 
 	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
-		for (i = 0; i < periods; i++) {
+		for (i = 0; i < VOIP_MAX_Q_LEN; i++) {
 			buf_node = (void *)dma_buf->area + offset;
 
 			list_add_tail(&buf_node->list,
@@ -1335,7 +1323,7 @@ static int msm_pcm_hw_params(struct snd_pcm_substream *substream,
 			offset = offset + sizeof(struct voip_buf_node);
 		}
 	} else {
-		for (i = 0; i < periods; i++) {
+		for (i = 0; i < VOIP_MAX_Q_LEN; i++) {
 			buf_node = (void *) dma_buf->area + offset;
 			list_add_tail(&buf_node->list,
 					&voip_info.free_out_queue);
@@ -1648,7 +1636,8 @@ static int msm_asoc_pcm_new(struct snd_soc_pcm_runtime *rtd)
 	return ret;
 }
 
-static struct snd_soc_platform_driver msm_soc_platform = {
+static struct snd_soc_component_driver msm_soc_component = {
+	.name		= DRV_NAME,
 	.ops		= &msm_pcm_ops,
 	.pcm_new	= msm_asoc_pcm_new,
 	.probe		= msm_pcm_voip_probe,
@@ -1685,8 +1674,9 @@ static int msm_pcm_probe(struct platform_device *pdev)
 
 
 	pr_debug("%s: dev name %s\n", __func__, dev_name(&pdev->dev));
-	rc = snd_soc_register_platform(&pdev->dev,
-				       &msm_soc_platform);
+	rc = snd_soc_register_component(&pdev->dev,
+				       &msm_soc_component,
+					NULL, 0);
 
 done:
 	return rc;
@@ -1694,7 +1684,7 @@ done:
 
 static int msm_pcm_remove(struct platform_device *pdev)
 {
-	snd_soc_unregister_platform(&pdev->dev);
+	snd_soc_unregister_component(&pdev->dev);
 	return 0;
 }
 
@@ -1709,6 +1699,7 @@ static struct platform_driver msm_pcm_driver = {
 		.name = "msm-voip-dsp",
 		.owner = THIS_MODULE,
 		.of_match_table = msm_voip_dt_match,
+		.suppress_bind_attrs = true,
 	},
 	.probe = msm_pcm_probe,
 	.remove = msm_pcm_remove,

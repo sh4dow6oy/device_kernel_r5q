@@ -212,7 +212,7 @@ static int pollwake(wait_queue_entry_t *wait, unsigned mode, int sync, void *key
 	struct poll_table_entry *entry;
 
 	entry = container_of(wait, struct poll_table_entry, wait);
-	if (key && !((unsigned long)key & entry->key))
+	if (key && !(key_to_poll(key) & entry->key))
 		return 0;
 	return __pollwake(wait, mode, sync, key);
 }
@@ -233,15 +233,14 @@ static void __pollwait(struct file *filp, wait_queue_head_t *wait_address,
 	add_wait_queue(wait_address, &entry->wait);
 }
 
-int poll_schedule_timeout(struct poll_wqueues *pwq, int state,
+static int poll_schedule_timeout(struct poll_wqueues *pwq, int state,
 			  ktime_t *expires, unsigned long slack)
 {
 	int rc = -EINTR;
 
 	set_current_state(state);
 	if (!pwq->triggered)
-		rc = freezable_schedule_hrtimeout_range(expires, slack,
-							HRTIMER_MODE_ABS);
+		rc = schedule_hrtimeout_range(expires, slack, HRTIMER_MODE_ABS);
 	__set_current_state(TASK_RUNNING);
 
 	/*
@@ -259,7 +258,6 @@ int poll_schedule_timeout(struct poll_wqueues *pwq, int state,
 
 	return rc;
 }
-EXPORT_SYMBOL(poll_schedule_timeout);
 
 /**
  * poll_select_set_timeout - helper function to setup the timeout value
@@ -360,7 +358,7 @@ typedef struct {
  *
  * Use "unsigned long" accesses to let user-mode fd_set's be long-aligned.
  */
-static noinline_for_stack
+static inline
 int get_fd_set(unsigned long nr, void __user *ufdset, unsigned long *fdset)
 {
 	nr = FDS_BYTES(nr);
@@ -371,7 +369,7 @@ int get_fd_set(unsigned long nr, void __user *ufdset, unsigned long *fdset)
 	return 0;
 }
 
-static noinline_for_stack  unsigned long __must_check
+static inline unsigned long __must_check
 set_fd_set(unsigned long nr, void __user *ufdset, unsigned long *fdset)
 {
 	if (ufdset)
@@ -379,7 +377,7 @@ set_fd_set(unsigned long nr, void __user *ufdset, unsigned long *fdset)
 	return 0;
 }
 
-static noinline_for_stack
+static inline
 void zero_fd_set(unsigned long nr, unsigned long *fdset)
 {
 	memset(fdset, 0, FDS_BYTES(nr));
@@ -433,13 +431,15 @@ get_max:
 	return max;
 }
 
-#define POLLIN_SET (POLLRDNORM | POLLRDBAND | POLLIN | POLLHUP | POLLERR)
-#define POLLOUT_SET (POLLWRBAND | POLLWRNORM | POLLOUT | POLLERR)
-#define POLLEX_SET (POLLPRI)
+#define POLLIN_SET (EPOLLRDNORM | EPOLLRDBAND | EPOLLIN | EPOLLHUP | EPOLLERR |\
+			EPOLLNVAL)
+#define POLLOUT_SET (EPOLLWRBAND | EPOLLWRNORM | EPOLLOUT | EPOLLERR |\
+			 EPOLLNVAL)
+#define POLLEX_SET (EPOLLPRI | EPOLLNVAL)
 
 static inline void wait_key_set(poll_table *wait, unsigned long in,
 				unsigned long out, unsigned long bit,
-				unsigned int ll_flag)
+				__poll_t ll_flag)
 {
 	wait->_key = POLLEX_SET | ll_flag;
 	if (in & bit)
@@ -455,7 +455,7 @@ static noinline_for_stack int do_select(int n, fd_set_bits *fds, struct timespec
 	poll_table *wait;
 	int retval, i, timed_out = 0;
 	u64 slack = 0;
-	unsigned int busy_flag = net_busy_loop_on() ? POLL_BUSY_LOOP : 0;
+	__poll_t busy_flag = net_busy_loop_on() ? POLL_BUSY_LOOP : 0;
 	unsigned long busy_start = 0;
 
 	rcu_read_lock();
@@ -485,8 +485,9 @@ static noinline_for_stack int do_select(int n, fd_set_bits *fds, struct timespec
 		rinp = fds->res_in; routp = fds->res_out; rexp = fds->res_ex;
 
 		for (i = 0; i < n; ++rinp, ++routp, ++rexp) {
-			unsigned long in, out, ex, all_bits, bit = 1, mask, j;
+			unsigned long in, out, ex, all_bits, bit = 1, j;
 			unsigned long res_in = 0, res_out = 0, res_ex = 0;
+			__poll_t mask;
 
 			in = *inp++; out = *outp++; ex = *exp++;
 			all_bits = in | out | ex;
@@ -501,45 +502,42 @@ static noinline_for_stack int do_select(int n, fd_set_bits *fds, struct timespec
 					break;
 				if (!(bit & all_bits))
 					continue;
+				mask = EPOLLNVAL;
 				f = fdget(i);
 				if (f.file) {
-					const struct file_operations *f_op;
-					f_op = f.file->f_op;
-					mask = DEFAULT_POLLMASK;
-					if (f_op->poll) {
-						wait_key_set(wait, in, out,
-							     bit, busy_flag);
-						mask = (*f_op->poll)(f.file, wait);
-					}
+					wait_key_set(wait, in, out, bit,
+						     busy_flag);
+					mask = vfs_poll(f.file, wait);
+
 					fdput(f);
-					if ((mask & POLLIN_SET) && (in & bit)) {
-						res_in |= bit;
-						retval++;
-						wait->_qproc = NULL;
-					}
-					if ((mask & POLLOUT_SET) && (out & bit)) {
-						res_out |= bit;
-						retval++;
-						wait->_qproc = NULL;
-					}
-					if ((mask & POLLEX_SET) && (ex & bit)) {
-						res_ex |= bit;
-						retval++;
-						wait->_qproc = NULL;
-					}
-					/* got something, stop busy polling */
-					if (retval) {
-						can_busy_loop = false;
-						busy_flag = 0;
-
-					/*
-					 * only remember a returned
-					 * POLL_BUSY_LOOP if we asked for it
-					 */
-					} else if (busy_flag & mask)
-						can_busy_loop = true;
-
 				}
+				if ((mask & POLLIN_SET) && (in & bit)) {
+					res_in |= bit;
+					retval++;
+					wait->_qproc = NULL;
+				}
+				if ((mask & POLLOUT_SET) && (out & bit)) {
+					res_out |= bit;
+					retval++;
+					wait->_qproc = NULL;
+				}
+				if ((mask & POLLEX_SET) && (ex & bit)) {
+					res_ex |= bit;
+					retval++;
+					wait->_qproc = NULL;
+				}
+				/* got something, stop busy polling */
+				if (retval) {
+					can_busy_loop = false;
+					busy_flag = 0;
+
+				/*
+				 * only remember a returned
+				 * POLL_BUSY_LOOP if we asked for it
+				 */
+				} else if (busy_flag & mask)
+					can_busy_loop = true;
+
 			}
 			if (res_in)
 				*rinp = res_in;
@@ -675,8 +673,8 @@ out_nofds:
 	return ret;
 }
 
-SYSCALL_DEFINE5(select, int, n, fd_set __user *, inp, fd_set __user *, outp,
-		fd_set __user *, exp, struct timeval __user *, tvp)
+static int kern_select(int n, fd_set __user *inp, fd_set __user *outp,
+		       fd_set __user *exp, struct timeval __user *tvp)
 {
 	struct timespec64 end_time, *to = NULL;
 	struct timeval tv;
@@ -697,6 +695,12 @@ SYSCALL_DEFINE5(select, int, n, fd_set __user *, inp, fd_set __user *, outp,
 	ret = poll_select_copy_remaining(&end_time, tvp, 1, ret);
 
 	return ret;
+}
+
+SYSCALL_DEFINE5(select, int, n, fd_set __user *, inp, fd_set __user *, outp,
+		fd_set __user *, exp, struct timeval __user *, tvp)
+{
+	return kern_select(n, inp, outp, exp, tvp);
 }
 
 static long do_pselect(int n, fd_set __user *inp, fd_set __user *outp,
@@ -784,7 +788,7 @@ SYSCALL_DEFINE1(old_select, struct sel_arg_struct __user *, arg)
 
 	if (copy_from_user(&a, arg, sizeof(a)))
 		return -EFAULT;
-	return sys_select(a.n, a.inp, a.outp, a.exp, a.tvp);
+	return kern_select(a.n, a.inp, a.outp, a.exp, a.tvp);
 }
 #endif
 
@@ -803,34 +807,33 @@ struct poll_list {
  * pwait poll_table will be used by the fd-provided poll handler for waiting,
  * if pwait->_qproc is non-NULL.
  */
-static inline unsigned int do_pollfd(struct pollfd *pollfd, poll_table *pwait,
+static inline __poll_t do_pollfd(struct pollfd *pollfd, poll_table *pwait,
 				     bool *can_busy_poll,
-				     unsigned int busy_flag)
+				     __poll_t busy_flag)
 {
-	unsigned int mask;
-	int fd;
+	int fd = pollfd->fd;
+	__poll_t mask = 0, filter;
+	struct fd f;
 
-	mask = 0;
-	fd = pollfd->fd;
-	if (fd >= 0) {
-		struct fd f = fdget(fd);
-		mask = POLLNVAL;
-		if (f.file) {
-			mask = DEFAULT_POLLMASK;
-			if (f.file->f_op->poll) {
-				pwait->_key = pollfd->events|POLLERR|POLLHUP;
-				pwait->_key |= busy_flag;
-				mask = f.file->f_op->poll(f.file, pwait);
-				if (mask & busy_flag)
-					*can_busy_poll = true;
-			}
-			/* Mask out unneeded events. */
-			mask &= pollfd->events | POLLERR | POLLHUP;
-			fdput(f);
-		}
-	}
-	pollfd->revents = mask;
+	if (fd < 0)
+		goto out;
+	mask = EPOLLNVAL;
+	f = fdget(fd);
+	if (!f.file)
+		goto out;
 
+	/* userland u16 ->events contains POLL... bitmap */
+	filter = demangle_poll(pollfd->events) | EPOLLERR | EPOLLHUP;
+	pwait->_key = filter | busy_flag;
+	mask = vfs_poll(f.file, pwait);
+	if (mask & busy_flag)
+		*can_busy_poll = true;
+	mask &= filter;		/* Mask out unneeded events. */
+	fdput(f);
+
+out:
+	/* ... and so does ->revents */
+	pollfd->revents = mangle_poll(mask);
 	return mask;
 }
 
@@ -841,7 +844,7 @@ static int do_poll(struct poll_list *list, struct poll_wqueues *wait,
 	ktime_t expire, *to = NULL;
 	int timed_out = 0, count = 0;
 	u64 slack = 0;
-	unsigned int busy_flag = net_busy_loop_on() ? POLL_BUSY_LOOP : 0;
+	__poll_t busy_flag = net_busy_loop_on() ? POLL_BUSY_LOOP : 0;
 	unsigned long busy_start = 0;
 
 	/* Optimise the no-wait case */
@@ -1211,7 +1214,7 @@ static int compat_core_sys_select(int n, compat_ulong_t __user *inp,
 	size = FDS_BYTES(n);
 	bits = stack_fds;
 	if (size > sizeof(stack_fds) / 6) {
-		bits = kmalloc(6 * size, GFP_KERNEL);
+		bits = kmalloc_array(6, size, GFP_KERNEL);
 		ret = -ENOMEM;
 		if (!bits)
 			goto out_nofds;
@@ -1253,9 +1256,9 @@ out_nofds:
 	return ret;
 }
 
-COMPAT_SYSCALL_DEFINE5(select, int, n, compat_ulong_t __user *, inp,
-	compat_ulong_t __user *, outp, compat_ulong_t __user *, exp,
-	struct compat_timeval __user *, tvp)
+static int do_compat_select(int n, compat_ulong_t __user *inp,
+	compat_ulong_t __user *outp, compat_ulong_t __user *exp,
+	struct compat_timeval __user *tvp)
 {
 	struct timespec64 end_time, *to = NULL;
 	struct compat_timeval tv;
@@ -1278,6 +1281,13 @@ COMPAT_SYSCALL_DEFINE5(select, int, n, compat_ulong_t __user *, inp,
 	return ret;
 }
 
+COMPAT_SYSCALL_DEFINE5(select, int, n, compat_ulong_t __user *, inp,
+	compat_ulong_t __user *, outp, compat_ulong_t __user *, exp,
+	struct compat_timeval __user *, tvp)
+{
+	return do_compat_select(n, inp, outp, exp, tvp);
+}
+
 struct compat_sel_arg_struct {
 	compat_ulong_t n;
 	compat_uptr_t inp;
@@ -1292,8 +1302,8 @@ COMPAT_SYSCALL_DEFINE1(old_select, struct compat_sel_arg_struct __user *, arg)
 
 	if (copy_from_user(&a, arg, sizeof(a)))
 		return -EFAULT;
-	return compat_sys_select(a.n, compat_ptr(a.inp), compat_ptr(a.outp),
-				 compat_ptr(a.exp), compat_ptr(a.tvp));
+	return do_compat_select(a.n, compat_ptr(a.inp), compat_ptr(a.outp),
+				compat_ptr(a.exp), compat_ptr(a.tvp));
 }
 
 static long do_compat_pselect(int n, compat_ulong_t __user *inp,
@@ -1301,7 +1311,6 @@ static long do_compat_pselect(int n, compat_ulong_t __user *inp,
 	struct compat_timespec __user *tsp, compat_sigset_t __user *sigmask,
 	compat_size_t sigsetsize)
 {
-	compat_sigset_t ss32;
 	sigset_t ksigmask, sigsaved;
 	struct timespec64 ts, end_time, *to = NULL;
 	int ret;
@@ -1318,9 +1327,8 @@ static long do_compat_pselect(int n, compat_ulong_t __user *inp,
 	if (sigmask) {
 		if (sigsetsize != sizeof(compat_sigset_t))
 			return -EINVAL;
-		if (copy_from_user(&ss32, sigmask, sizeof(ss32)))
+		if (get_compat_sigset(&ksigmask, sigmask))
 			return -EFAULT;
-		sigset_from_compat(&ksigmask, &ss32);
 
 		sigdelsetmask(&ksigmask, sigmask(SIGKILL)|sigmask(SIGSTOP));
 		sigprocmask(SIG_SETMASK, &ksigmask, &sigsaved);
@@ -1369,7 +1377,6 @@ COMPAT_SYSCALL_DEFINE5(ppoll, struct pollfd __user *, ufds,
 	unsigned int,  nfds, struct compat_timespec __user *, tsp,
 	const compat_sigset_t __user *, sigmask, compat_size_t, sigsetsize)
 {
-	compat_sigset_t ss32;
 	sigset_t ksigmask, sigsaved;
 	struct timespec64 ts, end_time, *to = NULL;
 	int ret;
@@ -1386,9 +1393,8 @@ COMPAT_SYSCALL_DEFINE5(ppoll, struct pollfd __user *, ufds,
 	if (sigmask) {
 		if (sigsetsize != sizeof(compat_sigset_t))
 			return -EINVAL;
-		if (copy_from_user(&ss32, sigmask, sizeof(ss32)))
+		if (get_compat_sigset(&ksigmask, sigmask))
 			return -EFAULT;
-		sigset_from_compat(&ksigmask, &ss32);
 
 		sigdelsetmask(&ksigmask, sigmask(SIGKILL)|sigmask(SIGSTOP));
 		sigprocmask(SIG_SETMASK, &ksigmask, &sigsaved);

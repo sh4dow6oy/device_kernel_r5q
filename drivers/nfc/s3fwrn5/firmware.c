@@ -338,7 +338,7 @@ static int s3fwrn5_fw_get_base_addr(
 	struct s3fwrn5_fw_cmd_get_bootinfo_rsp *bootinfo, u32 *base_addr)
 {
 	int i;
-	struct {
+	static const struct {
 		u8 version[4];
 		u32 base_addr;
 	} match[] = {

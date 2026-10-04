@@ -10,7 +10,7 @@
 #include <linux/of.h>
 #include <linux/of_device.h>
 
-#include <asm/pgtable.h>
+#include <linux/pgtable.h>
 #include <asm/idprom.h>
 #include <asm/oplib.h>
 #include <asm/auxio.h>
@@ -71,7 +71,6 @@ static struct sun_floppy_ops sun_fdops;
 #define fd_set_dma_count(count)   sun_fd_set_dma_count(count)
 #define fd_enable_irq()           /* nothing... */
 #define fd_disable_irq()          /* nothing... */
-#define fd_cacheflush(addr, size) /* nothing... */
 #define fd_request_irq()          sun_fd_request_irq()
 #define fd_free_irq()             /* nothing... */
 #if 0  /* P3: added by Alain, these cause a MMU corruption. 19960524 XXX */

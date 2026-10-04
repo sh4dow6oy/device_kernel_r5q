@@ -1,26 +1,16 @@
-/* Copyright (c) 2012-2014, 2018-2019 The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
+/* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * Copyright (c) 2012-2014,2018-2021 The Linux Foundation. All rights reserved.
  */
 #ifndef __KGSL_SYNC_H
 #define __KGSL_SYNC_H
 
-#include <linux/sync_file.h>
-#include "kgsl_device.h"
-
-#define KGSL_TIMELINE_NAME_LEN 32
+#include <linux/dma-fence.h>
 
 /**
  * struct kgsl_sync_timeline - A sync timeline associated with a kgsl context
- * @kref: Refcount to keep the struct alive until all its fences are released
+ * @kref: Refcount to keep the struct alive until all its fences are signaled,
+	  and as long as the context exists
  * @name: String to describe this timeline
  * @fence_context: Used by the fence driver to identify fences belonging to
  *		   this context
@@ -32,7 +22,7 @@
  */
 struct kgsl_sync_timeline {
 	struct kref kref;
-	char name[KGSL_TIMELINE_NAME_LEN];
+	char *name;
 
 	u64 fence_context;
 
@@ -78,6 +68,10 @@ struct kgsl_sync_fence_cb {
 	bool (*func)(void *priv);
 };
 
+struct kgsl_device_private;
+struct kgsl_drawobj_sync_event;
+struct event_fence_info;
+struct kgsl_process_private;
 struct kgsl_syncsource;
 
 #if defined(CONFIG_SYNC_FILE)
@@ -87,7 +81,7 @@ int kgsl_add_fence_event(struct kgsl_device *device,
 
 int kgsl_sync_timeline_create(struct kgsl_context *context);
 
-void kgsl_sync_timeline_destroy(struct kgsl_context *context);
+void kgsl_sync_timeline_detach(struct kgsl_sync_timeline *ktimeline);
 
 void kgsl_sync_timeline_put(struct kgsl_sync_timeline *ktimeline);
 
@@ -125,7 +119,8 @@ static inline int kgsl_sync_timeline_create(struct kgsl_context *context)
 	return 0;
 }
 
-static inline void kgsl_sync_timeline_destroy(struct kgsl_context *context)
+static inline void kgsl_sync_timeline_detach(
+					struct kgsl_sync_timeline *ktimeline)
 {
 }
 

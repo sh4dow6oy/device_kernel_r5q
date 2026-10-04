@@ -91,7 +91,6 @@ exit:
 static void msg_submit(struct mbox_chan *chan)
 {
 	int err = 0;
-	unsigned long flags;
 
 	/*
 	 * If the controller returns -EAGAIN, then it means, our spinlock
@@ -104,11 +103,11 @@ static void msg_submit(struct mbox_chan *chan)
 		err = __msg_submit(chan);
 	} while (err == -EAGAIN);
 
+	/* kick start the timer immediately to avoid delays */
 	if (!err && (chan->txdone_method & TXDONE_BY_POLL)) {
-		/* kick start the timer immediately to avoid delays */
-		spin_lock_irqsave(&chan->mbox->poll_hrt_lock, flags);
-		hrtimer_start(&chan->mbox->poll_hrt, 0, HRTIMER_MODE_REL);
-		spin_unlock_irqrestore(&chan->mbox->poll_hrt_lock, flags);
+		/* but only if not already active */
+		if (!hrtimer_active(&chan->mbox->poll_hrt))
+			hrtimer_start(&chan->mbox->poll_hrt, 0, HRTIMER_MODE_REL);
 	}
 }
 
@@ -142,26 +141,20 @@ static enum hrtimer_restart txdone_hrtimer(struct hrtimer *hrtimer)
 		container_of(hrtimer, struct mbox_controller, poll_hrt);
 	bool txdone, resched = false;
 	int i;
-	unsigned long flags;
 
 	for (i = 0; i < mbox->num_chans; i++) {
 		struct mbox_chan *chan = &mbox->chans[i];
 
 		if (chan->active_req && chan->cl) {
+			resched = true;
 			txdone = chan->mbox->ops->last_tx_done(chan);
 			if (txdone)
 				tx_tick(chan, 0);
-			else
-				resched = true;
 		}
 	}
 
 	if (resched) {
-		spin_lock_irqsave(&mbox->poll_hrt_lock, flags);
-		if (!hrtimer_is_queued(hrtimer))
-			hrtimer_forward_now(hrtimer, ms_to_ktime(mbox->txpoll_period));
-		spin_unlock_irqrestore(&mbox->poll_hrt_lock, flags);
-
+		hrtimer_forward_now(hrtimer, ms_to_ktime(mbox->txpoll_period));
 		return HRTIMER_RESTART;
 	}
 	return HRTIMER_NORESTART;
@@ -311,54 +304,6 @@ int mbox_send_message(struct mbox_chan *chan, void *mssg)
 EXPORT_SYMBOL_GPL(mbox_send_message);
 
 /**
- * mbox_send_controller_data-	For client to submit a message to be
- *				sent only to the controller.
- * @chan: Mailbox channel assigned to this client.
- * @mssg: Client specific message typecasted.
- *
- * For client to submit data to the controller. There is no ACK expected
- * from the controller. This request is not buffered in the mailbox framework.
- *
- * Return: Non-negative integer for successful submission (non-blocking mode)
- *	or transmission over chan (blocking mode).
- *	Negative value denotes failure.
- */
-int mbox_send_controller_data(struct mbox_chan *chan, void *mssg)
-{
-	unsigned long flags;
-	int err;
-
-	if (!chan || !chan->cl)
-		return -EINVAL;
-
-	spin_lock_irqsave(&chan->lock, flags);
-	err = chan->mbox->ops->send_controller_data(chan, mssg);
-	spin_unlock_irqrestore(&chan->lock, flags);
-
-	return err;
-}
-EXPORT_SYMBOL(mbox_send_controller_data);
-
-bool mbox_controller_is_idle(struct mbox_chan *chan)
-{
-	if (!chan || !chan->cl || !chan->mbox->is_idle)
-		return false;
-
-	return chan->mbox->is_idle(chan->mbox);
-}
-EXPORT_SYMBOL(mbox_controller_is_idle);
-
-
-void mbox_chan_debug(struct mbox_chan *chan)
-{
-	if (!chan || !chan->cl || !chan->mbox->debug)
-		return;
-
-	return chan->mbox->debug(chan);
-}
-EXPORT_SYMBOL(mbox_chan_debug);
-
-/**
  * mbox_request_channel - Request a mailbox channel.
  * @cl: Identity of the client requesting the channel.
  * @index: Index of mailbox specifier in 'mboxes' property.
@@ -391,11 +336,12 @@ struct mbox_chan *mbox_request_channel(struct mbox_client *cl, int index)
 
 	mutex_lock(&con_mutex);
 
-	if (of_parse_phandle_with_args(dev->of_node, "mboxes",
-				       "#mbox-cells", index, &spec)) {
+	ret = of_parse_phandle_with_args(dev->of_node, "mboxes", "#mbox-cells",
+					 index, &spec);
+	if (ret) {
 		dev_dbg(dev, "%s: can't parse \"mboxes\" property\n", __func__);
 		mutex_unlock(&con_mutex);
-		return ERR_PTR(-ENODEV);
+		return ERR_PTR(ret);
 	}
 
 	chan = ERR_PTR(-EPROBE_DEFER);
@@ -498,8 +444,8 @@ void mbox_free_channel(struct mbox_chan *chan)
 	if (chan->txdone_method == TXDONE_BY_ACK)
 		chan->txdone_method = TXDONE_BY_POLL;
 
-	module_put(chan->mbox->dev->driver->owner);
 	spin_unlock_irqrestore(&chan->lock, flags);
+	module_put(chan->mbox->dev->driver->owner);
 }
 EXPORT_SYMBOL_GPL(mbox_free_channel);
 
@@ -507,12 +453,10 @@ static struct mbox_chan *
 of_mbox_index_xlate(struct mbox_controller *mbox,
 		    const struct of_phandle_args *sp)
 {
-	int ind = sp->args[0];
-
-	if (ind >= mbox->num_chans)
+	if (sp->args_count < 1 || sp->args[0] >= mbox->num_chans)
 		return ERR_PTR(-EINVAL);
 
-	return &mbox->chans[ind];
+	return &mbox->chans[sp->args[0]];
 }
 
 /**
@@ -525,8 +469,7 @@ int mbox_controller_register(struct mbox_controller *mbox)
 {
 	int i, txdone;
 
-	/* Sanity check */
-	if (!mbox || !mbox->dev || !mbox->ops || !mbox->num_chans)
+	if (!mbox || !mbox->dev || !mbox->ops || !mbox->chans || !mbox->num_chans)
 		return -EINVAL;
 
 	if (mbox->txdone_irq)
@@ -546,7 +489,6 @@ int mbox_controller_register(struct mbox_controller *mbox)
 		hrtimer_init(&mbox->poll_hrt, CLOCK_MONOTONIC,
 			     HRTIMER_MODE_REL);
 		mbox->poll_hrt.function = txdone_hrtimer;
-		spin_lock_init(&mbox->poll_hrt_lock);
 	}
 
 	for (i = 0; i < mbox->num_chans; i++) {

@@ -104,7 +104,6 @@ static int lpc32xx_read_raw(struct iio_dev *indio_dev,
 
 static const struct iio_info lpc32xx_adc_iio_info = {
 	.read_raw = &lpc32xx_read_raw,
-	.driver_module = THIS_MODULE,
 };
 
 #define LPC32XX_ADC_CHANNEL(_index) {			\
@@ -173,6 +172,8 @@ static int lpc32xx_adc_probe(struct platform_device *pdev)
 		return -ENXIO;
 	}
 
+	init_completion(&st->completion);
+
 	retval = devm_request_irq(&pdev->dev, irq, lpc32xx_adc_isr, 0,
 				  LPC32XXAD_NAME, st);
 	if (retval < 0) {
@@ -181,8 +182,6 @@ static int lpc32xx_adc_probe(struct platform_device *pdev)
 	}
 
 	platform_set_drvdata(pdev, iodev);
-
-	init_completion(&st->completion);
 
 	iodev->name = LPC32XXAD_NAME;
 	iodev->dev.parent = &pdev->dev;

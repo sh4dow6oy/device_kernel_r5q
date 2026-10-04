@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 config WCNSS_CORE
 	tristate "Qualcomm Technologies Inc. WCNSS CORE driver"
 	select WIRELESS_EXT

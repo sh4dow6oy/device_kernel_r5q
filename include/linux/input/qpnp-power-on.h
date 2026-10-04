@@ -1,14 +1,7 @@
-/* Copyright (c) 2012-2015, 2017-2018, The Linux Foundation.
+/* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * Copyright (c) 2012-2015, 2017-2019, The Linux Foundation.
  * All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #ifndef QPNP_PON_H
@@ -53,9 +46,6 @@ enum pon_power_off_type {
 	PON_POWER_OFF_MAX_TYPE		= 0x10,
 };
 
-#if IS_ENABLED(CONFIG_SEC_DEBUG)
-#include <linux/sec_debug.h>
-#else
 enum pon_restart_reason {
 	PON_RESTART_REASON_UNKNOWN		= 0x00,
 	PON_RESTART_REASON_RECOVERY		= 0x01,
@@ -64,17 +54,7 @@ enum pon_restart_reason {
 	PON_RESTART_REASON_DMVERITY_CORRUPTED	= 0x04,
 	PON_RESTART_REASON_DMVERITY_ENFORCE	= 0x05,
 	PON_RESTART_REASON_KEYS_CLEAR		= 0x06,
-	PON_RESTART_REASON_RECOVERY_UPDATE	= 0x07,
 };
-#endif
-
-#ifdef CONFIG_SEC_PM
-int qpnp_pon_check_chg_det(void);
-ssize_t sec_get_pwrsrc(char *buf);
-int qpnp_control_s2_reset_onoff(int on);
-int qpnp_get_s2_reset_onoff(void);
-char* qpnp_pon_get_off_reason(void);
-#endif
 
 #ifdef CONFIG_INPUT_QPNP_POWER_ON
 int qpnp_pon_system_pwr_off(enum pon_power_off_type type);
@@ -83,37 +63,46 @@ int qpnp_pon_trigger_config(enum pon_trigger_source pon_src, bool enable);
 int qpnp_pon_wd_config(bool enable);
 int qpnp_pon_set_restart_reason(enum pon_restart_reason reason);
 bool qpnp_pon_check_hard_reset_stored(void);
-
-#ifdef CONFIG_SEC_PM
-int qpnp_set_resin_wk_int(int en);
-#endif /* CONFIG_SEC_PM */
+int qpnp_pon_modem_pwr_off(enum pon_power_off_type type);
 
 #else
+
 static int qpnp_pon_system_pwr_off(enum pon_power_off_type type)
 {
 	return -ENODEV;
 }
+
 static inline int qpnp_pon_is_warm_reset(void)
 {
 	return -ENODEV;
 }
+
 static inline int qpnp_pon_trigger_config(enum pon_trigger_source pon_src,
 							bool enable)
 {
 	return -ENODEV;
 }
+
 int qpnp_pon_wd_config(bool enable)
 {
 	return -ENODEV;
 }
+
 static inline int qpnp_pon_set_restart_reason(enum pon_restart_reason reason)
 {
 	return -ENODEV;
 }
+
 static inline bool qpnp_pon_check_hard_reset_stored(void)
 {
 	return false;
 }
+
+static inline int qpnp_pon_modem_pwr_off(enum pon_power_off_type type)
+{
+	return -ENODEV;
+}
+
 #endif
 
 #endif

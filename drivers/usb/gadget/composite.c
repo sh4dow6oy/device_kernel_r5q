@@ -1,12 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * composite.c - infrastructure for Composite USB Gadgets
  *
  * Copyright (C) 2006-2008 David Brownell
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  */
 
 /* #define VERBOSE_DEBUG */
@@ -17,19 +13,11 @@
 #include <linux/module.h>
 #include <linux/device.h>
 #include <linux/utsname.h>
-#include <soc/qcom/boot_stats.h>
 
 #include <linux/usb/composite.h>
 #include <linux/usb/otg.h>
 #include <asm/unaligned.h>
 
-#ifdef CONFIG_USB_NOTIFY_PROC_LOG
-#include <linux/usb_notify.h>
-#endif
-
-#ifdef CONFIG_USB_ANDROID_SAMSUNG_COMPOSITE
-#include "multi_config.h"
-#endif
 #include "u_os_desc.h"
 
 /**
@@ -185,20 +173,20 @@ int config_ep_by_speed_and_alt(struct usb_gadget *g,
 			want_comp_desc = 1;
 			break;
 		}
-		/* else: Fall trough */
+		/* fall through */
 	case USB_SPEED_SUPER:
 		if (gadget_is_superspeed(g)) {
 			speed_desc = f->ss_descriptors;
 			want_comp_desc = 1;
 			break;
 		}
-		/* else: Fall trough */
+		/* fall through */
 	case USB_SPEED_HIGH:
 		if (gadget_is_dualspeed(g)) {
 			speed_desc = f->hs_descriptors;
 			break;
 		}
-		/* else: fall through */
+		/* fall through */
 	default:
 		speed_desc = f->fs_descriptors;
 	}
@@ -258,6 +246,7 @@ ep_found:
 		case USB_ENDPOINT_XFER_ISOC:
 			/* mult: bits 1:0 of bmAttributes */
 			_ep->mult = (comp_desc->bmAttributes & 0x3) + 1;
+			/* fall through */
 		case USB_ENDPOINT_XFER_BULK:
 		case USB_ENDPOINT_XFER_INT:
 			_ep->maxburst = comp_desc->bMaxBurst + 1;
@@ -501,15 +490,15 @@ static int usb_func_wakeup_int(struct usb_function *func)
 	int ret;
 	struct usb_gadget *gadget;
 
-	pr_debug("%s - %s function wakeup\n",
-		__func__, func->name ? func->name : "");
-
 	if (!func || !func->config || !func->config->cdev ||
 		!func->config->cdev->gadget)
 		return -EINVAL;
 
+	pr_debug("%s - %s function wakeup\n",
+		__func__, func->name ? func->name : "");
+
 	gadget = func->config->cdev->gadget;
-	if ((gadget->speed < USB_SPEED_SUPER) || !func->func_wakeup_allowed) {
+	if ((gadget->speed != USB_SPEED_SUPER) || !func->func_wakeup_allowed) {
 		DBG(func->config->cdev,
 			"Function Wakeup is not possible. speed=%u, func_wakeup_allowed=%u\n",
 			gadget->speed,
@@ -523,25 +512,28 @@ static int usb_func_wakeup_int(struct usb_function *func)
 	return ret;
 }
 
+/**
+ * usb_func_wakeup - wakes up a composite device function.
+ * @func: composite device function to wake up.
+ *
+ * Returns 0 on success or a negative error value.
+ */
 int usb_func_wakeup(struct usb_function *func)
 {
 	int ret;
 	unsigned long flags;
+
+	if (!func || !func->config || !func->config->cdev)
+		return -EINVAL;
 
 	pr_debug("%s function wakeup\n",
 		func->name ? func->name : "");
 
 	spin_lock_irqsave(&func->config->cdev->lock, flags);
 	ret = usb_func_wakeup_int(func);
-	if (ret == -EACCES) {
+	if (ret == -EAGAIN) {
 		DBG(func->config->cdev,
 			"Function wakeup for %s could not complete due to suspend state. Delayed until after bus resume.\n",
-			func->name ? func->name : "");
-		ret = 0;
-		func->func_wakeup_pending = 1;
-	} else if (ret == -EAGAIN) {
-		DBG(func->config->cdev,
-			"Function wakeup for %s sent.\n",
 			func->name ? func->name : "");
 		ret = 0;
 	} else if (ret < 0 && ret != -ENOTSUPP) {
@@ -553,8 +545,20 @@ int usb_func_wakeup(struct usb_function *func)
 	spin_unlock_irqrestore(&func->config->cdev->lock, flags);
 	return ret;
 }
-EXPORT_SYMBOL(usb_func_wakeup);
+EXPORT_SYMBOL_GPL(usb_func_wakeup);
 
+/**
+ * usb_func_ep_queue - queues (submits) an I/O request to a function endpoint.
+ * This function is similar to the usb_ep_queue function, but in addition it
+ * also checks whether the function is in Super Speed USB Function Suspend
+ * state, and if so a Function Wake notification is sent to the host
+ * (USB 3.0 spec, section 9.2.5.2).
+ * @func: the function which issues the USB I/O request.
+ * @ep:the endpoint associated with the request
+ * @req:the request being submitted
+ * @gfp_flags: GFP_* flags to use in case the lower level driver couldn't
+ * pre-allocate all necessary memory with the request.
+ */
 int usb_func_ep_queue(struct usb_function *func, struct usb_ep *ep,
 			       struct usb_request *req, gfp_t gfp_flags)
 {
@@ -573,25 +577,14 @@ int usb_func_ep_queue(struct usb_function *func, struct usb_ep *ep,
 	gadget = func->config->cdev->gadget;
 	if (func->func_is_suspended && func->func_wakeup_allowed) {
 		ret = usb_gadget_func_wakeup(gadget, func->intf_id);
-		if (ret == -EACCES) {
+		if (ret == -EAGAIN) {
 			pr_debug("bus suspended func wakeup for %s delayed until bus resume.\n",
-				func->name ? func->name : "");
-			func->func_wakeup_pending = 1;
-			ret = -EAGAIN;
-		} else if (ret == -EAGAIN) {
-			pr_debug("bus suspended func wakeup for %s delayed until bus resume.\n",
-				func->name ? func->name : "");
+				 func->name ? func->name : "");
 		} else if (ret < 0 && ret != -ENOTSUPP) {
 			pr_err("Failed to wake function %s from suspend state. ret=%d.\n",
-				func->name ? func->name : "", ret);
-		} else {
-			/*
-			 * Return -EAGAIN to queue the request from
-			 * function driver wakeup function.
-			 */
-			ret = -EAGAIN;
-			goto done;
+			       func->name ? func->name : "", ret);
 		}
+		goto done;
 	}
 
 	if (!func->func_is_suspended)
@@ -606,7 +599,7 @@ int usb_func_ep_queue(struct usb_function *func, struct usb_ep *ep,
 done:
 	return ret;
 }
-EXPORT_SYMBOL(usb_func_ep_queue);
+EXPORT_SYMBOL_GPL(usb_func_ep_queue);
 
 static u8 encode_bMaxPower(enum usb_device_speed speed,
 		struct usb_configuration *c)
@@ -645,16 +638,11 @@ static int config_buf(struct usb_configuration *config,
 	c->bDescriptorType = type;
 	/* wTotalLength is written later */
 	c->bNumInterfaces = config->next_interface_id;
-#ifdef CONFIG_USB_ANDROID_SAMSUNG_COMPOSITE
-	c->bConfigurationValue = get_config_number() + 1;
-#else
 	c->bConfigurationValue = config->bConfigurationValue;
-#endif
 	c->iConfiguration = config->iConfiguration;
 	c->bmAttributes = USB_CONFIG_ATT_ONE | config->bmAttributes;
 	c->bMaxPower = encode_bMaxPower(speed, config);
 	if (config->cdev->gadget->is_selfpowered) {
-		pr_info("usb: %s is_selfpowered\n", __func__);
 		c->bmAttributes |= USB_CONFIG_ATT_SELFPOWER;
 		c->bMaxPower = 0;
 	}
@@ -672,14 +660,7 @@ static int config_buf(struct usb_configuration *config,
 	/* add each function's descriptors */
 	list_for_each_entry(f, &config->functions, list) {
 		struct usb_descriptor_header **descriptors;
-#ifdef CONFIG_USB_ANDROID_SAMSUNG_COMPOSITE
-		if (!is_available_function(f->name)) {
-			pr_info("usb: %s skip f->%s\n", __func__, f->name);
-			continue;
-		} else {
-			pr_info("usb: %s f->%s\n", __func__, f->name);
-		}
-#endif
+
 		descriptors = function_descriptors(f, speed);
 		if (!descriptors)
 			continue;
@@ -687,19 +668,10 @@ static int config_buf(struct usb_configuration *config,
 			(const struct usb_descriptor_header **) descriptors);
 		if (status < 0)
 			return status;
-#ifdef CONFIG_USB_ANDROID_SAMSUNG_COMPOSITE
-		if (change_conf(f, next, len, config, speed) < 0) {
-			pr_err("usb: %s failed to change configuration\n", __func__);
-			return -EINVAL;
-		}
-#endif
 		len -= status;
 		next += status;
 	}
 
-#ifdef CONFIG_USB_ANDROID_SAMSUNG_COMPOSITE
-	set_interface_count(config, c);
-#endif
 	len = next - buf;
 	c->wTotalLength = cpu_to_le16(len);
 	return len;
@@ -729,14 +701,19 @@ static int config_desc(struct usb_composite_dev *cdev, unsigned w_value)
 	/* This is a lookup by config *INDEX* */
 	w_value &= 0xff;
 
-#ifdef CONFIG_USB_ANDROID_SAMSUNG_COMPOSITE
-	w_value = set_config_number(w_value);
-#endif
 	pos = &cdev->configs;
+	c = cdev->os_desc_config;
+	if (c)
+		goto check_config;
 
 	while ((pos = pos->next) !=  &cdev->configs) {
 		c = list_entry(pos, typeof(*c), list);
 
+		/* skip OS Descriptors config which is handled separately */
+		if (c == cdev->os_desc_config)
+			continue;
+
+check_config:
 		/* ignore configs that won't work at this speed */
 		switch (speed) {
 		case USB_SPEED_SUPER_PLUS:
@@ -798,9 +775,6 @@ static int count_configs(struct usb_composite_dev *cdev, unsigned type)
 				continue;
 		}
 		count++;
-#ifdef CONFIG_USB_ANDROID_SAMSUNG_COMPOSITE
-		count = count_multi_config(c, count);
-#endif
 	}
 	return count;
 }
@@ -970,24 +944,9 @@ static int set_config(struct usb_composite_dev *cdev,
 	unsigned		power = gadget_is_otg(gadget) ? 8 : 100;
 	int			tmp;
 
-	/*
-	 * ignore 2nd time SET_CONFIGURATION
-	 * only for same config value twice.
-	 */
-	if (cdev->config && (cdev->config->bConfigurationValue == number)) {
-		DBG(cdev, "already in the same config with value %d\n",
-				number);
-		return 0;
-	}
-
 	if (number) {
 		list_for_each_entry(c, &cdev->configs, list) {
-#ifdef CONFIG_USB_ANDROID_SAMSUNG_COMPOSITE
-			if (c->bConfigurationValue == number ||
-					check_config(number)) {
-#else
 			if (c->bConfigurationValue == number) {
-#endif
 				/*
 				 * We disable the FDs of the previous
 				 * configuration only if the new configuration
@@ -1014,7 +973,6 @@ static int set_config(struct usb_composite_dev *cdev,
 	if (!c)
 		goto done;
 
-	update_marker("M - USB Device is enumerated");
 	usb_gadget_set_state(gadget, USB_STATE_CONFIGURED);
 	cdev->config = c;
 
@@ -1077,10 +1035,11 @@ static int set_config(struct usb_composite_dev *cdev,
 	else
 		power = min(power, 900U);
 done:
-	if (power <= USB_SELF_POWER_VBUS_MAX_DRAW)
-		usb_gadget_set_selfpowered(gadget);
-	else
+	if (power > USB_SELF_POWER_VBUS_MAX_DRAW ||
+	    (c && !(c->bmAttributes & USB_CONFIG_ATT_SELFPOWER)))
 		usb_gadget_clear_selfpowered(gadget);
+	else
+		usb_gadget_set_selfpowered(gadget);
 
 	usb_gadget_vbus_draw(gadget, power);
 	if (result >= 0 && cdev->delayed_status)
@@ -1320,14 +1279,6 @@ static int get_string(struct usb_composite_dev *cdev,
 				collect_langs(sp, s->wData);
 
 			list_for_each_entry(f, &c->functions, list) {
-#ifdef CONFIG_USB_ANDROID_SAMSUNG_COMPOSITE
-				if (!is_available_function(f->name)) {
-					USB_DBG("skip f->%s\n", f->name);
-					continue;
-				} else {
-					USB_DBG("f->%s\n", f->name);
-				}
-#endif
 				sp = f->strings;
 				if (sp)
 					collect_langs(sp, s->wData);
@@ -1879,17 +1830,9 @@ composite_setup(struct usb_gadget *gadget, const struct usb_ctrlrequest *ctrl)
 				else
 					cdev->desc.bcdUSB = cpu_to_le16(0x0200);
 			}
-#ifdef CONFIG_USB_NOTIFY_PROC_LOG
-			if (cdev->desc.bcdUSB == cpu_to_le16(0x0320) ||
-				cdev->desc.bcdUSB == cpu_to_le16(0x0310) ||
-				cdev->desc.bcdUSB == cpu_to_le16(0x0300))
-				store_usblog_notify(NOTIFY_USBSTATE, "SPEED=SPSD", NULL);
-			else
-				store_usblog_notify(NOTIFY_USBSTATE, "SPEED=HIGH", NULL);
-#endif
+
 			value = min(w_length, (u16) sizeof cdev->desc);
 			memcpy(req->buf, &cdev->desc, value);
-			pr_info("usb: GET_DES\n");
 			break;
 		case USB_DT_DEVICE_QUALIFIER:
 			if (!gadget_is_dualspeed(gadget) ||
@@ -1905,19 +1848,15 @@ composite_setup(struct usb_gadget *gadget, const struct usb_ctrlrequest *ctrl)
 				break;
 			/* FALLTHROUGH */
 		case USB_DT_CONFIG:
-#ifdef CONFIG_USB_ANDROID_SAMSUNG_COMPOSITE
-			set_config_mode(w_length);
-#endif
 			value = config_desc(cdev, w_value);
 			if (value >= 0)
 				value = min(w_length, (u16) value);
 			break;
 		case USB_DT_STRING:
-#ifdef CONFIG_USB_ANDROID_SAMSUNG_COMPOSITE
-			set_string_mode(w_length);
-#endif
+			spin_lock(&cdev->lock);
 			value = get_string(cdev, req->buf,
 					w_index, w_value & 0xff);
+			spin_unlock(&cdev->lock);
 			if (value >= 0)
 				value = min(w_length, (u16) value);
 			break;
@@ -1936,9 +1875,10 @@ composite_setup(struct usb_gadget *gadget, const struct usb_ctrlrequest *ctrl)
 				if (cdev->config)
 					config = cdev->config;
 				else
-					config = list_first_entry(
+					config = list_first_entry_or_null(
 							&cdev->configs,
-						struct usb_configuration, list);
+							struct usb_configuration,
+							list);
 				if (!config)
 					goto done;
 
@@ -1971,24 +1911,13 @@ composite_setup(struct usb_gadget *gadget, const struct usb_ctrlrequest *ctrl)
 		}
 		spin_lock(&cdev->lock);
 		value = set_config(cdev, ctrl, w_value);
-		pr_info("usb: SET_CON\n");
-#ifdef CONFIG_USB_ANDROID_SAMSUNG_COMPOSITE
-		if (value == 0) {
-			if (w_value)
-				set_config_number(w_value - 1);
-		}
-#endif
 		spin_unlock(&cdev->lock);
 		break;
 	case USB_REQ_GET_CONFIGURATION:
 		if (ctrl->bRequestType != USB_DIR_IN)
 			goto unknown;
 		if (cdev->config)
-#ifdef CONFIG_USB_ANDROID_SAMSUNG_COMPOSITE
-			*(u8 *)req->buf = get_config_number() + 1;
-#else
 			*(u8 *)req->buf = cdev->config->bConfigurationValue;
-#endif
 		else
 			*(u8 *)req->buf = 0;
 		value = min(w_length, (u16) 1);
@@ -2068,7 +1997,11 @@ composite_setup(struct usb_gadget *gadget, const struct usb_ctrlrequest *ctrl)
 		f = cdev->config->interface[intf];
 		if (!f)
 			break;
-		status = f->get_status ? f->get_status(f) : 0;
+
+		if (USB_CONFIG_ATT_WAKEUP & cdev->config->bmAttributes)
+			status = f->get_status ? f->get_status(f) : 0;
+		else
+			status = 0;
 		if (status < 0)
 			break;
 		put_unaligned_le16(status & 0x0000ffff, req->buf);
@@ -2113,19 +2046,13 @@ unknown:
 		/*
 		 * OS descriptors handling
 		 */
-		if ((ctrl->bRequestType & USB_TYPE_VENDOR)) {
+		if (cdev->use_os_string && cdev->os_desc_config &&
+		    (ctrl->bRequestType & USB_TYPE_VENDOR) &&
+		    ctrl->bRequest == cdev->b_vendor_code) {
 			struct usb_configuration	*os_desc_cfg;
 			u8				*buf;
 			int				interface;
 			int				count = 0;
-
-			/* If os descriptor config is not enable, stall ep0 */
-			if (!cdev->use_os_string || !cdev->os_desc_config)
-				return -EINVAL;
-
-			/* Stall ep0 if bRequest is not same as b_vendor_code */
-			if (ctrl->bRequest != cdev->b_vendor_code)
-				return -EINVAL;
 
 			req = cdev->os_desc_req;
 			req->context = cdev;
@@ -2136,8 +2063,20 @@ unknown:
 			memset(buf, 0, w_length);
 			buf[5] = 0x01;
 			switch (ctrl->bRequestType & USB_RECIP_MASK) {
+			/*
+			 * The Microsoft CompatID OS Descriptor Spec(w_index = 0x4) and
+			 * Extended Prop OS Desc Spec(w_index = 0x5) state that the
+			 * HighByte of wValue is the InterfaceNumber and the LowByte is
+			 * the PageNumber. This high/low byte ordering is incorrectly
+			 * documented in the Spec. USB analyzer output on the below
+			 * request packets show the high/low byte inverted i.e LowByte
+			 * is the InterfaceNumber and the HighByte is the PageNumber.
+			 * Since we dont support >64KB CompatID/ExtendedProp descriptors,
+			 * PageNumber is set to 0. Hence verify that the HighByte is 0
+			 * for below two cases.
+			 */
 			case USB_RECIP_DEVICE:
-				if (w_index != 0x4 || (w_value & 0xff))
+				if (w_index != 0x4 || (w_value >> 8))
 					break;
 				buf[6] = w_index;
 				/* Number of ext compat interfaces */
@@ -2159,11 +2098,7 @@ unknown:
 				}
 				break;
 			case USB_RECIP_INTERFACE:
-				if (w_index != 0x5 || (w_value & 0xff))
-					break;
-				interface = w_value >> 8;
-				if (interface >= MAX_CONFIG_INTERFACES ||
-				    !os_desc_cfg->interface[interface])
+				if (w_index != 0x5 || (w_value >> 8))
 					break;
 				interface = w_value & 0xFF;
 				if (interface >= MAX_CONFIG_INTERFACES ||
@@ -2183,11 +2118,11 @@ unknown:
 					value = fill_ext_prop(os_desc_cfg,
 							      interface, buf);
 					if (value >= 0)
-						value = min_t(u16, w_length,
-								value);
+						value = min_t(u16, w_length, value);
 				}
 				break;
 			}
+
 			goto check_value;
 		}
 
@@ -2297,9 +2232,6 @@ void composite_disconnect(struct usb_gadget *gadget)
 		return;
 	}
 
-#ifdef CONFIG_USB_ANDROID_SAMSUNG_COMPOSITE
-	set_string_mode(0);
-#endif
 	/* REVISIT:  should we have config and device level
 	 * disconnect callbacks?
 	 */
@@ -2410,7 +2342,8 @@ int composite_dev_prepare(struct usb_composite_driver *composite,
 	if (!cdev->req)
 		return -ENOMEM;
 
-	cdev->req->buf = kzalloc(USB_COMP_EP0_BUFSIZ, GFP_KERNEL);
+	cdev->req->buf = kzalloc(USB_COMP_EP0_BUFSIZ +
+				(gadget->extra_buf_alloc), GFP_KERNEL);
 	if (!cdev->req->buf)
 		goto fail;
 
@@ -2437,6 +2370,11 @@ int composite_dev_prepare(struct usb_composite_driver *composite,
 	 * drivers will zero ep->driver_data.
 	 */
 	usb_ep_autoconfig_reset(gadget);
+	/*
+	 * Reset deactivations as it is not possible to synchronize
+	 * between bind/unbind and open/close by user space application.
+	 */
+	cdev->deactivations = 0;
 	return 0;
 fail_dev:
 	kfree(cdev->req->buf);
@@ -2462,6 +2400,11 @@ int composite_os_desc_req_prepare(struct usb_composite_dev *cdev,
 	if (!cdev->os_desc_req->buf) {
 		ret = -ENOMEM;
 		usb_ep_free_request(ep0, cdev->os_desc_req);
+		/*
+		 * Set os_desc_req to NULL so that composite_dev_cleanup()
+		 * will not try to free it again.
+		 */
+		cdev->os_desc_req = NULL;
 		goto end;
 	}
 	cdev->os_desc_req->context = cdev;
@@ -2473,6 +2416,7 @@ end:
 void composite_dev_cleanup(struct usb_composite_dev *cdev)
 {
 	struct usb_gadget_string_container *uc, *tmp;
+	struct usb_ep			   *ep, *tmp_ep;
 
 	list_for_each_entry_safe(uc, tmp, &cdev->gstrings, list) {
 		list_del(&uc->list);
@@ -2498,6 +2442,21 @@ void composite_dev_cleanup(struct usb_composite_dev *cdev)
 	}
 	cdev->next_string_id = 0;
 	device_remove_file(&cdev->gadget->dev, &dev_attr_suspended);
+
+	/*
+	 * Some UDC backends have a dynamic EP allocation scheme.
+	 *
+	 * In that case, the dispose() callback is used to notify the
+	 * backend that the EPs are no longer in use.
+	 *
+	 * Note: The UDC backend can remove the EP from the ep_list as
+	 *	 a result, so we need to use the _safe list iterator.
+	 */
+	list_for_each_entry_safe(ep, tmp_ep,
+				 &cdev->gadget->ep_list, ep_list) {
+		if (ep->ops->dispose)
+			ep->ops->dispose(ep);
+	}
 }
 
 static int composite_bind(struct usb_gadget *gadget,
@@ -2574,7 +2533,10 @@ void composite_suspend(struct usb_gadget *gadget)
 	cdev->suspended = 1;
 	spin_unlock_irqrestore(&cdev->lock, flags);
 
-	usb_gadget_set_selfpowered(gadget);
+	if (cdev->config &&
+	    cdev->config->bmAttributes & USB_CONFIG_ATT_SELFPOWER)
+		usb_gadget_set_selfpowered(gadget);
+
 	usb_gadget_vbus_draw(gadget, 2);
 }
 
@@ -2589,37 +2551,28 @@ void composite_resume(struct usb_gadget *gadget)
 	/* REVISIT:  should we have config level
 	 * suspend/resume callbacks?
 	 */
-	INFO(cdev, "USB Resume end\n");
-	update_marker("M - USB device is resumed");
+	DBG(cdev, "resume\n");
 	if (cdev->driver->resume)
 		cdev->driver->resume(cdev);
 
 	spin_lock_irqsave(&cdev->lock, flags);
 	if (cdev->config) {
 		list_for_each_entry(f, &cdev->config->functions, list) {
-			if (f->func_wakeup_pending) {
-				ret = usb_func_wakeup_int(f);
-				if (ret) {
-					if (ret == -EAGAIN) {
-						ERROR(f->config->cdev,
-							"Function wakeup for %s could not complete due to suspend state.\n",
-							f->name ? f->name : "");
-					} else if (ret != -ENOTSUPP) {
-						ERROR(f->config->cdev,
-							"Failed to wake function %s from suspend state. ret=%d. Canceling USB request.\n",
-							f->name ? f->name : "",
-							ret);
-					}
+			ret = usb_func_wakeup_int(f);
+			if (ret) {
+				if (ret == -EAGAIN) {
+					ERROR(f->config->cdev,
+						"Function wakeup for %s could not complete due to suspend state.\n",
+						f->name ? f->name : "");
+					break;
+				} else if (ret != -ENOTSUPP) {
+					ERROR(f->config->cdev,
+						"Failed to wake function %s from suspend state. ret=%d. Canceling USB request.\n",
+						f->name ? f->name : "",
+						ret);
 				}
-				f->func_wakeup_pending = 0;
 			}
 
-			/*
-			 * Call function resume irrespective of the speed.
-			 * Individual function needs to retain the USB3 Function
-			 * suspend state through out the Device suspend entry
-			 * and exit process.
-			 */
 			if (f->resume)
 				f->resume(f);
 		}
@@ -2631,8 +2584,11 @@ void composite_resume(struct usb_gadget *gadget)
 		else
 			maxpower = min(maxpower, 900U);
 
-		if (maxpower > USB_SELF_POWER_VBUS_MAX_DRAW)
+		if (maxpower > USB_SELF_POWER_VBUS_MAX_DRAW ||
+		    !(cdev->config->bmAttributes & USB_CONFIG_ATT_SELFPOWER))
 			usb_gadget_clear_selfpowered(gadget);
+		else
+			usb_gadget_set_selfpowered(gadget);
 
 		usb_gadget_vbus_draw(gadget, maxpower);
 	}

@@ -43,7 +43,7 @@
 #include <asm/irq.h>		/* for CPU_IRQ_REGION and friends */
 #include <asm/mmu_context.h>
 #include <asm/page.h>
-#include <asm/pgtable.h>
+#include <linux/pgtable.h>
 #include <asm/pgalloc.h>
 #include <asm/processor.h>
 #include <asm/ptrace.h>
@@ -307,9 +307,14 @@ smp_cpu_init(int cpunum)
  * Slaves start using C here. Indirectly called from smp_slave_stext.
  * Do what start_kernel() and main() do for boot strap processor (aka monarch)
  */
-void __init smp_callin(void)
+void __init smp_callin(unsigned long pdce_proc)
 {
 	int slave_id = cpu_now_booting;
+
+#ifdef CONFIG_64BIT
+	WARN_ON(((unsigned long)(PAGE0->mem_pdc_hi) << 32
+			| PAGE0->mem_pdc) != pdce_proc);
+#endif
 
 	smp_cpu_init(slave_id);
 	preempt_disable();

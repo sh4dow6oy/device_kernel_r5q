@@ -94,6 +94,7 @@ MODULE_ALIAS("wmi:676AA15E-6A47-4D9F-A2CC-1E6D18D14026");
 
 enum acer_wmi_event_ids {
 	WMID_HOTKEY_EVENT = 0x1,
+	WMID_BACKLIGHT_EVENT = 0x4,
 	WMID_ACCEL_OR_KBD_DOCK_EVENT = 0x5,
 };
 
@@ -138,6 +139,7 @@ static const struct key_entry acer_wmi_keymap[] __initconst = {
 	{KE_IGNORE, 0x83, {KEY_TOUCHPAD_TOGGLE} },
 	{KE_KEY, 0x85, {KEY_TOUCHPAD_TOGGLE} },
 	{KE_KEY, 0x86, {KEY_WLAN} },
+	{KE_KEY, 0x87, {KEY_POWER} },
 	{KE_END, 0}
 };
 
@@ -729,10 +731,7 @@ static void __init find_quirks(void)
 
 static bool has_cap(u32 cap)
 {
-	if ((interface->capability & cap) != 0)
-		return 1;
-
-	return 0;
+	return interface->capability & cap;
 }
 
 /*
@@ -1902,6 +1901,9 @@ static void acer_wmi_notify(u32 value, void *context)
 			sparse_keymap_report_event(acer_wmi_input_dev, scancode, 1, true);
 		}
 		break;
+	case WMID_BACKLIGHT_EVENT:
+		/* Already handled by acpi-video */
+		break;
 	case WMID_ACCEL_OR_KBD_DOCK_EVENT:
 		acer_gsensor_event();
 		acer_kbd_dock_event(&return_value);
@@ -2336,7 +2338,7 @@ static int __init acer_wmi_init(void)
 	if (wmi_has_guid(AMW0_GUID1) &&
 	    !dmi_check_system(amw0_whitelist) &&
 	    quirks == &quirk_unknown) {
-		pr_err("Unsupported machine has AMW0_GUID1, unable to load\n");
+		pr_debug("Unsupported machine has AMW0_GUID1, unable to load\n");
 		return -ENODEV;
 	}
 

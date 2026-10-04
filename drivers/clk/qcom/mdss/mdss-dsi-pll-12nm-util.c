@@ -1,14 +1,5 @@
-/* Copyright (c) 2020, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- */
+// SPDX-License-Identifier: GPL-2.0-only
+/* Copyright (c) 2020-2021, The Linux Foundation. All rights reserved. */
 
 #define pr_fmt(fmt)	"%s: " fmt, __func__
 
@@ -44,9 +35,10 @@ int pixel_div_set_div(void *context, unsigned int reg,
 	}
 
 	/* Programming during vco_prepare. Keep this value */
-	data = ((div - 1) & 0x7f);
+	data = (div & 0x7f);
 	MDSS_PLL_REG_W(pll_base, DSIPHY_SSC9, data);
 	pdb->param.pixel_divhf = data;
+	pll->cached_postdiv3 = data;
 
 	mdss_pll_resource_enable(pll, false);
 	pr_debug("ndx=%d div=%d divhf=%d\n",
@@ -72,7 +64,7 @@ int pixel_div_get_div(void *context, unsigned int reg,
 	}
 
 	val = (MDSS_PLL_REG_R(pll->pll_base, DSIPHY_SSC9) & 0x7F);
-	*div = val + 1;
+	*div = val;
 	pr_debug("pixel_div = %d\n", (*div));
 
 	mdss_pll_resource_enable(pll, false);
@@ -103,11 +95,14 @@ int set_post_div_mux_sel(void *context, unsigned int reg,
 	data = ((vco_cntrl & 0x3f) | BIT(6));
 	MDSS_PLL_REG_W(pll_base, DSIPHY_PLL_VCO_CTRL, data);
 	pr_debug("%s: vco_cntrl 0x%x\n", __func__, vco_cntrl);
+	pll->cached_cfg0 = data;
+	wmb(); /* make sure register committed before preparing the clocks */
 
 	data = ((cpbias_cntrl & 0x1) << 6) | BIT(4);
 	MDSS_PLL_REG_W(pll_base, DSIPHY_PLL_CHAR_PUMP_BIAS_CTRL, data);
 	pr_debug("%s: cpbias_cntrl 0x%x\n", __func__, cpbias_cntrl);
 
+	pll->cached_cfg1 = data;
 	pr_debug("ndx=%d post_div_mux_sel=%d p_div=%d\n",
 			pll->index, sel, (u32) BIT(sel));
 
@@ -177,6 +172,7 @@ int set_gp_mux_sel(void *context, unsigned int reg,
 	/* Programming during vco_prepare. Keep this value */
 	data = ((sel & 0x7) << 5) | 0x5;
 	MDSS_PLL_REG_W(pll_base, DSIPHY_PLL_CTRL, data);
+	pll->cached_postdiv1 = data;
 
 	pr_debug("ndx=%d gp_div_mux_sel=%d gp_cntrl=%d\n",
 			pll->index, sel, (u32) BIT(sel));
@@ -488,9 +484,9 @@ static u32 __mdss_dsi_get_hsfreqrange(u64 target_freq)
 		return  0x41;
 	else if (bitclk_rate_mhz >= 2150 && bitclk_rate_mhz < 2200)
 		return  0x42;
-	else if (bitclk_rate_mhz >= 2200 && bitclk_rate_mhz < 2250)
+	else if (bitclk_rate_mhz >= 2200 && bitclk_rate_mhz <= 2249)
 		return  0x43;
-	else if (bitclk_rate_mhz >= 2250 && bitclk_rate_mhz < 2300)
+	else if (bitclk_rate_mhz > 2249 && bitclk_rate_mhz < 2300)
 		return  0x44;
 	else if (bitclk_rate_mhz >= 2300 && bitclk_rate_mhz < 2350)
 		return  0x45;
@@ -690,7 +686,7 @@ static void mdss_dsi_pll_12nm_calc_ssc(struct mdss_pll_resources *pll,
 	pr_debug("mpll_ssc_peak_i=%d mpll_stepsize_i=%d mpll_mint_i=%d\n",
 		param->mpll_ssc_peak_i, param->mpll_stepsize_i,
 		param->mpll_mint_i);
-	pr_debug("mpll_frac_den=%d mpll_frac_quot_i=%d mpll_frac_rem=%d",
+	pr_debug("mpll_frac_den=%d mpll_frac_quot_i=%d mpll_frac_rem=%d\n",
 		param->mpll_frac_den, param->mpll_frac_quot_i,
 		param->mpll_frac_rem);
 }
@@ -919,10 +915,9 @@ unsigned long vco_12nm_recalc_rate(struct clk_hw *hw,
 	}
 
 	if (pll->vco_current_rate != 0) {
-		rate = pll_vco_get_rate_12nm(hw);
 		pr_debug("%s:returning vco rate = %lld\n", __func__,
 				pll->vco_current_rate);
-		return rate;
+		return pll->vco_current_rate;
 	}
 
 	rc = mdss_pll_resource_enable(pll, true);
@@ -956,6 +951,13 @@ int pll_vco_prepare_12nm(struct clk_hw *hw)
 		return -EINVAL;
 	}
 
+	/* Skip vco recalculation for continuous splash use case */
+	if (pll->handoff_resources) {
+		pr_debug("%s: Skip recalculation during cont splash\n",
+						__func__);
+		return rc;
+	}
+
 	pdb = (struct dsi_pll_db *)pll->priv;
 	if (!pdb) {
 		pr_err("No prov found\n");
@@ -978,6 +980,22 @@ int pll_vco_prepare_12nm(struct clk_hw *hw)
 					pll->index, rc);
 			goto error;
 		}
+	}
+
+	if (!pll->handoff_resources) {
+		pr_debug("%s ndx = %d cache PLL regs\n", __func__, pll->index);
+		MDSS_PLL_REG_W(pll->pll_base,
+			DSIPHY_PLL_VCO_CTRL, pll->cached_cfg0);
+		udelay(1);
+		MDSS_PLL_REG_W(pll->pll_base,
+			DSIPHY_PLL_CHAR_PUMP_BIAS_CTRL, pll->cached_cfg1);
+		udelay(1);
+		MDSS_PLL_REG_W(pll->pll_base,
+			 DSIPHY_PLL_CTRL, pll->cached_postdiv1);
+		udelay(1);
+		MDSS_PLL_REG_W(pll->pll_base,
+			 DSIPHY_SSC9, pll->cached_postdiv3);
+		udelay(5); /* h/w recommended delay */
 	}
 
 	/*
@@ -1018,6 +1036,12 @@ void pll_vco_unprepare_12nm(struct clk_hw *hw)
 	}
 
 	pll->vco_cached_rate = clk_hw_get_rate(hw);
+
+	pll->cached_cfg0 = MDSS_PLL_REG_R(pll->pll_base, DSIPHY_PLL_VCO_CTRL);
+	pll->cached_cfg1 = MDSS_PLL_REG_R(pll->pll_base,
+					DSIPHY_PLL_CHAR_PUMP_BIAS_CTRL);
+	pll->cached_postdiv1 = MDSS_PLL_REG_R(pll->pll_base, DSIPHY_PLL_CTRL);
+	pll->cached_postdiv3 = MDSS_PLL_REG_R(pll->pll_base, DSIPHY_SSC9);
 	dsi_pll_disable(hw);
 }
 

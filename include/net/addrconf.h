@@ -56,10 +56,21 @@ struct prefix_info {
 struct in6_validator_info {
 	struct in6_addr		i6vi_addr;
 	struct inet6_dev	*i6vi_dev;
+	struct netlink_ext_ack	*extack;
 };
 
-#define IN6_ADDR_HSIZE_SHIFT	4
-#define IN6_ADDR_HSIZE		(1 << IN6_ADDR_HSIZE_SHIFT)
+struct ifa6_config {
+	const struct in6_addr	*pfx;
+	unsigned int		plen;
+
+	const struct in6_addr	*peer_pfx;
+
+	u32			rt_priority;
+	u32			ifa_flags;
+	u32			preferred_lft;
+	u32			valid_lft;
+	u16			scope;
+};
 
 int addrconf_init(void);
 void addrconf_cleanup(void);
@@ -71,12 +82,15 @@ int addrconf_set_dstaddr(struct net *net, void __user *arg);
 int ipv6_chk_addr(struct net *net, const struct in6_addr *addr,
 		  const struct net_device *dev, int strict);
 int ipv6_chk_addr_and_flags(struct net *net, const struct in6_addr *addr,
-			    const struct net_device *dev, int strict,
-			    u32 banned_flags);
+			    const struct net_device *dev, bool skip_dev_check,
+			    int strict, u32 banned_flags);
 
 #if defined(CONFIG_IPV6_MIP6) || defined(CONFIG_IPV6_MIP6_MODULE)
 int ipv6_chk_home_addr(struct net *net, const struct in6_addr *addr);
 #endif
+
+int ipv6_chk_rpl_srh_loop(struct net *net, const struct in6_addr *segs,
+			  unsigned char nsegs);
 
 bool ipv6_chk_custom_prefix(const struct in6_addr *addr,
 				   const unsigned int prefix_len,
@@ -91,8 +105,6 @@ struct inet6_ifaddr *ipv6_get_ifaddr(struct net *net,
 int ipv6_dev_get_saddr(struct net *net, const struct net_device *dev,
 		       const struct in6_addr *daddr, unsigned int srcprefs,
 		       struct in6_addr *saddr);
-int __ipv6_get_lladdr(struct inet6_dev *idev, struct in6_addr *addr,
-		      u32 banned_flags);
 int ipv6_get_lladdr(struct net_device *dev, struct in6_addr *addr,
 		    u32 banned_flags);
 bool inet_rcv_saddr_equal(const struct sock *sk, const struct sock *sk2,
@@ -183,7 +195,7 @@ static inline int addrconf_finite_timeout(unsigned long timeout)
  */
 int ipv6_addr_label_init(void);
 void ipv6_addr_label_cleanup(void);
-void ipv6_addr_label_rtnl_register(void);
+int ipv6_addr_label_rtnl_register(void);
 u32 ipv6_addr_label(struct net *net, const struct in6_addr *addr,
 		    int type, int ifindex);
 
@@ -209,7 +221,7 @@ void ipv6_mc_remap(struct inet6_dev *idev);
 void ipv6_mc_init_dev(struct inet6_dev *idev);
 void ipv6_mc_destroy_dev(struct inet6_dev *idev);
 int ipv6_mc_check_mld(struct sk_buff *skb, struct sk_buff **skb_trimmed);
-void addrconf_dad_failure(struct inet6_ifaddr *ifp);
+void addrconf_dad_failure(struct sk_buff *skb, struct inet6_ifaddr *ifp);
 
 bool ipv6_chk_mcast_addr(struct net_device *dev, const struct in6_addr *group,
 			 const struct in6_addr *src_addr);
@@ -244,6 +256,16 @@ static inline bool ipv6_is_mld(struct sk_buff *skb, int nexthdr, int offset)
 void addrconf_prefix_rcv(struct net_device *dev,
 			 u8 *opt, int len, bool sllao);
 
+/* Determines into what table to put autoconf PIO/RIO/default routes
+ * learned on this device.
+ *
+ * - If 0, use the same table for every device. This puts routes into
+ *   one of RT_TABLE_{PREFIX,INFO,DFLT} depending on the type of route
+ *   (but note that these three are currently all equal to
+ *   RT6_TABLE_MAIN).
+ * - If > 0, use the specified table.
+ * - If < 0, put routes into table dev->ifindex + (-rt_table).
+ */
 u32 addrconf_rt_table(const struct net_device *dev, u32 default_table);
 
 /*
@@ -289,6 +311,25 @@ static inline struct inet6_dev *__in6_dev_get(const struct net_device *dev)
 }
 
 /**
+ * __in6_dev_stats_get - get inet6_dev pointer for stats
+ * @dev: network device
+ * @skb: skb for original incoming interface if neeeded
+ *
+ * Caller must hold rcu_read_lock or RTNL, because this function
+ * does not take a reference on the inet6_dev.
+ */
+static inline struct inet6_dev *__in6_dev_stats_get(const struct net_device *dev,
+						    const struct sk_buff *skb)
+{
+	if (netif_is_l3_master(dev)) {
+		dev = dev_get_by_index_rcu(dev_net(dev), inet6_iif(skb));
+		if (!dev)
+			return NULL;
+	}
+	return __in6_dev_get(dev);
+}
+
+/**
  * __in6_dev_get_safely - get inet6_dev pointer from netdevice
  * @dev: network device
  *
@@ -316,8 +357,8 @@ static inline struct inet6_dev *in6_dev_get(const struct net_device *dev)
 
 	rcu_read_lock();
 	idev = rcu_dereference(dev->ip6_ptr);
-	if (idev)
-		refcount_inc(&idev->refcnt);
+	if (idev && !refcount_inc_not_zero(&idev->refcnt))
+		idev = NULL;
 	rcu_read_unlock();
 	return idev;
 }
@@ -355,6 +396,19 @@ static inline void __in6_dev_put(struct inet6_dev *idev)
 static inline void in6_dev_hold(struct inet6_dev *idev)
 {
 	refcount_inc(&idev->refcnt);
+}
+
+/* called with rcu_read_lock held */
+static inline bool ip6_ignore_linkdown(const struct net_device *dev)
+{
+	const struct inet6_dev *idev = __in6_dev_get(dev);
+
+	return !!idev->cnf.ignore_routes_with_linkdown;
+}
+
+static inline bool in6_dev_hold_safe(struct inet6_dev *idev)
+{
+	return refcount_inc_not_zero(&idev->refcnt);
 }
 
 void inet6_ifa_finish_destroy(struct inet6_ifaddr *ifp);

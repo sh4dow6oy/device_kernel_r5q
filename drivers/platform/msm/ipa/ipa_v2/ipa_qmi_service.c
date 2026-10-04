@@ -1,14 +1,6 @@
-/* Copyright (c) 2013-2018, 2020, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2013-2018, 2020-2021, The Linux Foundation. All rights reserved.
  */
 
 #include <linux/module.h>
@@ -431,6 +423,54 @@ static int qmi_init_modem_send_sync_msg(void)
 		resp.resp.error, "ipa_init_modem_driver_resp_msg_v01");
 }
 
+static int ipa_qmi_filter_request_ex_calc_length(
+	struct ipa_install_fltr_rule_req_msg_v01 *req)
+{
+	int len = 0;
+
+	/* caller should validate and send the req */
+	/* instead of sending max length,the approximate length is calculated */
+	len += ((sizeof(struct ipa_install_fltr_rule_req_msg_v01)) -
+		(QMI_IPA_MAX_FILTERS_V01 *
+		sizeof(struct ipa_filter_spec_type_v01)) -
+		(QMI_IPA_MAX_FILTERS_V01 * sizeof(uint32_t)) -
+		(QMI_IPA_MAX_FILTERS_V01 *
+		sizeof(struct ipa_filter_spec_ex_type_v01))-
+		(QMI_IPA_MAX_FILTERS_V01 *
+		sizeof(struct ipa_filter_spec_ex2_type_v01))-
+		(QMI_IPA_MAX_FILTERS_V01 * sizeof(uint32_t)));
+
+	if (req->filter_spec_list_valid &&
+		req->filter_spec_list_len > 0) {
+		len += sizeof(struct ipa_filter_spec_type_v01)*
+			req->filter_spec_list_len;
+	}
+
+	if (req->xlat_filter_indices_list_valid &&
+		req->xlat_filter_indices_list_len > 0) {
+		len += sizeof(uint32_t)*req->xlat_filter_indices_list_len;
+	}
+
+	if (req->filter_spec_ex_list_valid &&
+		req->filter_spec_ex_list_len > 0) {
+		len += sizeof(struct ipa_filter_spec_ex_type_v01)*
+			req->filter_spec_ex_list_len;
+	}
+
+	if (req->filter_spec_ex2_list_valid &&
+		req->filter_spec_ex2_list_len > 0) {
+		len += sizeof(struct ipa_filter_spec_ex2_type_v01)*
+			req->filter_spec_ex2_list_len;
+	}
+
+	if (req->ul_firewall_indices_list_valid &&
+		req->ul_firewall_indices_list_len > 0) {
+		len += sizeof(uint32_t)*req->ul_firewall_indices_list_len;
+	}
+
+	return len;
+}
+
 /* sending filter-install-request to modem*/
 int qmi_filter_request_send(struct ipa_install_fltr_rule_req_msg_v01 *req)
 {
@@ -499,7 +539,9 @@ int qmi_filter_request_send(struct ipa_install_fltr_rule_req_msg_v01 *req)
 	}
 	mutex_unlock(&ipa_qmi_lock);
 
-	req_desc.max_msg_len = QMI_IPA_INSTALL_FILTER_RULE_REQ_MAX_MSG_LEN_V01;
+	req_desc.max_msg_len = ipa_qmi_filter_request_ex_calc_length(req);
+	IPAWANDBG("QMI send request length = %d\n", req_desc.max_msg_len);
+
 	req_desc.msg_id = QMI_IPA_INSTALL_FILTER_RULE_REQ_V01;
 	req_desc.ei_array = ipa_install_fltr_rule_req_msg_data_v01_ei;
 
@@ -728,7 +770,7 @@ static void ipa_q6_clnt_quota_reached_ind_cb(struct qmi_handle *handle,
 
 	IPAWANDBG("Quota reached indication on qmux(%d) Mbytes(%lu)\n",
 		qmi_ind->apn.mux_id,
-		(unsigned long int) qmi_ind->apn.num_Mbytes);
+		(unsigned long) qmi_ind->apn.num_Mbytes);
 	ipa_broadcast_quota_reach_ind(qmi_ind->apn.mux_id,
 		IPA_UPSTEAM_MODEM);
 }

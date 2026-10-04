@@ -25,7 +25,8 @@
 #define UFS_VENDOR_TOSHIBA     0x198
 #define UFS_VENDOR_SAMSUNG     0x1CE
 #define UFS_VENDOR_SKHYNIX     0x1AD
-#define UFS_VENDOR_WDC		0x145
+#define UFS_VENDOR_WDC         0x145
+#define UFS_VENDOR_MICRON      0x12C
 
 /**
  * ufs_dev_fix - ufs device quirk info
@@ -142,18 +143,28 @@ struct ufs_dev_fix {
  */
 #define UFS_DEVICE_QUIRK_HS_G1_TO_HS_G3_SWITCH	(1 << 9)
 
+ /* Some UFS devices require VS_DebugSaveConfigTime is 0x10,
+ * enabling this quirk ensure this.
+ */
+#define UFS_DEVICE_QUIRK_HOST_VS_DEBUGSAVECONFIGTIME	(1 << 10)
+
 /*
  * Some UFS devices need more delay after device reference clk is turned on
  * but before initiation of the state transition to STALL from a LS-MODE or
  * from the HIBERN8 state. Enable this quirk to give UFS devices 50us delay
  * instead of the default delay.
  */
-#define UFS_DEVICE_QUIRK_WAIT_AFTER_REF_CLK_UNGATE	(1 << 10)
+#define UFS_DEVICE_QUIRK_WAIT_AFTER_REF_CLK_UNGATE	(1 << 11)
+
 
 /*
- * Some UFS devices support the FATAL MODE
- * to gether the debug info.
+ * Few samsung UFS device models advertise PA_HIBERN8TIME as
+ * 200us during handshaking in link establishment b/w host and device but
+ * which may not be enough for the UFS device.
+ * To workaround this issue, host should set its PA_HIBERN8TIME time to
+ * 300us even if device advertises PA_HIBERN8TIME of 200us.
  */
-#define UFS_DEVICE_QUIRK_SUPPORT_QUERY_FATAL_MODE	(1 << 11)
+#define UFS_DEVICE_QUIRK_PA_HIBER8TIME   (1 << 12)
+
 
 #endif /* UFS_QUIRKS_H_ */

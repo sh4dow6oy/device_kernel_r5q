@@ -607,18 +607,18 @@ static int nci_close_device(struct nci_dev *ndev)
 }
 
 /* NCI command timer function */
-static void nci_cmd_timer(unsigned long arg)
+static void nci_cmd_timer(struct timer_list *t)
 {
-	struct nci_dev *ndev = (void *) arg;
+	struct nci_dev *ndev = from_timer(ndev, t, cmd_timer);
 
 	atomic_set(&ndev->cmd_cnt, 1);
 	queue_work(ndev->cmd_wq, &ndev->cmd_work);
 }
 
 /* NCI data exchange timer function */
-static void nci_data_timer(unsigned long arg)
+static void nci_data_timer(struct timer_list *t)
 {
-	struct nci_dev *ndev = (void *) arg;
+	struct nci_dev *ndev = from_timer(ndev, t, data_timer);
 
 	set_bit(NCI_DATA_EXCHANGE_TO, &ndev->flags);
 	queue_work(ndev->rx_wq, &ndev->rx_work);
@@ -1026,18 +1026,23 @@ static int nci_transceive(struct nfc_dev *nfc_dev, struct nfc_target *target,
 	struct nci_conn_info    *conn_info;
 
 	conn_info = ndev->rf_conn_info;
-	if (!conn_info)
+	if (!conn_info) {
+		kfree_skb(skb);
 		return -EPROTO;
+	}
 
 	pr_debug("target_idx %d, len %d\n", target->idx, skb->len);
 
 	if (!ndev->target_active_prot) {
 		pr_err("unable to exchange data, no active target\n");
+		kfree_skb(skb);
 		return -EINVAL;
 	}
 
-	if (test_and_set_bit(NCI_DATA_EXCHANGE, &ndev->flags))
+	if (test_and_set_bit(NCI_DATA_EXCHANGE, &ndev->flags)) {
+		kfree_skb(skb);
 		return -EBUSY;
+	}
 
 	/* store cb and context to be used on receiving data */
 	conn_info->data_exchange_cb = cb;
@@ -1258,10 +1263,8 @@ int nci_register_device(struct nci_dev *ndev)
 	skb_queue_head_init(&ndev->rx_q);
 	skb_queue_head_init(&ndev->tx_q);
 
-	setup_timer(&ndev->cmd_timer, nci_cmd_timer,
-		    (unsigned long) ndev);
-	setup_timer(&ndev->data_timer, nci_data_timer,
-		    (unsigned long) ndev);
+	timer_setup(&ndev->cmd_timer, nci_cmd_timer, 0);
+	timer_setup(&ndev->data_timer, nci_data_timer, 0);
 
 	mutex_init(&ndev->req_lock);
 	INIT_LIST_HEAD(&ndev->conn_info_list);
@@ -1292,6 +1295,8 @@ void nci_unregister_device(struct nci_dev *ndev)
 {
 	struct nci_conn_info    *conn_info, *n;
 
+	nfc_unregister_rfkill(ndev->nfc_dev);
+
 	/* This set_bit is not protected with specialized barrier,
 	 * However, it is fine because the mutex_lock(&ndev->req_lock);
 	 * in nci_close_device() will help to emit one.
@@ -1309,7 +1314,7 @@ void nci_unregister_device(struct nci_dev *ndev)
 		/* conn_info is allocated with devm_kzalloc */
 	}
 
-	nfc_unregister_device(ndev->nfc_dev);
+	nfc_remove_device(ndev->nfc_dev);
 }
 EXPORT_SYMBOL(nci_unregister_device);
 
@@ -1469,10 +1474,20 @@ static bool nci_valid_size(struct sk_buff *skb)
 	BUILD_BUG_ON(NCI_CTRL_HDR_SIZE != NCI_DATA_HDR_SIZE);
 
 	if (skb->len < hdr_size ||
-	    !nci_plen(skb->data) ||
 	    skb->len < hdr_size + nci_plen(skb->data)) {
 		return false;
 	}
+
+	if (!nci_plen(skb->data)) {
+		/* Allow zero length in proprietary notifications (0x20 - 0x3F). */
+		if (nci_opcode_oid(nci_opcode(skb->data)) >= 0x20 &&
+		    nci_mt(skb->data) == NCI_MT_NTF_PKT)
+			return true;
+
+		/* Disallow zero length otherwise. */
+		return false;
+	}
+
 	return true;
 }
 

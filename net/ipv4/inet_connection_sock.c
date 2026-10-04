@@ -23,30 +23,24 @@
 #include <net/route.h>
 #include <net/tcp_states.h>
 #include <net/xfrm.h>
-#ifdef CONFIG_MPTCP
-#include <net/mptcp.h>
-#endif
 #include <net/tcp.h>
 #include <net/sock_reuseport.h>
 #include <net/addrconf.h>
 
-#ifdef INET_CSK_DEBUG
-const char inet_csk_timer_bug_msg[] = "inet_csk BUG: unknown timer value\n";
-EXPORT_SYMBOL(inet_csk_timer_bug_msg);
-#endif
-
 #if IS_ENABLED(CONFIG_IPV6)
-/* match_wildcard == true:  IPV6_ADDR_ANY equals to any IPv6 addresses if IPv6
- *                          only, and any IPv4 addresses if not IPv6 only
- * match_wildcard == false: addresses must be exactly the same, i.e.
- *                          IPV6_ADDR_ANY only equals to IPV6_ADDR_ANY,
- *                          and 0.0.0.0 equals to 0.0.0.0 only
+/* match_sk*_wildcard == true:  IPV6_ADDR_ANY equals to any IPv6 addresses
+ *				if IPv6 only, and any IPv4 addresses
+ *				if not IPv6 only
+ * match_sk*_wildcard == false: addresses must be exactly the same, i.e.
+ *				IPV6_ADDR_ANY only equals to IPV6_ADDR_ANY,
+ *				and 0.0.0.0 equals to 0.0.0.0 only
  */
 static bool ipv6_rcv_saddr_equal(const struct in6_addr *sk1_rcv_saddr6,
 				 const struct in6_addr *sk2_rcv_saddr6,
 				 __be32 sk1_rcv_saddr, __be32 sk2_rcv_saddr,
 				 bool sk1_ipv6only, bool sk2_ipv6only,
-				 bool match_wildcard)
+				 bool match_sk1_wildcard,
+				 bool match_sk2_wildcard)
 {
 	int addr_type = ipv6_addr_type(sk1_rcv_saddr6);
 	int addr_type2 = sk2_rcv_saddr6 ? ipv6_addr_type(sk2_rcv_saddr6) : IPV6_ADDR_MAPPED;
@@ -56,8 +50,8 @@ static bool ipv6_rcv_saddr_equal(const struct in6_addr *sk1_rcv_saddr6,
 		if (!sk2_ipv6only) {
 			if (sk1_rcv_saddr == sk2_rcv_saddr)
 				return true;
-			if (!sk1_rcv_saddr || !sk2_rcv_saddr)
-				return match_wildcard;
+			return (match_sk1_wildcard && !sk1_rcv_saddr) ||
+				(match_sk2_wildcard && !sk2_rcv_saddr);
 		}
 		return false;
 	}
@@ -65,11 +59,11 @@ static bool ipv6_rcv_saddr_equal(const struct in6_addr *sk1_rcv_saddr6,
 	if (addr_type == IPV6_ADDR_ANY && addr_type2 == IPV6_ADDR_ANY)
 		return true;
 
-	if (addr_type2 == IPV6_ADDR_ANY && match_wildcard &&
+	if (addr_type2 == IPV6_ADDR_ANY && match_sk2_wildcard &&
 	    !(sk2_ipv6only && addr_type == IPV6_ADDR_MAPPED))
 		return true;
 
-	if (addr_type == IPV6_ADDR_ANY && match_wildcard &&
+	if (addr_type == IPV6_ADDR_ANY && match_sk1_wildcard &&
 	    !(sk1_ipv6only && addr_type2 == IPV6_ADDR_MAPPED))
 		return true;
 
@@ -81,18 +75,19 @@ static bool ipv6_rcv_saddr_equal(const struct in6_addr *sk1_rcv_saddr6,
 }
 #endif
 
-/* match_wildcard == true:  0.0.0.0 equals to any IPv4 addresses
- * match_wildcard == false: addresses must be exactly the same, i.e.
- *                          0.0.0.0 only equals to 0.0.0.0
+/* match_sk*_wildcard == true:  0.0.0.0 equals to any IPv4 addresses
+ * match_sk*_wildcard == false: addresses must be exactly the same, i.e.
+ *				0.0.0.0 only equals to 0.0.0.0
  */
 static bool ipv4_rcv_saddr_equal(__be32 sk1_rcv_saddr, __be32 sk2_rcv_saddr,
-				 bool sk2_ipv6only, bool match_wildcard)
+				 bool sk2_ipv6only, bool match_sk1_wildcard,
+				 bool match_sk2_wildcard)
 {
 	if (!sk2_ipv6only) {
 		if (sk1_rcv_saddr == sk2_rcv_saddr)
 			return true;
-		if (!sk1_rcv_saddr || !sk2_rcv_saddr)
-			return match_wildcard;
+		return (match_sk1_wildcard && !sk1_rcv_saddr) ||
+			(match_sk2_wildcard && !sk2_rcv_saddr);
 	}
 	return false;
 }
@@ -108,10 +103,12 @@ bool inet_rcv_saddr_equal(const struct sock *sk, const struct sock *sk2,
 					    sk2->sk_rcv_saddr,
 					    ipv6_only_sock(sk),
 					    ipv6_only_sock(sk2),
+					    match_wildcard,
 					    match_wildcard);
 #endif
 	return ipv4_rcv_saddr_equal(sk->sk_rcv_saddr, sk2->sk_rcv_saddr,
-				    ipv6_only_sock(sk2), match_wildcard);
+				    ipv6_only_sock(sk2), match_wildcard,
+				    match_wildcard);
 }
 EXPORT_SYMBOL(inet_rcv_saddr_equal);
 
@@ -282,10 +279,10 @@ static inline int sk_reuseport_match(struct inet_bind_bucket *tb,
 					    tb->fast_rcv_saddr,
 					    sk->sk_rcv_saddr,
 					    tb->fast_ipv6_only,
-					    ipv6_only_sock(sk), true);
+					    ipv6_only_sock(sk), true, false);
 #endif
 	return ipv4_rcv_saddr_equal(tb->fast_rcv_saddr, sk->sk_rcv_saddr,
-				    ipv6_only_sock(sk), true);
+				    ipv6_only_sock(sk), true, false);
 }
 
 void inet_csk_update_fastreuse(struct inet_bind_bucket *tb,
@@ -542,17 +539,15 @@ EXPORT_SYMBOL(inet_csk_accept);
  * to optimize.
  */
 void inet_csk_init_xmit_timers(struct sock *sk,
-			       void (*retransmit_handler)(unsigned long),
-			       void (*delack_handler)(unsigned long),
-			       void (*keepalive_handler)(unsigned long))
+			       void (*retransmit_handler)(struct timer_list *t),
+			       void (*delack_handler)(struct timer_list *t),
+			       void (*keepalive_handler)(struct timer_list *t))
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);
 
-	setup_timer(&icsk->icsk_retransmit_timer, retransmit_handler,
-			(unsigned long)sk);
-	setup_timer(&icsk->icsk_delack_timer, delack_handler,
-			(unsigned long)sk);
-	setup_timer(&sk->sk_timer, keepalive_handler, (unsigned long)sk);
+	timer_setup(&icsk->icsk_retransmit_timer, retransmit_handler, 0);
+	timer_setup(&icsk->icsk_delack_timer, delack_handler, 0);
+	timer_setup(&sk->sk_timer, keepalive_handler, 0);
 	icsk->icsk_pending = icsk->icsk_ack.pending = 0;
 }
 EXPORT_SYMBOL(inet_csk_init_xmit_timers);
@@ -617,7 +612,7 @@ struct dst_entry *inet_csk_route_req(const struct sock *sk,
 	rt = ip_route_output_flow(net, fl4, sk);
 	if (IS_ERR(rt))
 		goto no_route;
-	if (opt && opt->opt.is_strictroute && rt->rt_gw_family)
+	if (opt && opt->opt.is_strictroute && rt->rt_uses_gateway)
 		goto route_err;
 	rcu_read_unlock();
 	return &rt->dst;
@@ -655,7 +650,7 @@ struct dst_entry *inet_csk_route_child_sock(const struct sock *sk,
 	rt = ip_route_output_flow(net, fl4, sk);
 	if (IS_ERR(rt))
 		goto no_route;
-	if (opt && opt->opt.is_strictroute && rt->rt_gw_family)
+	if (opt && opt->opt.is_strictroute && rt->rt_uses_gateway)
 		goto route_err;
 	return &rt->dst;
 
@@ -719,17 +714,30 @@ static bool reqsk_queue_unlink(struct request_sock_queue *queue,
 		found = __sk_nulls_del_node_init_rcu(req_to_sk(req));
 		spin_unlock(lock);
 	}
-	if (timer_pending(&req->rsk_timer) && del_timer_sync(&req->rsk_timer))
-		reqsk_put(req);
+
 	return found;
 }
 
-void inet_csk_reqsk_queue_drop(struct sock *sk, struct request_sock *req)
+static bool __inet_csk_reqsk_queue_drop(struct sock *sk,
+					struct request_sock *req,
+					bool from_timer)
 {
-	if (reqsk_queue_unlink(&inet_csk(sk)->icsk_accept_queue, req)) {
+	bool unlinked = reqsk_queue_unlink(&inet_csk(sk)->icsk_accept_queue, req);
+
+	if (!from_timer && del_timer_sync(&req->rsk_timer))
+		reqsk_put(req);
+
+	if (unlinked) {
 		reqsk_queue_removed(&inet_csk(sk)->icsk_accept_queue, req);
 		reqsk_put(req);
 	}
+
+	return unlinked;
+}
+
+bool inet_csk_reqsk_queue_drop(struct sock *sk, struct request_sock *req)
+{
+	return __inet_csk_reqsk_queue_drop(sk, req, false);
 }
 EXPORT_SYMBOL(inet_csk_reqsk_queue_drop);
 
@@ -740,9 +748,9 @@ void inet_csk_reqsk_queue_drop_and_put(struct sock *sk, struct request_sock *req
 }
 EXPORT_SYMBOL(inet_csk_reqsk_queue_drop_and_put);
 
-static void reqsk_timer_handler(unsigned long data)
+static void reqsk_timer_handler(struct timer_list *t)
 {
-	struct request_sock *req = (struct request_sock *)data;
+	struct request_sock *req = from_timer(req, t, rsk_timer);
 	struct sock *sk_listener = req->rsk_listener;
 	struct net *net = sock_net(sk_listener);
 	struct inet_connection_sock *icsk = inet_csk(sk_listener);
@@ -750,18 +758,9 @@ static void reqsk_timer_handler(unsigned long data)
 	int qlen, expire = 0, resend = 0;
 	int max_retries, thresh;
 	u8 defer_accept;
-#ifdef CONFIG_MPTCP
-	if (sk_state_load(sk_listener) != TCP_LISTEN &&
-	    !is_meta_sk(sk_listener))
-#else
-	if (sk_state_load(sk_listener) != TCP_LISTEN)
-#endif
-		goto drop;
 
-#ifdef CONFIG_MPTCP
-	if (is_meta_sk(sk_listener) && !mptcp_can_new_subflow(sk_listener))
+	if (inet_sk_state_load(sk_listener) != TCP_LISTEN)
 		goto drop;
-#endif
 
 	max_retries = icsk->icsk_syn_retries ? : net->ipv4.sysctl_tcp_synack_retries;
 	thresh = max_retries;
@@ -812,7 +811,8 @@ static void reqsk_timer_handler(unsigned long data)
 		return;
 	}
 drop:
-	inet_csk_reqsk_queue_drop_and_put(sk_listener, req);
+	__inet_csk_reqsk_queue_drop(sk_listener, req, true);
+	reqsk_put(req);
 }
 
 static void reqsk_queue_hash_req(struct request_sock *req,
@@ -822,8 +822,7 @@ static void reqsk_queue_hash_req(struct request_sock *req,
 	req->num_timeout = 0;
 	req->sk = NULL;
 
-	setup_pinned_timer(&req->rsk_timer, reqsk_timer_handler,
-			    (unsigned long)req);
+	timer_setup(&req->rsk_timer, reqsk_timer_handler, TIMER_PINNED);
 	mod_timer(&req->rsk_timer, jiffies + timeout);
 
 	inet_ehash_insert(req_to_sk(req), NULL, NULL);
@@ -859,7 +858,7 @@ struct sock *inet_csk_clone_lock(const struct sock *sk,
 	if (newsk) {
 		struct inet_connection_sock *newicsk = inet_csk(newsk);
 
-		newsk->sk_state = TCP_SYN_RECV;
+		inet_sk_set_state(newsk, TCP_SYN_RECV);
 		newicsk->icsk_bind_hash = NULL;
 
 		inet_sk(newsk)->inet_dport = inet_rsk(req)->ir_rmt_port;
@@ -968,7 +967,7 @@ int inet_csk_listen_start(struct sock *sk, int backlog)
 	 * after validation is complete.
 	 */
 	err = -EADDRINUSE;
-	sk_state_store(sk, TCP_LISTEN);
+	inet_sk_state_store(sk, TCP_LISTEN);
 	if (!sk->sk_prot->get_port(sk, inet->inet_num)) {
 		inet->inet_sport = htons(inet->inet_num);
 
@@ -979,7 +978,7 @@ int inet_csk_listen_start(struct sock *sk, int backlog)
 			return 0;
 	}
 
-	sk->sk_state = TCP_CLOSE;
+	inet_sk_set_state(sk, TCP_CLOSE);
 	return err;
 }
 EXPORT_SYMBOL_GPL(inet_csk_listen_start);
@@ -1069,14 +1068,7 @@ void inet_csk_listen_stop(struct sock *sk)
 	 */
 	while ((req = reqsk_queue_remove(queue, sk)) != NULL) {
 		struct sock *child = req->sk;
-#ifdef CONFIG_MPTCP
-		bool mutex_taken = false;
 
-		if (is_meta_sk(child)) {
-			mutex_lock(&tcp_sk(child)->mpcb->mpcb_mutex);
-			mutex_taken = true;
-		}
-#endif
 		local_bh_disable();
 		bh_lock_sock(child);
 		WARN_ON(sock_owned_by_user(child));
@@ -1086,10 +1078,6 @@ void inet_csk_listen_stop(struct sock *sk)
 		reqsk_put(req);
 		bh_unlock_sock(child);
 		local_bh_enable();
-#ifdef CONFIG_MPTCP
-		if (mutex_taken)
-			mutex_unlock(&tcp_sk(child)->mpcb->mpcb_mutex);
-#endif
 		sock_put(child);
 
 		cond_resched();

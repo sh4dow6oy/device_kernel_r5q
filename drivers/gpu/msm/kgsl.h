@@ -1,34 +1,20 @@
-/* Copyright (c) 2008-2021, The Linux Foundation. All rights reserved.
+/* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * Copyright (c) 2008-2021, The Linux Foundation. All rights reserved.
  * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
  */
 #ifndef __KGSL_H
 #define __KGSL_H
 
-#include <linux/types.h>
-#include <linux/slab.h>
-#include <linux/vmalloc.h>
-#include <linux/msm_kgsl.h>
-#include <linux/platform_device.h>
-#include <linux/clk.h>
-#include <linux/interrupt.h>
-#include <linux/mutex.h>
 #include <linux/cdev.h>
-#include <linux/regulator/consumer.h>
+#include <linux/kthread.h>
 #include <linux/mm.h>
 #include <linux/uaccess.h>
-#include <linux/kthread.h>
-#include <asm/cacheflush.h>
 #include <linux/compat.h>
+#include <uapi/linux/msm_kgsl.h>
+
+#include "kgsl_gmu_core.h"
+#include "kgsl_pwrscale.h"
 
 /*
  * --- kgsl drawobj flags ---
@@ -83,7 +69,7 @@
 #define SCRATCH_RPTR_OFFSET(id) ((id) * sizeof(unsigned int))
 #define SCRATCH_RPTR_GPU_ADDR(dev, id) \
 	((dev)->scratch.gpuaddr + SCRATCH_RPTR_OFFSET(id))
-	
+
 /* OFFSET to KMD postamble packets in scratch buffer */
 #define SCRATCH_POSTAMBLE_OFFSET (100 * sizeof(u64))
 #define SCRATCH_POSTAMBLE_ADDR(dev) \
@@ -125,11 +111,13 @@ struct kgsl_context;
  * @pagetable_list: LIst of open pagetables
  * @ptlock: Lock for accessing the pagetable list
  * @process_mutex: Mutex for accessing the process list
+ * @proclist_lock: Lock for accessing the process list
  * @devlock: Mutex protecting the device list
  * @stats: Struct containing atomic memory statistics
  * @full_cache_threshold: the threshold that triggers a full cache flush
  * @workqueue: Pointer to a single threaded workqueue
  * @mem_workqueue: Pointer to a workqueue for deferring memory entries
+ * @mem_work: Work struct to schedule mem_workqueue flush
  */
 struct kgsl_driver {
 	struct cdev cdev;
@@ -138,11 +126,12 @@ struct kgsl_driver {
 	struct device virtdev;
 	struct kobject *ptkobj;
 	struct kobject *prockobj;
-	struct kgsl_device *devp[KGSL_DEVICE_MAX];
+	struct kgsl_device *devp[1];
 	struct list_head process_list;
 	struct list_head pagetable_list;
 	spinlock_t ptlock;
 	struct mutex process_mutex;
+	spinlock_t proclist_lock;
 	struct mutex devlock;
 	struct {
 		atomic_long_t vmalloc;
@@ -155,12 +144,11 @@ struct kgsl_driver {
 		atomic_long_t secure_max;
 		atomic_long_t mapped;
 		atomic_long_t mapped_max;
-		atomic_long_t page_free_pending;
-		atomic_long_t page_alloc_pending;
 	} stats;
 	unsigned int full_cache_threshold;
 	struct workqueue_struct *workqueue;
 	struct workqueue_struct *mem_workqueue;
+	struct work_struct mem_work;
 	struct kthread_worker worker;
 	struct task_struct *worker_thread;
 };
@@ -173,11 +161,11 @@ struct kgsl_memdesc;
 
 struct kgsl_memdesc_ops {
 	unsigned int vmflags;
-	int (*vmfault)(struct kgsl_memdesc *, struct vm_area_struct *,
-		       struct vm_fault *);
+	int (*vmfault)(struct kgsl_memdesc *memdesc, struct vm_area_struct *vma,
+		       struct vm_fault *vmf);
 	void (*free)(struct kgsl_memdesc *memdesc);
-	int (*map_kernel)(struct kgsl_memdesc *);
-	void (*unmap_kernel)(struct kgsl_memdesc *);
+	int (*map_kernel)(struct kgsl_memdesc *memdesc);
+	void (*unmap_kernel)(struct kgsl_memdesc *memdesc);
 };
 
 /* Internal definitions for memdesc->priv */
@@ -200,6 +188,14 @@ struct kgsl_memdesc_ops {
 #define KGSL_MEMDESC_UCODE BIT(9)
 /* For global buffers, randomly assign an address from the region */
 #define KGSL_MEMDESC_RANDOM BIT(10)
+/* The memdesc pages can be reclaimed */
+#define KGSL_MEMDESC_CAN_RECLAIM BIT(11)
+/* The memdesc pages were reclaimed */
+#define KGSL_MEMDESC_RECLAIMED BIT(12)
+/* Skip reclaim of the memdesc pages */
+#define KGSL_MEMDESC_SKIP_RECLAIM BIT(13)
+/* Use SHMEM for allocation */
+#define KGSL_MEMDESC_USE_SHMEM BIT(14)
 
 /**
  * struct kgsl_memdesc - GPU memory object descriptor
@@ -218,6 +214,7 @@ struct kgsl_memdesc_ops {
  * @pages: An array of pointers to allocated pages
  * @page_count: Total number of pages allocated
  * @cur_bindings: Number of sparse pages actively bound
+ * @shmem_filp: Pointer to the shmem file backing this memdesc
  */
 struct kgsl_memdesc {
 	struct kgsl_pagetable *pagetable;
@@ -235,11 +232,20 @@ struct kgsl_memdesc {
 	struct page **pages;
 	unsigned int page_count;
 	unsigned int cur_bindings;
-	/*
-	 * @lock: Spinlock to protect the gpuaddr from being accessed by
-	 * multiple entities trying to map the same SVM region at once
+	struct file *shmem_filp;
+	/**
+	 * @lock: Spinlock to protect the pages array
 	 */
 	spinlock_t lock;
+	/**
+	 * @reclaimed_page_count: Total number of pages reclaimed
+	 */
+	int reclaimed_page_count;
+	/*
+	 * @gpuaddr_lock: Spinlock to protect the gpuaddr from being accessed by
+	 * multiple entities trying to map the same SVM region at once
+	 */
+	spinlock_t gpuaddr_lock;
 };
 
 /*
@@ -353,16 +359,6 @@ struct kgsl_event_group {
 };
 
 /**
- * struct kgsl_protected_registers - Protected register range
- * @base: Offset of the range to be protected
- * @range: Range (# of registers = 2 ** range)
- */
-struct kgsl_protected_registers {
-	unsigned int base;
-	int range;
-};
-
-/**
  * struct sparse_bind_object - Bind metadata
  * @node: Node for the rb tree
  * @p_memdesc: Physical memdesc bound to
@@ -435,6 +431,20 @@ long kgsl_ioctl_gpu_command(struct kgsl_device_private *dev_priv,
 				unsigned int cmd, void *data);
 long kgsl_ioctl_gpuobj_set_info(struct kgsl_device_private *dev_priv,
 				unsigned int cmd, void *data);
+long kgsl_ioctl_gpu_aux_command(struct kgsl_device_private *dev_priv,
+		unsigned int cmd, void *data);
+long kgsl_ioctl_timeline_create(struct kgsl_device_private *dev_priv,
+		unsigned int cmd, void *data);
+long kgsl_ioctl_timeline_wait(struct kgsl_device_private *dev_priv,
+		unsigned int cmd, void *data);
+long kgsl_ioctl_timeline_query(struct kgsl_device_private *dev_priv,
+		unsigned int cmd, void *data);
+long kgsl_ioctl_timeline_fence_get(struct kgsl_device_private *dev_priv,
+		unsigned int cmd, void *data);
+long kgsl_ioctl_timeline_signal(struct kgsl_device_private *dev_priv,
+		unsigned int cmd, void *data);
+long kgsl_ioctl_timeline_destroy(struct kgsl_device_private *dev_priv,
+		unsigned int cmd, void *data);
 
 long kgsl_ioctl_sparse_phys_alloc(struct kgsl_device_private *dev_priv,
 					unsigned int cmd, void *data);
@@ -452,6 +462,7 @@ long kgsl_ioctl_gpu_sparse_command(struct kgsl_device_private *dev_priv,
 					unsigned int cmd, void *data);
 
 void kgsl_mem_entry_destroy(struct kref *kref);
+void kgsl_mem_entry_destroy_deferred(struct kref *kref);
 
 void kgsl_get_egl_counts(struct kgsl_mem_entry *entry,
 			int *egl_surface_count, int *egl_image_count);
@@ -471,8 +482,17 @@ struct kgsl_mem_entry *gpumem_alloc_entry(struct kgsl_device_private *dev_priv,
 				uint64_t size, uint64_t flags);
 long gpumem_free_entry(struct kgsl_mem_entry *entry);
 
+enum kgsl_mmutype kgsl_mmu_get_mmutype(struct kgsl_device *device);
+void kgsl_mmu_add_global(struct kgsl_device *device,
+	struct kgsl_memdesc *memdesc, const char *name);
+void kgsl_mmu_remove_global(struct kgsl_device *device,
+		struct kgsl_memdesc *memdesc);
+
 /* Helper functions */
 unsigned long kgsl_get_align(struct kgsl_memdesc *memdesc);
+
+int kgsl_request_irq(struct platform_device *pdev, const  char *name,
+		irq_handler_t handler, void *data);
 
 static inline int kgsl_gpuaddr_in_memdesc(const struct kgsl_memdesc *memdesc,
 				uint64_t gpuaddr, uint64_t size)
@@ -562,6 +582,21 @@ kgsl_mem_entry_put(struct kgsl_mem_entry *entry)
 		kref_put(&entry->refcount, kgsl_mem_entry_destroy);
 }
 
+/**
+ * kgsl_mem_entry_put_deferred - Puts refcount and triggers deferred
+ *  mem_entry destroy when refcount goes to zero.
+ * @entry: memory entry to be put.
+ *
+ * Use this to put a memory entry when we don't want to block
+ * the caller while destroying memory entry.
+ */
+static inline void
+kgsl_mem_entry_put_deferred(struct kgsl_mem_entry *entry)
+{
+	if (entry)
+		kref_put(&entry->refcount, kgsl_mem_entry_destroy_deferred);
+}
+
 /*
  * kgsl_addr_range_overlap() - Checks if 2 ranges overlap
  * @gpuaddr1: Start of first address range
@@ -579,35 +614,6 @@ static inline bool kgsl_addr_range_overlap(uint64_t gpuaddr1,
 		return false;
 	return !(((gpuaddr1 + size1) <= gpuaddr2) ||
 		(gpuaddr1 >= (gpuaddr2 + size2)));
-}
-
-/**
- * kgsl_malloc() - Use either kzalloc or vmalloc to allocate memory
- * @size: Size of the desired allocation
- *
- * Allocate a block of memory for the driver - if it is small try to allocate it
- * from kmalloc (fast!) otherwise we need to go with vmalloc (safe!)
- */
-static inline void *kgsl_malloc(size_t size)
-{
-	if (size <= PAGE_SIZE)
-		return kzalloc(size, GFP_KERNEL);
-
-	return vmalloc(size);
-}
-
-/**
- * kgsl_free() - Free memory allocated by kgsl_malloc()
- * @ptr: Pointer to the memory to free
- *
- * Free the memory be it in vmalloc or kmalloc space
- */
-static inline void kgsl_free(void *ptr)
-{
-	if (ptr != NULL && is_vmalloc_addr(ptr))
-		return vfree(ptr);
-
-	kfree(ptr);
 }
 
 static inline int kgsl_copy_from_user(void *dest, void __user *src,

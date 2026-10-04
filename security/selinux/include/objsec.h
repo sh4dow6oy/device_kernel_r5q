@@ -38,9 +38,6 @@ struct task_security_struct {
 	u32 create_sid;		/* fscreate SID */
 	u32 keycreate_sid;	/* keycreate SID */
 	u32 sockcreate_sid;	/* fscreate SID */
-#ifdef CONFIG_RKP_KDP
-	void *bp_cred;
-#endif
 } __randomize_layout;
 
 enum label_initialized {
@@ -122,6 +119,10 @@ struct sk_security_struct {
 	u32 sid;			/* SID of this object */
 	u32 peer_sid;			/* SID of peer */
 	u16 sclass;			/* sock security class */
+	enum {				/* SCTP association state */
+		SCTP_ASSOC_UNSET = 0,
+		SCTP_ASSOC_SET,
+	} sctp_assoc_state;
 };
 
 struct tun_security_struct {

@@ -26,6 +26,7 @@
 #include <linux/delay.h>
 #include <linux/sched/signal.h>
 #include <asm/unaligned.h>
+#include <linux/inet.h>
 #include <net/ipv6.h>
 #include <scsi/scsi_proto.h>
 #include <scsi/iscsi_proto.h>
@@ -56,9 +57,8 @@ static DEFINE_SPINLOCK(tiqn_lock);
 static DEFINE_MUTEX(np_lock);
 
 static struct idr tiqn_idr;
-struct idr sess_idr;
+DEFINE_IDA(sess_ida);
 struct mutex auth_id_lock;
-spinlock_t sess_idr_lock;
 
 struct iscsit_global *iscsit_global;
 
@@ -372,6 +372,8 @@ struct iscsi_np *iscsit_add_np(
 	init_completion(&np->np_restart_comp);
 	INIT_LIST_HEAD(&np->np_list);
 
+	timer_setup(&np->np_login_timer, iscsi_handle_login_thread_timeout, 0);
+
 	ret = iscsi_target_setup_login_socket(np, sockaddr);
 	if (ret != 0) {
 		kfree(np);
@@ -499,7 +501,7 @@ void iscsit_aborted_task(struct iscsi_conn *conn, struct iscsi_cmd *cmd)
 EXPORT_SYMBOL(iscsit_aborted_task);
 
 static void iscsit_do_crypto_hash_buf(struct ahash_request *, const void *,
-				      u32, u32, u8 *, u8 *);
+				      u32, u32, const void *, void *);
 static void iscsit_tx_thread_wait_for_tcp(struct iscsi_conn *);
 
 static int
@@ -520,7 +522,7 @@ iscsit_xmit_nondatain_pdu(struct iscsi_conn *conn, struct iscsi_cmd *cmd,
 
 		iscsit_do_crypto_hash_buf(conn->conn_tx_hash, hdr,
 					  ISCSI_HDR_LEN, 0, NULL,
-					  (u8 *)header_digest);
+					  header_digest);
 
 		iov[0].iov_len += ISCSI_CRC_LEN;
 		tx_size += ISCSI_CRC_LEN;
@@ -547,9 +549,8 @@ iscsit_xmit_nondatain_pdu(struct iscsi_conn *conn, struct iscsi_cmd *cmd,
 		if (conn->conn_ops->DataDigest) {
 			iscsit_do_crypto_hash_buf(conn->conn_tx_hash,
 						  data_buf, data_buf_len,
-						  padding,
-						  (u8 *)&cmd->pad_bytes,
-						  (u8 *)&cmd->data_crc);
+						  padding, &cmd->pad_bytes,
+						  &cmd->data_crc);
 
 			iov[niov].iov_base = &cmd->data_crc;
 			iov[niov++].iov_len = ISCSI_CRC_LEN;
@@ -594,7 +595,7 @@ iscsit_xmit_datain_pdu(struct iscsi_conn *conn, struct iscsi_cmd *cmd,
 
 		iscsit_do_crypto_hash_buf(conn->conn_tx_hash, cmd->pdu,
 					  ISCSI_HDR_LEN, 0, NULL,
-					  (u8 *)header_digest);
+					  header_digest);
 
 		iov[0].iov_len += ISCSI_CRC_LEN;
 		tx_size += ISCSI_CRC_LEN;
@@ -697,9 +698,7 @@ static int __init iscsi_target_init_module(void)
 
 	spin_lock_init(&iscsit_global->ts_bitmap_lock);
 	mutex_init(&auth_id_lock);
-	spin_lock_init(&sess_idr_lock);
 	idr_init(&tiqn_idr);
-	idr_init(&sess_idr);
 
 	ret = target_register_template(&iscsi_ops);
 	if (ret)
@@ -1421,13 +1420,9 @@ static u32 iscsit_do_crypto_hash_sg(
 	return data_crc;
 }
 
-static void iscsit_do_crypto_hash_buf(
-	struct ahash_request *hash,
-	const void *buf,
-	u32 payload_length,
-	u32 padding,
-	u8 *pad_bytes,
-	u8 *data_crc)
+static void iscsit_do_crypto_hash_buf(struct ahash_request *hash,
+	const void *buf, u32 payload_length, u32 padding,
+	const void *pad_bytes, void *data_crc)
 {
 	struct scatterlist sg[2];
 
@@ -1474,9 +1469,9 @@ __iscsit_check_dataout_hdr(struct iscsi_conn *conn, void *buf,
 	iscsit_mod_dataout_timer(cmd);
 
 	if ((be32_to_cpu(hdr->offset) + payload_length) > cmd->se_cmd.data_length) {
-		pr_err("DataOut Offset: %u, Length %u greater than"
-			" iSCSI Command EDTL %u, protocol error.\n",
-			hdr->offset, payload_length, cmd->se_cmd.data_length);
+		pr_err("DataOut Offset: %u, Length %u greater than iSCSI Command EDTL %u, protocol error.\n",
+		       be32_to_cpu(hdr->offset), payload_length,
+		       cmd->se_cmd.data_length);
 		return iscsit_reject_cmd(cmd, ISCSI_REASON_BOOKMARK_INVALID, buf);
 	}
 
@@ -1890,10 +1885,9 @@ static int iscsit_handle_nop_out(struct iscsi_conn *conn, struct iscsi_cmd *cmd,
 		}
 
 		if (conn->conn_ops->DataDigest) {
-			iscsit_do_crypto_hash_buf(conn->conn_rx_hash,
-					ping_data, payload_length,
-					padding, cmd->pad_bytes,
-					(u8 *)&data_crc);
+			iscsit_do_crypto_hash_buf(conn->conn_rx_hash, ping_data,
+						  payload_length, padding,
+						  cmd->pad_bytes, &data_crc);
 
 			if (checksum != data_crc) {
 				pr_err("Ping data CRC32C DataDigest"
@@ -2297,10 +2291,9 @@ iscsit_handle_text_cmd(struct iscsi_conn *conn, struct iscsi_cmd *cmd,
 			goto reject;
 
 		if (conn->conn_ops->DataDigest) {
-			iscsit_do_crypto_hash_buf(conn->conn_rx_hash,
-					text_in, payload_length,
-					padding, (u8 *)&pad_bytes,
-					(u8 *)&data_crc);
+			iscsit_do_crypto_hash_buf(conn->conn_rx_hash, text_in,
+						  payload_length, padding,
+						  &pad_bytes, &data_crc);
 
 			if (checksum != data_crc) {
 				pr_err("Text data CRC32C DataDigest"
@@ -2320,6 +2313,7 @@ iscsit_handle_text_cmd(struct iscsi_conn *conn, struct iscsi_cmd *cmd,
 					" Command CmdSN: 0x%08x due to"
 					" DataCRC error.\n", hdr->cmdsn);
 					kfree(text_in);
+					cmd->text_in_ptr = NULL;
 					return 0;
 				}
 			} else {
@@ -3309,30 +3303,6 @@ iscsit_send_task_mgt_rsp(struct iscsi_cmd *cmd, struct iscsi_conn *conn)
 	return conn->conn_transport->iscsit_xmit_pdu(conn, cmd, NULL, NULL, 0);
 }
 
-static bool iscsit_check_inaddr_any(struct iscsi_np *np)
-{
-	bool ret = false;
-
-	if (np->np_sockaddr.ss_family == AF_INET6) {
-		const struct sockaddr_in6 sin6 = {
-			.sin6_addr = IN6ADDR_ANY_INIT };
-		struct sockaddr_in6 *sock_in6 =
-			 (struct sockaddr_in6 *)&np->np_sockaddr;
-
-		if (!memcmp(sock_in6->sin6_addr.s6_addr,
-				sin6.sin6_addr.s6_addr, 16))
-			ret = true;
-	} else {
-		struct sockaddr_in * sock_in =
-			(struct sockaddr_in *)&np->np_sockaddr;
-
-		if (sock_in->sin_addr.s_addr == htonl(INADDR_ANY))
-			ret = true;
-	}
-
-	return ret;
-}
-
 #define SENDTARGETS_BUF_LIMIT 32768U
 
 static int
@@ -3411,7 +3381,6 @@ iscsit_build_sendtargets_response(struct iscsi_cmd *cmd,
 			list_for_each_entry(tpg_np, &tpg->tpg_gnp_list,
 						tpg_np_list) {
 				struct iscsi_np *np = tpg_np->tpg_np;
-				bool inaddr_any = iscsit_check_inaddr_any(np);
 				struct sockaddr_storage *sockaddr;
 
 				if (np->np_network_transport != network_transport)
@@ -3440,7 +3409,7 @@ iscsit_build_sendtargets_response(struct iscsi_cmd *cmd,
 					}
 				}
 
-				if (inaddr_any)
+				if (inet_addr_is_any((struct sockaddr *)&np->np_sockaddr))
 					sockaddr = &conn->local_sockaddr;
 				else
 					sockaddr = &np->np_sockaddr;
@@ -3991,9 +3960,9 @@ static void iscsit_get_rx_pdu(struct iscsi_conn *conn)
 				break;
 			}
 
-			iscsit_do_crypto_hash_buf(conn->conn_rx_hash,
-					buffer, ISCSI_HDR_LEN,
-					0, NULL, (u8 *)&checksum);
+			iscsit_do_crypto_hash_buf(conn->conn_rx_hash, buffer,
+						  ISCSI_HDR_LEN, 0, NULL,
+						  &checksum);
 
 			if (digest != checksum) {
 				pr_err("HeaderDigest CRC32C failed,"
@@ -4172,8 +4141,8 @@ int iscsit_close_connection(
 	spin_unlock(&iscsit_global->ts_bitmap_lock);
 
 	iscsit_stop_timers_for_cmds(conn);
-	iscsit_stop_nopin_response_timer(conn);
 	iscsit_stop_nopin_timer(conn);
+	iscsit_stop_nopin_response_timer(conn);
 
 	if (conn->conn_transport->iscsit_wait_conn)
 		conn->conn_transport->iscsit_wait_conn(conn);
@@ -4270,22 +4239,15 @@ int iscsit_close_connection(
 		crypto_free_ahash(tfm);
 	}
 
-	free_cpumask_var(conn->conn_cpumask);
-
-	kfree(conn->conn_ops);
-	conn->conn_ops = NULL;
-
 	if (conn->sock)
 		sock_release(conn->sock);
 
 	if (conn->conn_transport->iscsit_free_conn)
 		conn->conn_transport->iscsit_free_conn(conn);
 
-	iscsit_put_transport(conn->conn_transport);
-
 	pr_debug("Moving to TARG_CONN_STATE_FREE.\n");
 	conn->conn_state = TARG_CONN_STATE_FREE;
-	kfree(conn);
+	iscsit_free_conn(conn);
 
 	spin_lock_bh(&sess->conn_lock);
 	atomic_dec(&sess->nconn);
@@ -4441,10 +4403,7 @@ int iscsit_close_session(struct iscsi_session *sess)
 	pr_debug("Decremented number of active iSCSI Sessions on"
 		" iSCSI TPG: %hu to %u\n", tpg->tpgt, tpg->nsessions);
 
-	spin_lock(&sess_idr_lock);
-	idr_remove(&sess_idr, sess->session_index);
-	spin_unlock(&sess_idr_lock);
-
+	ida_free(&sess_ida, sess->session_index);
 	kfree(sess->sess_ops);
 	sess->sess_ops = NULL;
 	spin_unlock_bh(&se_tpg->session_lock);

@@ -24,7 +24,7 @@ static int omap_crypto_copy_sg_lists(int total, int bs,
 	struct scatterlist *tmp;
 
 	if (!(flags & OMAP_CRYPTO_FORCE_SINGLE_ENTRY)) {
-		new_sg = kmalloc_array(n, sizeof(*sg), GFP_KERNEL);
+		new_sg = kmalloc_array(n, sizeof(*new_sg), GFP_KERNEL);
 		if (!new_sg)
 			return -ENOMEM;
 
@@ -104,6 +104,10 @@ static int omap_crypto_check_sg(struct scatterlist *sg, int total, int bs,
 			return OMAP_CRYPTO_NOT_ALIGNED;
 		if (!IS_ALIGNED(sg->length, bs))
 			return OMAP_CRYPTO_NOT_ALIGNED;
+#ifdef CONFIG_ZONE_DMA
+		if (page_zonenum(sg_page(sg)) != ZONE_DMA)
+			return OMAP_CRYPTO_NOT_ALIGNED;
+#endif
 
 		len += sg->length;
 		sg = sg_next(sg);

@@ -18,6 +18,32 @@
 #include <linux/evm.h>
 #include <linux/ima.h>
 
+static bool chown_ok(const struct inode *inode, kuid_t uid)
+{
+	if (uid_eq(current_fsuid(), inode->i_uid) &&
+	    uid_eq(uid, inode->i_uid))
+		return true;
+	if (capable_wrt_inode_uidgid(inode, CAP_CHOWN))
+		return true;
+	if (uid_eq(inode->i_uid, INVALID_UID) &&
+	    ns_capable(inode->i_sb->s_user_ns, CAP_CHOWN))
+		return true;
+	return false;
+}
+
+static bool chgrp_ok(const struct inode *inode, kgid_t gid)
+{
+	if (uid_eq(current_fsuid(), inode->i_uid) &&
+	    (in_group_p(gid) || gid_eq(gid, inode->i_gid)))
+		return true;
+	if (capable_wrt_inode_uidgid(inode, CAP_CHOWN))
+		return true;
+	if (gid_eq(inode->i_gid, INVALID_GID) &&
+	    ns_capable(inode->i_sb->s_user_ns, CAP_CHOWN))
+		return true;
+	return false;
+}
+
 /**
  * setattr_prepare - check if attribute changes to a dentry are allowed
  * @dentry:	dentry to check
@@ -52,17 +78,11 @@ int setattr_prepare(struct dentry *dentry, struct iattr *attr)
 		goto kill_priv;
 
 	/* Make sure a caller can chown. */
-	if ((ia_valid & ATTR_UID) &&
-	    (!uid_eq(current_fsuid(), inode->i_uid) ||
-	     !uid_eq(attr->ia_uid, inode->i_uid)) &&
-	    !capable_wrt_inode_uidgid(inode, CAP_CHOWN))
+	if ((ia_valid & ATTR_UID) && !chown_ok(inode, attr->ia_uid))
 		return -EPERM;
 
 	/* Make sure caller can chgrp. */
-	if ((ia_valid & ATTR_GID) &&
-	    (!uid_eq(current_fsuid(), inode->i_uid) ||
-	    (!in_group_p(attr->ia_gid) && !gid_eq(attr->ia_gid, inode->i_gid))) &&
-	    !capable_wrt_inode_uidgid(inode, CAP_CHOWN))
+	if ((ia_valid & ATTR_GID) && !chgrp_ok(inode, attr->ia_gid))
 		return -EPERM;
 
 	/* Make sure a caller can chmod. */
@@ -100,7 +120,6 @@ EXPORT_SYMBOL(setattr_prepare);
  * inode_newsize_ok - may this inode be truncated to a given size
  * @inode:	the inode to be truncated
  * @offset:	the new size to assign to the inode
- * @Returns:	0 on success, -ve errno on failure
  *
  * inode_newsize_ok must be called with i_mutex held.
  *
@@ -110,6 +129,8 @@ EXPORT_SYMBOL(setattr_prepare);
  * returned. @inode must be a file (not directory), with appropriate
  * permissions to allow truncate (inode_newsize_ok does NOT check these
  * conditions).
+ *
+ * Return: 0 on success, -ve errno on failure
  */
 int inode_newsize_ok(const struct inode *inode, loff_t offset)
 {
@@ -187,7 +208,7 @@ EXPORT_SYMBOL(setattr_copy);
 /**
  * notify_change - modify attributes of a filesytem object
  * @dentry:	object affected
- * @iattr:	new attributes
+ * @attr:	new attributes
  * @delegated_inode: returns inode, if the inode is delegated
  *
  * The caller must hold the i_mutex on the affected object.
@@ -342,7 +363,7 @@ int notify_change2(struct vfsmount *mnt, struct dentry * dentry, struct iattr * 
 
 	return error;
 }
-EXPORT_SYMBOL(notify_change2);
+EXPORT_SYMBOL_GPL(notify_change2);
 
 int notify_change(struct dentry * dentry, struct iattr * attr, struct inode **delegated_inode)
 {

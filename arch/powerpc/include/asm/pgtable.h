@@ -8,6 +8,7 @@
 #include <asm/processor.h>		/* For TASK_SIZE */
 #include <asm/mmu.h>
 #include <asm/page.h>
+#include <asm/tlbflush.h>
 
 struct mm_struct;
 
@@ -47,7 +48,6 @@ extern void paging_init(void);
  */
 #define kern_addr_valid(addr)	(1)
 
-#include <asm-generic/pgtable.h>
 
 
 /*

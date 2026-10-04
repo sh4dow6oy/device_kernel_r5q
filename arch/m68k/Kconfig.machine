@@ -267,6 +267,12 @@ config AMCORE
 	help
 	  Support for the Sysam AMCORE open-hardware generic board.
 
+config STMARK2
+        bool "Sysam stmark2 board support"
+        depends on M5441x
+        help
+          Support for the Sysam stmark2 open-hardware generic board.
+
 config FIREBEE
 	bool "FireBee board support"
 	depends on M547x
@@ -433,7 +439,7 @@ config ROMSIZE
 
 choice
 	prompt "Kernel executes from"
-	---help---
+	help
 	  Choose the memory type that the kernel will be running in.
 
 config RAMKERNEL

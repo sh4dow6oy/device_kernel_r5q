@@ -1,13 +1,5 @@
-/* Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+// SPDX-License-Identifier: GPL-2.0-only
+/* Copyright (c) 2015-2021, The Linux Foundation. All rights reserved.
  */
 
 #include <linux/slab.h>
@@ -23,6 +15,8 @@
 #include <linux/diagchar.h>
 #include <linux/of.h>
 #include <linux/kmemleak.h>
+#include <linux/net.h>
+#include <linux/socket.h>
 #include <asm/current.h>
 #include <net/sock.h>
 #include <linux/notifier.h>
@@ -53,7 +47,7 @@
 #define INST_ID_DCI_CMD		3
 #define INST_ID_DCI		4
 
-#define MAX_BUF_SIZE 		0x4400
+#define MAX_BUF_SIZE		0x4400
 #define MAX_NO_PACKETS		10
 #define DIAG_SO_RCVBUF_SIZE	(MAX_BUF_SIZE * MAX_NO_PACKETS)
 
@@ -249,6 +243,22 @@ struct diag_socket_info socket_dci_cmd[NUM_PERIPHERALS] = {
 		.name = "NPU_DCI_CMD"
 	}
 };
+
+struct diag_socket_info *diag_get_socket_info_ptr(int type, int peripheral)
+{
+	if (type == TYPE_CMD)
+		return &socket_cmd[peripheral];
+	else if (type == TYPE_CNTL)
+		return &socket_cntl[peripheral];
+	else if (type == TYPE_DATA)
+		return &socket_data[peripheral];
+	else if (type == TYPE_DCI_CMD)
+		return &socket_dci_cmd[peripheral];
+	else if (type == TYPE_DCI)
+		return &socket_dci[peripheral];
+	else
+		return NULL;
+}
 
 struct restart_notifier_block {
 	unsigned int processor;
@@ -477,7 +487,6 @@ static void socket_open_server(struct diag_socket_info *info)
 	struct msghdr msg = {0};
 	struct kvec iv = { &pkt, sizeof(pkt) };
 	int ret;
-	int sl = sizeof(sq);
 	unsigned int size = DIAG_SO_RCVBUF_SIZE;
 
 	if (!info || info->port_type != PORT_TYPE_SERVER)
@@ -489,7 +498,7 @@ static void socket_open_server(struct diag_socket_info *info)
 		       info->name);
 		return;
 	}
-	ret = kernel_getsockname(info->hdl, (struct sockaddr *)&sq, &sl);
+	ret = kernel_getsockname(info->hdl, (struct sockaddr *)&sq);
 	if (ret < 0) {
 		pr_err("diag: In %s, getsockname failed %d\n", __func__,
 		       ret);
@@ -549,8 +558,8 @@ static void __socket_close_channel(struct diag_socket_info *info)
 	sock_release(info->hdl);
 	info->hdl = NULL;
 	mutex_unlock(&info->socket_info_mutex);
-	cancel_work(&info->read_work);
 	wake_up_interruptible(&info->read_wait_q);
+	cancel_work_sync(&info->read_work);
 
 	spin_lock_irqsave(&info->lock, flags);
 	info->data_ready = 0;
@@ -618,7 +627,9 @@ static void socket_read_work_fn(struct work_struct *work)
 	err = sock_error(info->hdl->sk);
 	mutex_unlock(&info->socket_info_mutex);
 	if (unlikely(err == -ENETRESET)) {
+		info->reset_flag = 1;
 		socket_close_channel(info);
+		info->reset_flag = 0;
 		if (info->port_type == PORT_TYPE_SERVER)
 			socket_init_work_fn(&info->init_work);
 		diag_ws_release();
@@ -716,7 +727,7 @@ static void diag_socket_drop_data(struct diag_socket_info *info)
 		iov.iov_len = PERIPHERAL_BUF_SZ;
 		read_msg.msg_name = &src_addr;
 		read_msg.msg_namelen = sizeof(src_addr);
-		err = kernel_sock_ioctl(info->hdl, TIOCINQ,
+		err = info->hdl->ops->ioctl(info->hdl, TIOCINQ,
 					(unsigned long)&pkt_len);
 		if (err || pkt_len < 0)
 			break;
@@ -808,7 +819,7 @@ static int diag_socket_read(void *ctxt, unsigned char *buf, int buf_len)
 			mutex_unlock(&info->socket_info_mutex);
 			goto fail;
 		}
-		err = kernel_sock_ioctl(info->hdl, TIOCINQ,
+		err =  info->hdl->ops->ioctl(info->hdl, TIOCINQ,
 					(unsigned long)&pkt_len);
 		if (err || pkt_len < 0) {
 			mutex_unlock(&info->socket_info_mutex);
@@ -838,7 +849,9 @@ static int diag_socket_read(void *ctxt, unsigned char *buf, int buf_len)
 			mutex_lock(channel_mutex);
 			diagfwd_channel_read_done(info->fwd_ctxt, buf, 0);
 			mutex_unlock(channel_mutex);
+			info->reset_flag = 1;
 			socket_close_channel(info);
+			info->reset_flag = 0;
 			if (info->port_type == PORT_TYPE_SERVER)
 				socket_init_work_fn(&info->init_work);
 			return read_len;
@@ -987,6 +1000,7 @@ static void __diag_socket_init(struct diag_socket_info *info)
 	info->hdl = NULL;
 	info->fwd_ctxt = NULL;
 	info->data_ready = 0;
+	info->reset_flag = 0;
 	atomic_set(&info->flow_cnt, 0);
 	spin_lock_init(&info->lock);
 	strlcpy(wq_name, info->name, sizeof(wq_name));
@@ -1140,7 +1154,7 @@ int diag_socket_init(void)
 		nb = &restart_notifiers[i];
 		handle = subsys_notif_register_notifier(nb->name, &nb->nb);
 		DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
-			 "%s: registering notifier for '%s', handle=%p\n",
+			 "%s: registering notifier for '%s', handle=%pK\n",
 			 __func__, nb->name, handle);
 	}
 

@@ -207,8 +207,7 @@ void __flush_dcache_page(struct address_space *mapping, struct page *page)
 	 * coherent with the kernels mapping.
 	 */
 	if (!PageHighMem(page)) {
-		size_t page_size = PAGE_SIZE << compound_order(page);
-		__cpuc_flush_dcache_area(page_address(page), page_size);
+		__cpuc_flush_dcache_area(page_address(page), page_size(page));
 	} else {
 		unsigned long i;
 		if (cache_is_vipt_nonaliasing()) {
@@ -285,7 +284,7 @@ void __sync_icache_dcache(pte_t pteval)
 
 	page = pfn_to_page(pfn);
 	if (cache_is_vipt_aliasing())
-		mapping = page_mapping(page);
+		mapping = page_mapping_file(page);
 	else
 		mapping = NULL;
 
@@ -333,7 +332,7 @@ void flush_dcache_page(struct page *page)
 		return;
 	}
 
-	mapping = page_mapping(page);
+	mapping = page_mapping_file(page);
 
 	if (!cache_ops_need_broadcast() &&
 	    mapping && !page_mapcount(page))
@@ -363,7 +362,7 @@ void flush_kernel_dcache_page(struct page *page)
 	if (cache_is_vivt() || cache_is_vipt_aliasing()) {
 		struct address_space *mapping;
 
-		mapping = page_mapping(page);
+		mapping = page_mapping_file(page);
 
 		if (!mapping || mapping_mapped(mapping)) {
 			void *addr;

@@ -1,4 +1,5 @@
-ccflags-y := -Iinclude/linux
+# SPDX-License-Identifier: GPL-2.0-only
+ccflags-y += -I$(src)
 
 msm_kgsl_core-y = \
 	kgsl.o \
@@ -11,11 +12,13 @@ msm_kgsl_core-y = \
 	kgsl_mmu.o \
 	kgsl_snapshot.o \
 	kgsl_events.o \
-	kgsl_pool.o \
 	kgsl_gmu_core.o \
 	kgsl_gmu.o \
 	kgsl_rgmu.o \
-	kgsl_hfi.o
+	kgsl_hfi.o \
+	kgsl_pool.o \
+	kgsl_reclaim.o \
+	kgsl_timeline.o
 
 msm_kgsl_core-$(CONFIG_QCOM_KGSL_IOMMU) += kgsl_iommu.o
 msm_kgsl_core-$(CONFIG_DEBUG_FS) += kgsl_debugfs.o
@@ -30,14 +33,11 @@ msm_adreno-y += \
 	adreno_snapshot.o \
 	adreno_trace.o \
 	adreno_a3xx.o \
-	adreno_a4xx.o \
 	adreno_a5xx.o \
 	adreno_a6xx.o \
 	adreno_a3xx_snapshot.o \
-	adreno_a4xx_snapshot.o \
 	adreno_a5xx_snapshot.o \
 	adreno_a6xx_snapshot.o \
-	adreno_a4xx_preempt.o \
 	adreno_a5xx_preempt.o \
 	adreno_a6xx_preempt.o \
 	adreno_a6xx_gmu.o \

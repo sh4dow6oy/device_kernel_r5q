@@ -21,17 +21,15 @@ config USB_EHCI_BIG_ENDIAN_DESC
 
 config USB_UHCI_BIG_ENDIAN_MMIO
 	bool
-	default y if SPARC_LEON
 
 config USB_UHCI_BIG_ENDIAN_DESC
 	bool
-	default y if SPARC_LEON
 
 menuconfig USB_SUPPORT
 	bool "USB support"
 	depends on HAS_IOMEM
 	default y
-	---help---
+	help
 	  This option adds core support for Universal Serial Bus (USB).
 	  You will also need drivers from the following menu to make use of it.
 
@@ -48,7 +46,7 @@ config USB
 	depends on USB_ARCH_HAS_HCD
 	select USB_COMMON
 	select NLS  # for UTF-8 strings
-	---help---
+	help
 	  Universal Serial Bus (USB) is a specification for a serial bus
 	  subsystem which offers higher speeds and more features than the
 	  traditional PC serial port.  The bus supplies power to peripherals
@@ -84,12 +82,13 @@ config USB_PCI
 	bool "PCI based USB host interface"
 	depends on PCI
 	default y
-	---help---
-	  A lot of embeded system SOC (e.g. freescale T2080) have both
-	  PCI and USB modules. But USB module is controlled by registers
-	  directly, it have no relationship with PCI module.
+	help
+	  Many embedded system SOCs (e.g. freescale T2080) have both
+	  PCI and USB modules with the USB module directly controlled by
+	  registers and having no relationship to the PCI module.
 
-	  When say N here it will not build PCI related code in USB driver.
+	  If you have such a device you may say N here and PCI related code
+	  will not be built in the USB driver.
 
 if USB
 
@@ -133,7 +132,7 @@ config USB_USS720
 	tristate "USS720 parport driver"
 	depends on PARPORT
 	select PARPORT_NOT_PC
-	---help---
+	help
 	  This driver is for USB parallel port adapters that use the Lucent
 	  Technologies USS-720 chip. These cables are plugged into your USB
 	  port and provide USB compatibility to peripherals designed with
@@ -172,11 +171,9 @@ source "drivers/usb/gadget/Kconfig"
 
 source "drivers/usb/typec/Kconfig"
 
+source "drivers/usb/roles/Kconfig"
+
 source "drivers/usb/pd/Kconfig"
-
-source "drivers/usb/notify/Kconfig"
-
-source "drivers/usb/manager/Kconfig"
 
 config USB_LED_TRIG
 	bool "USB LED Triggers"

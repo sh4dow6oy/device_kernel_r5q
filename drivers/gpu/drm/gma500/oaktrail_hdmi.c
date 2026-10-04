@@ -509,7 +509,7 @@ static void oaktrail_hdmi_dpms(struct drm_encoder *encoder, int mode)
 	HDMI_WRITE(HDMI_VIDEO_REG, temp);
 }
 
-static int oaktrail_hdmi_mode_valid(struct drm_connector *connector,
+static enum drm_mode_status oaktrail_hdmi_mode_valid(struct drm_connector *connector,
 				struct drm_display_mode *mode)
 {
 	if (mode->clock > 165000)
@@ -575,10 +575,11 @@ static int oaktrail_hdmi_get_modes(struct drm_connector *connector)
 	} else {
 		edid = (struct edid *)raw_edid;
 		/* FIXME ? edid = drm_get_edid(connector, i2c_adap); */
+		i2c_put_adapter(i2c_adap);
 	}
 
 	if (edid) {
-		drm_mode_connector_update_edid_property(connector, edid);
+		drm_connector_update_edid_property(connector, edid);
 		ret = drm_add_edid_modes(connector, edid);
 	}
 	return ret;
@@ -739,8 +740,8 @@ void oaktrail_hdmi_teardown(struct drm_device *dev)
 
 	if (hdmi_dev) {
 		pdev = hdmi_dev->dev;
-		pci_set_drvdata(pdev, NULL);
 		oaktrail_hdmi_i2c_exit(pdev);
+		pci_set_drvdata(pdev, NULL);
 		iounmap(hdmi_dev->regs);
 		kfree(hdmi_dev);
 		pci_dev_put(pdev);

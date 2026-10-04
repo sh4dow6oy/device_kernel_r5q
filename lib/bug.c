@@ -48,10 +48,6 @@
 #include <linux/sched.h>
 #include <linux/rculist.h>
 
-#ifdef CONFIG_SEC_DEBUG
-#include <linux/sec_debug.h>
-#endif
-
 extern struct bug_entry __start___bug_table[], __stop___bug_table[];
 
 static inline unsigned long bug_addr(const struct bug_entry *bug)
@@ -189,9 +185,7 @@ enum bug_trap_type report_bug(unsigned long bugaddr, struct pt_regs *regs)
 		return BUG_TRAP_TYPE_WARN;
 	}
 
-	sec_debug_store_bug_string(file, line);
-
-	printk(KERN_DEFAULT "------------[ cut here ]------------\n");
+	printk(KERN_DEFAULT CUT_HERE);
 
 	if (file)
 		pr_crit("kernel BUG at %s:%u!\n", file, line);
@@ -200,4 +194,27 @@ enum bug_trap_type report_bug(unsigned long bugaddr, struct pt_regs *regs)
 			(void *)bugaddr);
 
 	return BUG_TRAP_TYPE_BUG;
+}
+
+static void clear_once_table(struct bug_entry *start, struct bug_entry *end)
+{
+	struct bug_entry *bug;
+
+	for (bug = start; bug < end; bug++)
+		bug->flags &= ~BUGFLAG_DONE;
+}
+
+void generic_bug_clear_once(void)
+{
+#ifdef CONFIG_MODULES
+	struct module *mod;
+
+	rcu_read_lock_sched();
+	list_for_each_entry_rcu(mod, &module_bug_list, bug_list)
+		clear_once_table(mod->bug_table,
+				 mod->bug_table + mod->num_bugs);
+	rcu_read_unlock_sched();
+#endif
+
+	clear_once_table(__start___bug_table, __stop___bug_table);
 }

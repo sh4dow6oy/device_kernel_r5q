@@ -12,6 +12,7 @@
 #include <linux/writeback.h>
 #include <linux/workqueue.h>
 #include <linux/llist.h>
+#include <linux/iversion.h>
 
 #include <cluster/masklog.h>
 
@@ -35,7 +36,7 @@
  * should be obeyed by all the functions:
  * - any write of quota structure (either to local or global file) is protected
  *   by dqio_sem or dquot->dq_lock.
- * - any modification of global quota file holds inode cluster lock, i_mutex,
+ * - any modification of global quota file holds inode cluster lock, i_rwsem,
  *   and ip_alloc_sem of the global quota file (achieved by
  *   ocfs2_lock_global_qf). It also has to hold qinfo_lock.
  * - an allocation of new blocks for local quota file is protected by
@@ -289,7 +290,7 @@ out:
 		mlog_errno(err);
 		return err;
 	}
-	gqinode->i_version++;
+	inode_inc_iversion(gqinode);
 	ocfs2_mark_inode_dirty(handle, gqinode, oinfo->dqi_gqi_bh);
 	return len;
 }
@@ -748,6 +749,11 @@ static int ocfs2_release_dquot(struct dquot *dquot)
 	handle = ocfs2_start_trans(osb,
 		ocfs2_calc_qdel_credits(dquot->dq_sb, dquot->dq_id.type));
 	if (IS_ERR(handle)) {
+		/*
+		 * Mark dquot as inactive to avoid endless cycle in
+		 * quota_release_workfn().
+		 */
+		clear_bit(DQ_ACTIVE_B, &dquot->dq_flags);
 		status = PTR_ERR(handle);
 		mlog_errno(status);
 		goto out_ilock;

@@ -1,14 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #define pr_fmt(fmt) "clk: %s: " fmt, __func__
@@ -33,10 +25,6 @@
 #include <linux/cpufreq.h>
 #include <linux/slab.h>
 #include <dt-bindings/clock/qcom,cpucc-sm8150.h>
-
-#include <linux/sched/clock.h>
-#include <linux/sec_debug.h>
-#include <linux/sec_smem.h>
 
 #include "common.h"
 #include "clk-regmap.h"
@@ -250,8 +238,6 @@ static int l3_clk_set_rate(struct clk_hw *hw, unsigned long rate,
 
 	/* Make sure the write goes through before proceeding */
 	clk_osm_mb(cpuclk);
-
-	sec_smem_clk_osm_add_log_l3(rate);
 
 	return 0;
 }
@@ -603,10 +589,6 @@ osm_cpufreq_target_index(struct cpufreq_policy *policy, unsigned int index)
 	struct clk_osm *c = policy->driver_data;
 
 	osm_set_index(c, index, c->core_num);
-
-	sec_smem_clk_osm_add_log_cpufreq(policy->cpu,
-				policy->freq_table[index].frequency, clk_hw_get_name(&c->hw));
-
 	arch_set_freq_scale(policy->related_cpus,
 			    policy->freq_table[index].frequency,
 			    policy->cpuinfo.max_freq);
@@ -648,7 +630,6 @@ static int osm_cpufreq_cpu_init(struct cpufreq_policy *policy)
 	struct cpufreq_frequency_table *table;
 	struct clk_osm *c, *parent;
 	struct clk_hw *p_hw;
-	int ret;
 	unsigned int i;
 
 	c = osm_configure_policy(policy);
@@ -703,12 +684,7 @@ static int osm_cpufreq_cpu_init(struct cpufreq_policy *policy)
 	}
 	table[i].frequency = CPUFREQ_TABLE_END;
 
-	ret = cpufreq_table_validate_and_show(policy, table);
-	if (ret) {
-		pr_err("%s: invalid frequency table: %d\n", __func__, ret);
-		goto err;
-	}
-
+    policy->freq_table = table;
 	policy->dvfs_possible_from_any_cpu = true;
 	policy->fast_switch_possible = true;
 	policy->driver_data = c;
@@ -716,10 +692,6 @@ static int osm_cpufreq_cpu_init(struct cpufreq_policy *policy)
 	cpumask_copy(policy->cpus, &c->related_cpus);
 
 	return 0;
-
-err:
-	kfree(table);
-	return ret;
 }
 
 static int osm_cpufreq_cpu_exit(struct cpufreq_policy *policy)

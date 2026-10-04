@@ -33,8 +33,8 @@
 /* Used to memset ipv4 address padding. */
 #define IP_TUNNEL_KEY_IPV4_PAD	offsetofend(struct ip_tunnel_key, u.ipv4.dst)
 #define IP_TUNNEL_KEY_IPV4_PAD_LEN				\
-	(FIELD_SIZEOF(struct ip_tunnel_key, u) -		\
-	 FIELD_SIZEOF(struct ip_tunnel_key, u.ipv4))
+	(sizeof_field(struct ip_tunnel_key, u) -		\
+	 sizeof_field(struct ip_tunnel_key, u.ipv4))
 
 struct ip_tunnel_key {
 	__be64			tun_id;
@@ -63,7 +63,7 @@ struct ip_tunnel_key {
 
 /* Maximum tunnel options length. */
 #define IP_TUNNEL_OPTS_MAX					\
-	GENMASK((FIELD_SIZEOF(struct ip_tunnel_info,		\
+	GENMASK((sizeof_field(struct ip_tunnel_info,		\
 			      options_len) * BITS_PER_BYTE) - 1, 0)
 
 struct ip_tunnel_info {
@@ -113,11 +113,14 @@ struct ip_tunnel {
 
 	/* These four fields used only by GRE */
 	u32		i_seqno;	/* The last seen seqno	*/
-	u32		o_seqno;	/* The last output seqno */
+	atomic_t	o_seqno;	/* The last output seqno */
 	int		tun_hlen;	/* Precalculated header length */
 
-	/* This field used only by ERSPAN */
+	/* These four fields used only by ERSPAN */
 	u32		index;		/* ERSPAN type II index */
+	u8		erspan_ver;	/* ERSPAN version */
+	u8		dir;		/* ERSPAN direction */
+	u16		hwid;		/* ERSPAN hardware ID */
 
 	struct dst_cache dst_cache;
 
@@ -177,8 +180,10 @@ struct tnl_ptk_info {
 
 struct ip_tunnel_net {
 	struct net_device *fb_tunnel_dev;
+	struct rtnl_link_ops *rtnl_link_ops;
 	struct hlist_head tunnels[IP_TNL_HASH_SIZE];
 	struct ip_tunnel __rcu *collect_md_tun;
+	int type;
 };
 
 static inline void ip_tunnel_key_init(struct ip_tunnel_key *key,
@@ -251,6 +256,23 @@ static inline __be32 tunnel_id_to_key32(__be64 tun_id)
 
 #ifdef CONFIG_INET
 
+static inline void ip_tunnel_init_flow(struct flowi4 *fl4,
+				       int proto,
+				       __be32 daddr, __be32 saddr,
+				       __be32 key, __u8 tos, int oif,
+				       __u32 mark, __u32 tun_inner_hash)
+{
+	memset(fl4, 0, sizeof(*fl4));
+	fl4->flowi4_oif = oif;
+	fl4->daddr = daddr;
+	fl4->saddr = saddr;
+	fl4->flowi4_tos = tos;
+	fl4->flowi4_proto = proto;
+	fl4->fl4_gre_key = key;
+	fl4->flowi4_mark = mark;
+	fl4->flowi4_multipath_hash = tun_inner_hash;
+}
+
 int ip_tunnel_init(struct net_device *dev);
 void ip_tunnel_uninit(struct net_device *dev);
 void  ip_tunnel_dellink(struct net_device *dev, struct list_head *head);
@@ -259,7 +281,8 @@ int ip_tunnel_get_iflink(const struct net_device *dev);
 int ip_tunnel_init_net(struct net *net, unsigned int ip_tnl_net_id,
 		       struct rtnl_link_ops *ops, char *devname);
 
-void ip_tunnel_delete_net(struct ip_tunnel_net *itn, struct rtnl_link_ops *ops);
+void ip_tunnel_delete_nets(struct list_head *list_net, unsigned int id,
+			   struct rtnl_link_ops *ops);
 
 void ip_tunnel_xmit(struct sk_buff *skb, struct net_device *dev,
 		    const struct iphdr *tnl_params, const u8 protocol);
@@ -285,6 +308,8 @@ int ip_tunnel_changelink(struct net_device *dev, struct nlattr *tb[],
 int ip_tunnel_newlink(struct net_device *dev, struct nlattr *tb[],
 		      struct ip_tunnel_parm *p, __u32 fwmark);
 void ip_tunnel_setup(struct net_device *dev, unsigned int net_id);
+
+__be16 ip_tunnel_parse_protocol(const struct sk_buff *skb);
 
 struct ip_tunnel_encap_ops {
 	size_t (*encap_hlen)(struct ip_tunnel_encap *e);
@@ -411,6 +436,17 @@ static inline u8 ip_tunnel_get_dsfield(const struct iphdr *iph,
 		return 0;
 }
 
+static inline u8 ip_tunnel_get_ttl(const struct iphdr *iph,
+				       const struct sk_buff *skb)
+{
+	if (skb->protocol == htons(ETH_P_IP))
+		return iph->ttl;
+	else if (skb->protocol == htons(ETH_P_IPV6))
+		return ((const struct ipv6hdr *)iph)->hop_limit;
+	else
+		return 0;
+}
+
 /* Propogate ECN bits out */
 static inline u8 ip_tunnel_ecn_encap(u8 tos, const struct iphdr *iph,
 				     const struct sk_buff *skb)
@@ -434,6 +470,21 @@ void iptunnel_xmit(struct sock *sk, struct rtable *rt, struct sk_buff *skb,
 		   u8 tos, u8 ttl, __be16 df, bool xnet);
 struct metadata_dst *iptunnel_metadata_reply(struct metadata_dst *md,
 					     gfp_t flags);
+
+static inline void ip_tunnel_adj_headroom(struct net_device *dev,
+					  unsigned int headroom)
+{
+	/* we must cap headroom to some upperlimit, else pskb_expand_head
+	 * will overflow header offsets in skb_headers_offset_update().
+	 */
+	const unsigned int max_allowed = 512;
+
+	if (headroom > max_allowed)
+		headroom = max_allowed;
+
+	if (headroom > READ_ONCE(dev->needed_headroom))
+		WRITE_ONCE(dev->needed_headroom, headroom);
+}
 
 int iptunnel_handle_offloads(struct sk_buff *skb, int gso_type_mask);
 
@@ -490,9 +541,11 @@ static inline void ip_tunnel_info_opts_set(struct ip_tunnel_info *info,
 					   const void *from, int len,
 					   __be16 flags)
 {
-	memcpy(ip_tunnel_info_opts(info), from, len);
 	info->options_len = len;
-	info->key.tun_flags |= flags;
+	if (len > 0) {
+		memcpy(ip_tunnel_info_opts(info), from, len);
+		info->key.tun_flags |= flags;
+	}
 }
 
 static inline struct ip_tunnel_info *lwt_tun_info(struct lwtunnel_state *lwtstate)
@@ -500,12 +553,12 @@ static inline struct ip_tunnel_info *lwt_tun_info(struct lwtunnel_state *lwtstat
 	return (struct ip_tunnel_info *)lwtstate->data;
 }
 
-extern struct static_key ip_tunnel_metadata_cnt;
+DECLARE_STATIC_KEY_FALSE(ip_tunnel_metadata_cnt);
 
 /* Returns > 0 if metadata should be collected */
 static inline int ip_tunnel_collect_metadata(void)
 {
-	return static_key_false(&ip_tunnel_metadata_cnt);
+	return static_branch_unlikely(&ip_tunnel_metadata_cnt);
 }
 
 void __init ip_tunnel_core_init(void);
@@ -538,7 +591,6 @@ static inline void ip_tunnel_info_opts_set(struct ip_tunnel_info *info,
 					   __be16 flags)
 {
 	info->options_len = 0;
-	info->key.tun_flags |= flags;
 }
 
 #endif /* CONFIG_INET */

@@ -61,6 +61,7 @@ archive_builtin()
 				${KBUILD_VMLINUX_INIT}		\
 				${KBUILD_VMLINUX_MAIN}
 
+	# rebuild with llvm-ar to update the symbol table
 	if [ -n "${CONFIG_LTO_CLANG}" ]; then
 		mv -f built-in.a built-in.a.tmp
 		${LLVM_AR} rcsT${KBUILD_ARFLAGS} built-in.a $(${AR} t built-in.a.tmp)
@@ -111,11 +112,9 @@ modpost_link()
 		# This might take a while, so indicate that we're doing
 		# an LTO link
 		info LTO vmlinux.o
-	else
-		info LD vmlinux.o
 	fi
 
-	${LD} ${LDFLAGS} -r -o ${1} $(lto_lds) ${objects}
+	${LD} ${KBUILD_LDFLAGS} -r -o ${1} $(lto_lds) ${objects}
 }
 
 # If CONFIG_LTO_CLANG is selected, we postpone running recordmcount until
@@ -140,14 +139,6 @@ vmlinux_link()
 	local objects
 
 	if [ "${SRCARCH}" != "um" ]; then
-		local ld=${LD}
-		local ldflags="${LDFLAGS} ${LDFLAGS_vmlinux}"
-
-		if [ -n "${LDFINAL_vmlinux}" ]; then
-			ld=${LDFINAL_vmlinux}
-			ldflags="${LDFLAGS_FINAL_vmlinux} ${LDFLAGS_vmlinux}"
-		fi
-
 		if [ -z "${CONFIG_LTO_CLANG}" ]; then
 			objects="--whole-archive		\
 				built-in.a			\
@@ -163,7 +154,7 @@ vmlinux_link()
 				${@:2}"
 		fi
 
-		${LD} ${LDFLAGS} ${LDFLAGS_vmlinux} -o ${1}	\
+		${LD} ${KBUILD_LDFLAGS} ${LDFLAGS_vmlinux} -o ${1}	\
 			-T ${lds} ${objects}
 	else
 		objects="-Wl,--whole-archive			\
@@ -202,10 +193,7 @@ gen_btf()
 
 	info "BTF" ${2}
 	vmlinux_link ${1}
-	# Keep the embedded BTF within the feature set understood by this
-	# 5.15-compatible parser.  Newer pahole defaults also emit enum64 and enum
-	# signedness flags, which are not part of the backported kernel ABI.
-	LLVM_OBJCOPY=${OBJCOPY} ${PAHOLE} --btf_features=var,float -J ${1}
+	LLVM_OBJCOPY=${OBJCOPY} ${PAHOLE} -J ${1}
 
 	# Create ${2} which contains just .BTF section but no symbols. Add
 	# SHF_ALLOC because .BTF will be part of the vmlinux image. --strip-all
@@ -224,10 +212,6 @@ kallsyms()
 {
 	info KSYM ${2}
 	local kallsymopt;
-
-	if [ -n "${CONFIG_HAVE_UNDERSCORE_SYMBOL_PREFIX}" ]; then
-		kallsymopt="${kallsymopt} --symbol-prefix=_"
-	fi
 
 	if [ -n "${CONFIG_KALLSYMS_ALL}" ]; then
 		kallsymopt="${kallsymopt} --all-symbols"
@@ -291,10 +275,8 @@ sortextable()
 cleanup()
 {
 	rm -f .btf.*
-	rm -f .old_version
 	rm -f .tmp_System.map
 	rm -f .tmp_kallsyms*
-	rm -f .tmp_version
 	rm -f .tmp_lto.lds
 	rm -f .tmp_vmlinux*
 	rm -f built-in.a
@@ -334,27 +316,20 @@ if [ "$1" = "clean" ]; then
 fi
 
 # We need access to CONFIG_ symbols
-case "${KCONFIG_CONFIG}" in
-*/*)
-	. "${KCONFIG_CONFIG}"
-	;;
-*)
-	# Force using a file from the current directory
-	. "./${KCONFIG_CONFIG}"
-esac
+. include/config/auto.conf
 
 # Update version
 info GEN .version
-if [ ! -r .version ]; then
-	rm -f .version;
-	echo 1 >.version;
+if [ -r .version ]; then
+	VERSION=$(expr 0$(cat .version) + 1)
+	echo $VERSION > .version
 else
-	mv .version .old_version;
-	expr 0$(cat .old_version) + 1 >.version;
+	rm -f .version
+	echo 1 > .version
 fi;
 
 # final build of init/
-${MAKE} -f "${srctree}/scripts/Makefile.build" obj=init GCC_PLUGINS_CFLAGS="${GCC_PLUGINS_CFLAGS}"
+${MAKE} -f "${srctree}/scripts/Makefile.build" obj=init
 
 archive_builtin
 
@@ -365,12 +340,6 @@ modpost_link vmlinux.o
 ${MAKE} -f "${srctree}/scripts/Makefile.modpost" vmlinux.o
 
 if [ -n "${CONFIG_LTO_CLANG}" ]; then
-	# Re-use vmlinux.o, so we can avoid the slow LTO link step in
-	# vmlinux_link
-	KBUILD_VMLINUX_INIT=
-	KBUILD_VMLINUX_MAIN=vmlinux.o
-	KBUILD_VMLINUX_LIBS=
-
 	# Call recordmcount if needed
 	recordmcount vmlinux.o
 fi
@@ -430,8 +399,8 @@ if [ -n "${CONFIG_KALLSYMS}" ]; then
 	kallsyms .tmp_vmlinux2 .tmp_kallsyms2.o
 
 	# step 3
-	size1=$(stat -c "%s" .tmp_kallsyms1.o)
-	size2=$(stat -c "%s" .tmp_kallsyms2.o)
+	size1=$(${CONFIG_SHELL} "${srctree}/scripts/file-size.sh" .tmp_kallsyms1.o)
+	size2=$(${CONFIG_SHELL} "${srctree}/scripts/file-size.sh" .tmp_kallsyms2.o)
 
 	if [ $size1 -ne $size2 ] || [ -n "${KALLSYMS_EXTRA_PASS}" ]; then
 		kallsymso=.tmp_kallsyms3.o
@@ -500,11 +469,3 @@ if [ ! -z ${RTIC_MPGEN+x} ]; then
 	# RTIC MP DTS generation command fails and it ensures rtic mp
 	# failure does not cause kernel compilation to fail.
 fi
-
-if [ -n "${CONFIG_CRYPTO_FIPS}" ]; then
-	echo '  FIPS : Generating hmac of crypto and updating vmlinux... '
-	PYTHONDONTWRITEBYTECODE=0 "${srctree}/scripts/crypto/fips_crypto_integrity.py" "${objtree}/vmlinux"
-fi
-
-# We made a new kernel - delete old version file
-rm -f .old_version

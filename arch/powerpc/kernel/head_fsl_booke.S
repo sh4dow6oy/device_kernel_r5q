@@ -35,7 +35,7 @@
 #include <asm/processor.h>
 #include <asm/page.h>
 #include <asm/mmu.h>
-#include <asm/pgtable.h>
+#include <linux/pgtable.h>
 #include <asm/cputable.h>
 #include <asm/thread_info.h>
 #include <asm/ppc_asm.h>
@@ -43,6 +43,7 @@
 #include <asm/cache.h>
 #include <asm/ptrace.h>
 #include <asm/export.h>
+#include <asm/feature-fixups.h>
 #include "head_booke.h"
 
 /* As with the other PowerPC ports, it is expected that when code

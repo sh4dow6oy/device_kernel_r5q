@@ -47,6 +47,7 @@ int arch_update_cpu_topology(void);
 /* Conform to ACPI 2.0 SLIT distance definitions */
 #define LOCAL_DISTANCE		10
 #define REMOTE_DISTANCE		20
+#define DISTANCE_BITS           8
 #ifndef node_distance
 #define node_distance(from,to)	((from) == (to) ? LOCAL_DISTANCE : REMOTE_DISTANCE)
 #endif
@@ -192,6 +193,9 @@ static inline int cpu_to_mem(int cpu)
 #endif
 #ifndef topology_core_cpumask
 #define topology_core_cpumask(cpu)		cpumask_of(cpu)
+#endif
+#ifndef topology_possible_sibling_cpumask
+#define topology_possible_sibling_cpumask(cpu)	cpumask_of(cpu)
 #endif
 
 #ifdef CONFIG_SCHED_SMT

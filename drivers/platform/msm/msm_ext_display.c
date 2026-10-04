@@ -1,13 +1,6 @@
-/* Copyright (c) 2016-2018, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
  */
 
 #define pr_fmt(fmt)	"%s: " fmt, __func__
@@ -20,18 +13,9 @@
 #include <linux/iopoll.h>
 #include <linux/types.h>
 #include <linux/of_platform.h>
+#include <linux/extcon-provider.h>
 #include <linux/msm_ext_display.h>
-
-#ifdef CONFIG_SEC_DISPLAYPORT
-#include <linux/switch.h>
-#include <linux/secdp_logger.h>
-
-#ifdef CONFIG_SWITCH
-static struct switch_dev switch_secdp_audio = {
-	.name = "ch_hdmi_audio",
-};
-#endif
-#endif
+#include <linux/extcon-provider.h>
 
 struct msm_ext_disp_list {
 	struct msm_ext_disp_init_data *data;
@@ -73,7 +57,7 @@ static int msm_ext_disp_extcon_register(struct msm_ext_disp *ext_disp, int id)
 	ret = devm_extcon_dev_register(&ext_disp->pdev->dev,
 		ext_disp->audio_sdev[id]);
 	if (ret) {
-		pr_err("audio registration failed");
+		pr_err("audio registration failed\n");
 		return ret;
 	}
 
@@ -106,9 +90,7 @@ static const char *msm_ext_disp_name(enum msm_ext_disp_type type)
 static int msm_ext_disp_add_intf_data(struct msm_ext_disp *ext_disp,
 		struct msm_ext_disp_init_data *data)
 {
-	int count = 0;
 	struct msm_ext_disp_list *node;
-	struct list_head *pos = NULL;
 
 	if (!ext_disp || !data) {
 		pr_err("Invalid params\n");
@@ -121,13 +103,7 @@ static int msm_ext_disp_add_intf_data(struct msm_ext_disp *ext_disp,
 
 	node->data = data;
 
-	list_for_each(pos, &ext_disp->display_list)
-		count++;
-
-	data->codec.stream_id = count;
-
 	list_add(&node->list, &ext_disp->display_list);
-
 
 	pr_debug("Added new display (%s) ctld (%d) stream (%d)\n",
 		msm_ext_disp_name(data->codec.type),
@@ -152,6 +128,7 @@ static int msm_ext_disp_remove_intf_data(struct msm_ext_disp *ext_disp,
 		if (node->data == data) {
 			list_del(pos);
 			pr_debug("Deleted the intf data\n");
+			kfree(node);
 			return 0;
 		}
 	}
@@ -192,10 +169,6 @@ end:
 	return ret;
 }
 
-#ifdef CONFIG_SEC_DISPLAYPORT
-extern int secdp_get_audio_ch(void);
-#endif
-
 static int msm_ext_disp_process_audio(struct msm_ext_disp *ext_disp,
 		struct msm_ext_disp_codec_id *codec,
 		enum msm_ext_disp_cable_state new_state)
@@ -225,15 +198,6 @@ static int msm_ext_disp_process_audio(struct msm_ext_disp *ext_disp,
 		pr_err("Failed to set state. Error = %d\n", ret);
 	else
 		pr_debug("state changed to %d\n", new_state);
-
-#if defined(CONFIG_SEC_DISPLAYPORT) && defined(CONFIG_SWITCH)
-{
-	int audio_ch = new_state ? secdp_get_audio_ch() : -1;
-
-	switch_set_state(&switch_secdp_audio, audio_ch);
-	pr_info("secdp audio state : 0x%02x(%d)\n", audio_ch, audio_ch);
-}
-#endif
 
 end:
 	return ret;
@@ -288,7 +252,7 @@ static int msm_ext_disp_update_audio_ops(struct msm_ext_disp *ext_disp,
 
 	ret = msm_ext_disp_get_intf_data(ext_disp, codec, &data);
 	if (ret || !data) {
-		pr_debug("Display not found (%s) ctld (%d) stream (%d)\n",
+		pr_err("Display not found (%s) ctld (%d) stream (%d)\n",
 			msm_ext_disp_name(codec->type),
 			codec->ctrl_id, codec->stream_id);
 		goto end;
@@ -313,8 +277,6 @@ static int msm_ext_disp_audio_config(struct platform_device *pdev,
 {
 	int ret = 0;
 	struct msm_ext_disp *ext_disp;
-
-	pr_debug("+++\n");
 
 	ext_disp = msm_ext_disp_validate_and_get(pdev, codec, state);
 	if (IS_ERR(ext_disp)) {
@@ -347,8 +309,6 @@ static int msm_ext_disp_audio_notify(struct platform_device *pdev,
 {
 	int ret = 0;
 	struct msm_ext_disp *ext_disp;
-
-	pr_debug("+++\n");
 
 	ext_disp = msm_ext_disp_validate_and_get(pdev, codec, state);
 	if (IS_ERR(ext_disp)) {
@@ -537,8 +497,6 @@ int msm_ext_disp_register_intf(struct platform_device *pdev,
 		return -EINVAL;
 	}
 
-	pr_debug("+++\n");
-
 	ext_disp = container_of(ext_disp_data, struct msm_ext_disp,
 				ext_disp_data);
 
@@ -607,6 +565,7 @@ int msm_ext_disp_deregister_intf(struct platform_device *pdev,
 			msm_ext_disp_name(init_data->codec.type));
 end:
 	mutex_unlock(&ext_disp->lock);
+
 	return ret;
 }
 
@@ -652,14 +611,6 @@ static int msm_ext_disp_probe(struct platform_device *pdev)
 		pr_debug("%s: Added child devices.\n", __func__);
 	}
 
-#if defined(CONFIG_SEC_DISPLAYPORT) && defined(CONFIG_SWITCH)
-	ret = switch_dev_register(&switch_secdp_audio);
-	if (ret) {
-		pr_info("Failed to register secdp_audio switch(%d)\n", ret);
-		goto child_node_failure;
-	}
-#endif
-
 	mutex_init(&ext_disp->lock);
 
 	INIT_LIST_HEAD(&ext_disp->display_list);
@@ -694,10 +645,6 @@ static int msm_ext_disp_remove(struct platform_device *pdev)
 		ret = -ENODEV;
 		goto end;
 	}
-
-#if defined(CONFIG_SEC_DISPLAYPORT) && defined(CONFIG_SWITCH)
-	switch_dev_unregister(&switch_secdp_audio);
-#endif
 
 	ext_disp = container_of(ext_disp_data, struct msm_ext_disp,
 				ext_disp_data);

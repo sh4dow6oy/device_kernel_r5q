@@ -1,13 +1,6 @@
-/* Copyright (c) 2018-2019 The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+/* SPDX-License-Identifier: GPL-2.0 */
+/*
+ * Copyright (c) 2018-2019 The Linux Foundation. All rights reserved.
  */
 
 #ifndef __SMB5_CHARGER_REG_H
@@ -29,6 +22,7 @@
 #define PERPH_SUBTYPE_OFFSET	0x05
 #define SUBTYPE_MASK		GENMASK(7, 0)
 #define INT_RT_STS_OFFSET	0x10
+#define SDAM_TYPE		0x2E
 
 /********************************
  *  CHGR Peripheral Registers  *
@@ -341,6 +335,7 @@ enum {
  ********************************/
 #define TYPE_C_SNK_STATUS_REG			(TYPEC_BASE + 0x06)
 #define DETECTED_SRC_TYPE_MASK			GENMASK(6, 0)
+#define SNK_DAM_MASK				GENMASK(6, 4)
 #define SNK_DAM_500MA_BIT			BIT(6)
 #define SNK_DAM_1500MA_BIT			BIT(5)
 #define SNK_DAM_3000MA_BIT			BIT(4)
@@ -556,4 +551,8 @@ enum {
 /* SDAM regs */
 #define MISC_PBS_RT_STS_REG			(MISC_PBS_BASE + 0x10)
 #define PULSE_SKIP_IRQ_BIT			BIT(4)
+
+#define SDAM_QC_DET_STATUS_REG			0x58
+#define SDAM_QC_ADC_LSB_REG			0x54
+
 #endif /* __SMB5_CHARGER_REG_H */

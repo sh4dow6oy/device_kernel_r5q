@@ -738,13 +738,13 @@ static int he_init_cs_block_rcm(struct he_dev *he_dev)
 #else
 		/* this is pretty, but avoids _divdu3 and is mostly correct */
 		mult = he_dev->atm_dev->link_rate / ATM_OC3_PCR;
-		if (rate_cps > (272 * mult))
+		if (rate_cps > (272ULL * mult))
 			buf = 4;
-		else if (rate_cps > (204 * mult))
+		else if (rate_cps > (204ULL * mult))
 			buf = 3;
-		else if (rate_cps > (136 * mult))
+		else if (rate_cps > (136ULL * mult))
 			buf = 2;
-		else if (rate_cps > (68 * mult))
+		else if (rate_cps > (68ULL * mult))
 			buf = 1;
 		else
 			buf = 0;
@@ -1591,7 +1591,8 @@ he_stop(struct he_dev *he_dev)
 				  he_dev->tbrq_base, he_dev->tbrq_phys);
 
 	if (he_dev->tpdrq_base)
-		dma_free_coherent(&he_dev->pci_dev->dev, CONFIG_TBRQ_SIZE * sizeof(struct he_tbrq),
+		dma_free_coherent(&he_dev->pci_dev->dev,
+				  CONFIG_TPDRQ_SIZE * sizeof(struct he_tpdrq),
 				  he_dev->tpdrq_base, he_dev->tpdrq_phys);
 
 	dma_pool_destroy(he_dev->tpd_pool);

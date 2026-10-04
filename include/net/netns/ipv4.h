@@ -50,12 +50,16 @@ struct netns_ipv4 {
 #endif
 	struct ipv4_devconf	*devconf_all;
 	struct ipv4_devconf	*devconf_dflt;
+	struct ip_ra_chain __rcu *ra_chain;
+	struct mutex		ra_mutex;
 #ifdef CONFIG_IP_MULTIPLE_TABLES
 	struct fib_rules_ops	*rules_ops;
 	bool			fib_has_custom_rules;
+	unsigned int		fib_rules_require_fldissect;
 	struct fib_table __rcu	*fib_main;
 	struct fib_table __rcu	*fib_default;
 #endif
+	bool			fib_has_custom_local_routes;
 #ifdef CONFIG_IP_ROUTE_CLASSID
 	int			fib_num_tclassid_users;
 #endif
@@ -95,12 +99,15 @@ struct netns_ipv4 {
 	int sysctl_ip_default_ttl;
 	int sysctl_ip_no_pmtu_disc;
 	int sysctl_ip_fwd_use_pmtu;
+	int sysctl_ip_fwd_update_priority;
 	int sysctl_ip_nonlocal_bind;
 	/* Shall we try to damage output packets if routing dev changes? */
 	int sysctl_ip_dynaddr;
 	int sysctl_ip_early_demux;
 	int sysctl_tcp_early_demux;
 	int sysctl_udp_early_demux;
+
+	int sysctl_nexthop_compat_mode;
 
 	int sysctl_fwmark_reflect;
 	int sysctl_tcp_fwmark_accept;
@@ -131,7 +138,35 @@ struct netns_ipv4 {
 	int sysctl_tcp_window_scaling;
 	int sysctl_tcp_timestamps;
 	int sysctl_tcp_early_retrans;
-	int sysctl_tcp_default_init_rwnd;
+	int sysctl_tcp_recovery;
+	int sysctl_tcp_thin_linear_timeouts;
+	int sysctl_tcp_slow_start_after_idle;
+	int sysctl_tcp_retrans_collapse;
+	int sysctl_tcp_stdurg;
+	int sysctl_tcp_rfc1337;
+	int sysctl_tcp_abort_on_overflow;
+	int sysctl_tcp_fack;
+	int sysctl_tcp_max_reordering;
+	int sysctl_tcp_dsack;
+	int sysctl_tcp_app_win;
+	int sysctl_tcp_adv_win_scale;
+	int sysctl_tcp_frto;
+	int sysctl_tcp_nometrics_save;
+	int sysctl_tcp_moderate_rcvbuf;
+	int sysctl_tcp_tso_win_divisor;
+	int sysctl_tcp_workaround_signed_windows;
+	int sysctl_tcp_limit_output_bytes;
+	int sysctl_tcp_challenge_ack_limit;
+	int sysctl_tcp_min_tso_segs;
+	int sysctl_tcp_min_rtt_wlen;
+	int sysctl_tcp_autocorking;
+	int sysctl_tcp_invalid_ratelimit;
+	int sysctl_tcp_pacing_ss_ratio;
+	int sysctl_tcp_pacing_ca_ratio;
+	int sysctl_tcp_wmem[3];
+	int sysctl_tcp_rmem[3];
+	int sysctl_tcp_comp_sack_nr;
+	unsigned long sysctl_tcp_comp_sack_delay_ns;
 	struct inet_timewait_death_row tcp_death_row;
 	int sysctl_max_syn_backlog;
 	int sysctl_tcp_fastopen;
@@ -141,6 +176,11 @@ struct netns_ipv4 {
 	unsigned int sysctl_tcp_fastopen_blackhole_timeout;
 	atomic_t tfo_active_disable_times;
 	unsigned long tfo_active_disable_stamp;
+
+	int sysctl_udp_wmem_min;
+	int sysctl_udp_rmem_min;
+
+	int sysctl_fib_notify_on_flag_change;
 
 #ifdef CONFIG_NET_L3_MASTER_DEV
 	int sysctl_udp_l3mdev_accept;
@@ -175,6 +215,9 @@ struct netns_ipv4 {
 
 	struct fib_notifier_ops	*notifier_ops;
 	unsigned int	fib_seq;	/* protected by rtnl_mutex */
+
+	struct fib_notifier_ops	*ipmr_notifier_ops;
+	unsigned int	ipmr_seq;	/* protected by rtnl_mutex */
 
 	atomic_t	rt_genid;
 	siphash_key_t	ip_id_key;

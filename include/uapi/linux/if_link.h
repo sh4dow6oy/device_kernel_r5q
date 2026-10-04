@@ -159,6 +159,13 @@ enum {
 	IFLA_PAD,
 	IFLA_XDP,
 	IFLA_EVENT,
+	IFLA_NEW_NETNSID,
+	IFLA_IF_NETNSID,
+	IFLA_CARRIER_UP_COUNT,
+	IFLA_CARRIER_DOWN_COUNT,
+	IFLA_NEW_IFINDEX,
+	IFLA_MIN_MTU,
+	IFLA_MAX_MTU,
 	__IFLA_MAX
 };
 
@@ -326,6 +333,10 @@ enum {
 	IFLA_BRPORT_MCAST_TO_UCAST,
 	IFLA_BRPORT_VLAN_TUNNEL,
 	IFLA_BRPORT_BCAST_FLOOD,
+	IFLA_BRPORT_GROUP_FWD_MASK,
+	IFLA_BRPORT_NEIGH_SUPPRESS,
+	IFLA_BRPORT_ISOLATED,
+	IFLA_BRPORT_BACKUP_PORT,
 	__IFLA_BRPORT_MAX
 };
 #define IFLA_BRPORT_MAX (__IFLA_BRPORT_MAX - 1)
@@ -411,6 +422,7 @@ enum macvlan_macaddr_mode {
 };
 
 #define MACVLAN_FLAG_NOPROMISC	1
+#define MACVLAN_FLAG_NODST	2 /* skip dst macvlan if matching src macvlan */
 
 /* VRF section */
 enum {
@@ -473,6 +485,7 @@ enum macsec_validation_type {
 enum {
 	IFLA_IPVLAN_UNSPEC,
 	IFLA_IPVLAN_MODE,
+	IFLA_IPVLAN_FLAGS,
 	__IFLA_IPVLAN_MAX
 };
 
@@ -484,6 +497,9 @@ enum ipvlan_mode {
 	IPVLAN_MODE_L3S,
 	IPVLAN_MODE_MAX
 };
+
+#define IPVLAN_F_PRIVATE	0x01
+#define IPVLAN_F_VEPA		0x02
 
 /* VXLAN section */
 enum {
@@ -515,6 +531,7 @@ enum {
 	IFLA_VXLAN_COLLECT_METADATA,
 	IFLA_VXLAN_LABEL,
 	IFLA_VXLAN_GPE,
+	IFLA_VXLAN_TTL_INHERIT,
 	__IFLA_VXLAN_MAX
 };
 #define IFLA_VXLAN_MAX	(__IFLA_VXLAN_MAX - 1)
@@ -538,9 +555,19 @@ enum {
 	IFLA_GENEVE_UDP_ZERO_CSUM6_TX,
 	IFLA_GENEVE_UDP_ZERO_CSUM6_RX,
 	IFLA_GENEVE_LABEL,
+	IFLA_GENEVE_TTL_INHERIT,
+	IFLA_GENEVE_DF,
 	__IFLA_GENEVE_MAX
 };
 #define IFLA_GENEVE_MAX	(__IFLA_GENEVE_MAX - 1)
+
+enum ifla_geneve_df {
+	GENEVE_DF_UNSET = 0,
+	GENEVE_DF_SET,
+	GENEVE_DF_INHERIT,
+	__GENEVE_DF_END,
+	GENEVE_DF_MAX = __GENEVE_DF_END - 1,
+};
 
 /* PPP section */
 enum {
@@ -734,6 +761,8 @@ enum {
 	IFLA_VF_STATS_BROADCAST,
 	IFLA_VF_STATS_MULTICAST,
 	IFLA_VF_STATS_PAD,
+	IFLA_VF_STATS_RX_DROPPED,
+	IFLA_VF_STATS_TX_DROPPED,
 	__IFLA_VF_STATS_MAX,
 };
 
@@ -944,6 +973,24 @@ enum {
 	IFLA_EVENT_BONDING_OPTIONS,	/* change in bonding options */
 };
 
+/* tun section */
+
+enum {
+	IFLA_TUN_UNSPEC,
+	IFLA_TUN_OWNER,
+	IFLA_TUN_GROUP,
+	IFLA_TUN_TYPE,
+	IFLA_TUN_PI,
+	IFLA_TUN_VNET_HDR,
+	IFLA_TUN_PERSIST,
+	IFLA_TUN_MULTI_QUEUE,
+	IFLA_TUN_NUM_QUEUES,
+	IFLA_TUN_NUM_DISABLED_QUEUES,
+	__IFLA_TUN_MAX,
+};
+
+#define IFLA_TUN_MAX (__IFLA_TUN_MAX - 1)
+
 /* rmnet section */
 
 #define RMNET_FLAGS_INGRESS_DEAGGREGATION         (1U << 0)
@@ -953,6 +1000,7 @@ enum {
 #define RMNET_FLAGS_INGRESS_COALESCE              (1U << 4)
 #define RMNET_FLAGS_INGRESS_MAP_CKSUMV5           (1U << 5)
 #define RMNET_FLAGS_EGRESS_MAP_CKSUMV5            (1U << 6)
+#define RMNET_FLAGS_EGRESS_MAP_CKSUMV3            (1U << 7)
 
 enum {
 	IFLA_RMNET_UNSPEC,
@@ -961,11 +1009,11 @@ enum {
 	__IFLA_RMNET_MAX,
 };
 
-#define IFLA_RMNET_MAX (__IFLA_RMNET_MAX - 1)
+#define IFLA_RMNET_MAX	(__IFLA_RMNET_MAX - 1)
 
 struct ifla_rmnet_flags {
-	__u32   flags;
-	__u32   mask;
+	__u32	flags;
+	__u32	mask;
 };
 
 #endif /* _UAPI_LINUX_IF_LINK_H */

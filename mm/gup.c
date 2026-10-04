@@ -15,92 +15,10 @@
 #include <linux/hugetlb.h>
 
 #include <asm/mmu_context.h>
-#include <asm/pgtable.h>
+#include <linux/pgtable.h>
 #include <asm/tlbflush.h>
-
-#ifdef CONFIG_CMA_PINPAGE_MIGRATION
-#include <linux/migrate.h>
-#include <linux/mm_inline.h>
-#include <linux/mmu_notifier.h>
-#include <asm/tlbflush.h>
-#include <linux/delay.h>
-#endif
 
 #include "internal.h"
-
-#ifdef CONFIG_CMA_PINPAGE_MIGRATION
-static struct page *__alloc_nonmovable_userpage(struct page *page,
-				unsigned long private, int **result)
-{
-	return alloc_page(GFP_HIGHUSER);
-}
-
-static bool __need_migrate_cma_page(struct page *page,
-				struct vm_area_struct *vma,
-				unsigned long start, unsigned int flags)
-{
-	if (!(flags & FOLL_CMA))
-		return false;
-
-	if (!(flags & FOLL_GET))
-		return false;
-
-	if (get_pageblock_migratetype(page) != MIGRATE_CMA)
-		return false;
-
-	if ((vma->vm_flags & VM_STACK_INCOMPLETE_SETUP) ==
-					VM_STACK_INCOMPLETE_SETUP)
-		return false;
-
-	if (!PageLRU(page)) {
-		migrate_prep_local();
-		if (WARN_ON(!PageLRU(page))) {
-			return false;
-		}
-	}
-
-	return true;
-}
-
-static int __migrate_cma_pinpage(struct page *page, struct vm_area_struct *vma)
-{
-	struct zone *zone = page_zone(page);
-	struct list_head migratepages;
-	struct lruvec *lruvec;
-	int tries = 0;
-	int ret = 0;
-
-	spin_lock_irq(zone_lru_lock(zone));
-	ret = __isolate_lru_page(page, 0);
-	if (ret) {
-		spin_unlock_irq(zone_lru_lock(zone));
-		return ret;
-	}
-
-	INIT_LIST_HEAD(&migratepages);
-
-	lruvec = mem_cgroup_page_lruvec(page, zone->zone_pgdat);
-	del_page_from_lru_list(page, lruvec, page_lru(page));
-	spin_unlock_irq(zone_lru_lock(zone));
-
-	list_add(&page->lru, &migratepages);
-	inc_zone_page_state(page, NR_ISOLATED_ANON + page_is_file_cache(page));
-
-	while (!list_empty(&migratepages) && tries++ < 5) {
-		ret = migrate_pages(&migratepages, __alloc_nonmovable_userpage,
-					NULL, 0, MIGRATE_SYNC, MR_CMA);
-	}
-
-	if (ret < 0) {
-		putback_movable_pages(&migratepages);
-		pr_err("%s: migration failed %p[%#lx]\n", __func__,
-					page, page_to_pfn(page));
-		return -EFAULT;
-	}
-
-	return 0;
-}
-#endif
 
 struct follow_page_context {
 	struct dev_pagemap *pgmap;
@@ -174,11 +92,6 @@ static struct page *follow_page_pte(struct vm_area_struct *vma,
 	struct page *page;
 	spinlock_t *ptl;
 	pte_t *ptep, pte;
-#ifdef CONFIG_CMA_PINPAGE_MIGRATION
-	struct page *failed_page = NULL;
-	struct page *old_page = NULL;
-	int retry_cnt = 0;
-#endif
 
 retry:
 	if (unlikely(pmd_bad(*pmd)))
@@ -239,49 +152,6 @@ retry:
 			goto out;
 		}
 	}
-
-#ifdef CONFIG_CMA_PINPAGE_MIGRATION
-	/* if still the isolation failed page, then retry */
-	if (failed_page && (page == failed_page)) {
-		retry_cnt++;
-		msleep_interruptible(20);
-		goto retry;
-	}
-	if (__need_migrate_cma_page(page, vma, address, flags) == false)
-		goto skip_pinpage;
-
-	pte_unmap_unlock(ptep, ptl);
-	switch (__migrate_cma_pinpage(page, vma)) {
-	case -EINVAL:
-	case -EBUSY:
-		pr_warn("%s: failed to isolate lru page\n", __func__);
-		dump_page(page, "failed to isolate lru page");
-		failed_page = page;
-		retry_cnt++;
-		goto retry;
-	case -EFAULT:
-		ptep = pte_offset_map_lock(mm, pmd, address, &ptl);
-		break;
-	default:
-		old_page = page;
-		migration_entry_wait(mm, pmd, address);
-		ptep = pte_offset_map_lock(mm, pmd, address, &ptl);
-		update_mmu_cache(vma, address, ptep);
-		pte = *ptep;
-		set_pte_at_notify(mm, address, ptep, pte);
-		page = vm_normal_page(vma, address, pte);
-		BUG_ON(!page);
-
-		pr_debug("cma: cma page %p[%#lx] migrated to new page %p[%#lx]\n",
-			 old_page, page_to_pfn(old_page),
-			 page, page_to_pfn(page));
-	}
-	if (failed_page)
-		pr_warn("cma: isolation failed page %p[%#lx] , fixed to page %p[%#lx] (retry %d)\n",
-			failed_page, page_to_pfn(failed_page),
-			page, page_to_pfn(page), retry_cnt);
-skip_pinpage:
-#endif
 
 	if (flags & FOLL_SPLIT && PageTransCompound(page)) {
 		int ret;
@@ -344,11 +214,6 @@ out:
 	return page;
 no_page:
 	pte_unmap_unlock(ptep, ptl);
-#ifdef CONFIG_CMA_PINPAGE_MIGRATION
-	if (failed_page)
-		pr_warn("cma: isolation failed page %p[%#lx] , it was reclaimed (retry %d)\n",
-			failed_page, page_to_pfn(failed_page), retry_cnt);
-#endif
 	if (!pte_none(pte))
 		return NULL;
 	return no_page_table(vma, flags);
@@ -359,53 +224,69 @@ static struct page *follow_pmd_mask(struct vm_area_struct *vma,
 				    unsigned int flags,
 				    struct follow_page_context *ctx)
 {
-	pmd_t *pmd;
+	pmd_t *pmd, pmdval;
 	spinlock_t *ptl;
 	struct page *page;
 	struct mm_struct *mm = vma->vm_mm;
 
 	pmd = pmd_offset(pudp, address);
-	if (pmd_none(*pmd))
+	/*
+	 * The READ_ONCE() will stabilize the pmdval in a register or
+	 * on the stack so that it will stop changing under the code.
+	 */
+	pmdval = READ_ONCE(*pmd);
+	if (pmd_none(pmdval))
 		return no_page_table(vma, flags);
-	if (pmd_huge(*pmd) && vma->vm_flags & VM_HUGETLB) {
+	if (pmd_huge(pmdval) && vma->vm_flags & VM_HUGETLB) {
 		page = follow_huge_pmd(mm, address, pmd, flags);
 		if (page)
 			return page;
 		return no_page_table(vma, flags);
 	}
-	if (is_hugepd(__hugepd(pmd_val(*pmd)))) {
+	if (is_hugepd(__hugepd(pmd_val(pmdval)))) {
 		page = follow_huge_pd(vma, address,
-				      __hugepd(pmd_val(*pmd)), flags,
+				      __hugepd(pmd_val(pmdval)), flags,
 				      PMD_SHIFT);
 		if (page)
 			return page;
 		return no_page_table(vma, flags);
 	}
 retry:
-	if (!pmd_present(*pmd)) {
+	if (!pmd_present(pmdval)) {
 		if (likely(!(flags & FOLL_MIGRATION)))
 			return no_page_table(vma, flags);
 		VM_BUG_ON(thp_migration_supported() &&
-				  !is_pmd_migration_entry(*pmd));
-		if (is_pmd_migration_entry(*pmd))
+				  !is_pmd_migration_entry(pmdval));
+		if (is_pmd_migration_entry(pmdval))
 			pmd_migration_entry_wait(mm, pmd);
+		pmdval = READ_ONCE(*pmd);
+		/*
+		 * MADV_DONTNEED may convert the pmd to null because
+		 * mmap_sem is held in read mode
+		 */
+		if (pmd_none(pmdval))
+			return no_page_table(vma, flags);
 		goto retry;
 	}
-	if (pmd_devmap(*pmd)) {
+	if (pmd_devmap(pmdval)) {
 		ptl = pmd_lock(mm, pmd);
 		page = follow_devmap_pmd(vma, address, pmd, flags, &ctx->pgmap);
 		spin_unlock(ptl);
 		if (page)
 			return page;
 	}
-	if (likely(!pmd_trans_huge(*pmd)))
+	if (likely(!pmd_trans_huge(pmdval)))
 		return follow_page_pte(vma, address, pmd, flags, &ctx->pgmap);
 
-	if ((flags & FOLL_NUMA) && pmd_protnone(*pmd))
+	if ((flags & FOLL_NUMA) && pmd_protnone(pmdval))
 		return no_page_table(vma, flags);
 
 retry_locked:
 	ptl = pmd_lock(mm, pmd);
+	if (unlikely(pmd_none(*pmd))) {
+		spin_unlock(ptl);
+		return no_page_table(vma, flags);
+	}
 	if (unlikely(!pmd_present(*pmd))) {
 		spin_unlock(ptl);
 		if (likely(!(flags & FOLL_MIGRATION)))
@@ -649,7 +530,7 @@ static int faultin_page(struct task_struct *tsk, struct vm_area_struct *vma,
 		unsigned long address, unsigned int *flags, int *locked)
 {
 	unsigned int fault_flags = 0;
-	int ret;
+	vm_fault_t ret;
 
 	/* mlock all present pages, but do not fault in new pages */
 	if ((*flags & (FOLL_POPULATE | FOLL_MLOCK)) == FOLL_MLOCK)
@@ -702,7 +583,7 @@ static int faultin_page(struct task_struct *tsk, struct vm_area_struct *vma,
 	 * reCOWed by userspace write).
 	 */
 	if ((ret & VM_FAULT_WRITE) && !(vma->vm_flags & VM_WRITE))
-	        *flags |= FOLL_COW;
+		*flags |= FOLL_COW;
 	return 0;
 }
 
@@ -838,11 +719,6 @@ static long __get_user_pages(struct task_struct *tsk, struct mm_struct *mm,
 	if (!(gup_flags & FOLL_FORCE))
 		gup_flags |= FOLL_NUMA;
 
-#ifdef CONFIG_CMA_PINPAGE_MIGRATION
-	if ((gup_flags & FOLL_CMA) != 0)
-		migrate_prep();
-#endif
-
 	do {
 		struct page *page;
 		unsigned int foll_flags = gup_flags;
@@ -852,11 +728,12 @@ static long __get_user_pages(struct task_struct *tsk, struct mm_struct *mm,
 		if (!vma || start >= vma->vm_end) {
 			vma = find_extend_vma(mm, start);
 			if (!vma && in_gate_area(mm, start)) {
+				int ret;
 				ret = get_gate_page(mm, start & PAGE_MASK,
 						gup_flags, &vma,
 						pages ? &pages[i] : NULL);
 				if (ret)
-					goto out;
+					return i ? : ret;
 				ctx.page_mask = 0;
 				goto next_page;
 			}
@@ -1009,7 +886,7 @@ int fixup_user_fault(struct task_struct *tsk, struct mm_struct *mm,
 		     bool *unlocked)
 {
 	struct vm_area_struct *vma;
-	int ret, major = 0;
+	vm_fault_t ret, major = 0;
 
 	address = untagged_addr(address);
 
@@ -1039,7 +916,7 @@ retry:
 	}
 
 	if (ret & VM_FAULT_RETRY) {
-		down_read(&mm->mmap_sem);
+		mmap_read_lock(mm);
 		*unlocked = true;
 		fault_flags |= FAULT_FLAG_TRIED;
 		goto retry;
@@ -1065,7 +942,7 @@ static __always_inline long __get_user_pages_locked(struct task_struct *tsk,
 						unsigned long nr_pages,
 						struct page **pages,
 						struct vm_area_struct **vmas,
-						int *locked, bool notify_drop,
+						int *locked,
 						unsigned int flags)
 {
 	long ret, pages_done;
@@ -1135,7 +1012,7 @@ retry:
 			break;
 		}
 
-		ret = down_read_killable(&mm->mmap_sem);
+		ret = mmap_read_lock_killable(mm);
 		if (ret) {
 			BUG_ON(ret > 0);
 			if (!pages_done)
@@ -1164,12 +1041,12 @@ retry:
 		pages++;
 		start += PAGE_SIZE;
 	}
-	if (notify_drop && lock_dropped && *locked) {
+	if (lock_dropped && *locked) {
 		/*
 		 * We must let the caller know we temporarily dropped the lock
 		 * and so the critical section protected by it was lost.
 		 */
-		up_read(&mm->mmap_sem);
+		mmap_read_unlock(mm);
 		*locked = 0;
 	}
 	return pages_done;
@@ -1201,34 +1078,10 @@ long get_user_pages_locked(unsigned long start, unsigned long nr_pages,
 			   int *locked)
 {
 	return __get_user_pages_locked(current, current->mm, start, nr_pages,
-				       pages, NULL, locked, true,
+				       pages, NULL, locked,
 				       gup_flags | FOLL_TOUCH);
 }
 EXPORT_SYMBOL(get_user_pages_locked);
-
-/*
- * Same as get_user_pages_unlocked(...., FOLL_TOUCH) but it allows for
- * tsk, mm to be specified.
- *
- * NOTE: here FOLL_TOUCH is not set implicitly and must be set by the
- * caller if required (just like with __get_user_pages). "FOLL_GET"
- * is set implicitly if "pages" is non-NULL.
- */
-static __always_inline long __get_user_pages_unlocked(struct task_struct *tsk,
-		struct mm_struct *mm, unsigned long start,
-		unsigned long nr_pages, struct page **pages,
-		unsigned int gup_flags)
-{
-	long ret;
-	int locked = 1;
-
-	down_read(&mm->mmap_sem);
-	ret = __get_user_pages_locked(tsk, mm, start, nr_pages, pages, NULL,
-				      &locked, false, gup_flags);
-	if (locked)
-		up_read(&mm->mmap_sem);
-	return ret;
-}
 
 /*
  * get_user_pages_unlocked() is suitable to replace the form:
@@ -1248,8 +1101,16 @@ static __always_inline long __get_user_pages_unlocked(struct task_struct *tsk,
 long get_user_pages_unlocked(unsigned long start, unsigned long nr_pages,
 			     struct page **pages, unsigned int gup_flags)
 {
-	return __get_user_pages_unlocked(current, current->mm, start, nr_pages,
-					 pages, gup_flags | FOLL_TOUCH);
+	struct mm_struct *mm = current->mm;
+	int locked = 1;
+	long ret;
+
+	mmap_read_lock(mm);
+	ret = __get_user_pages_locked(current, mm, start, nr_pages, pages, NULL,
+				      &locked, gup_flags | FOLL_TOUCH);
+	if (locked)
+		mmap_read_unlock(mm);
+	return ret;
 }
 EXPORT_SYMBOL(get_user_pages_unlocked);
 
@@ -1315,7 +1176,7 @@ long get_user_pages_remote(struct task_struct *tsk, struct mm_struct *mm,
 		struct vm_area_struct **vmas, int *locked)
 {
 	return __get_user_pages_locked(tsk, mm, start, nr_pages, pages, vmas,
-				       locked, true,
+				       locked,
 				       gup_flags | FOLL_TOUCH | FOLL_REMOTE);
 }
 EXPORT_SYMBOL(get_user_pages_remote);
@@ -1332,7 +1193,7 @@ long get_user_pages(unsigned long start, unsigned long nr_pages,
 		struct vm_area_struct **vmas)
 {
 	return __get_user_pages_locked(current, current->mm, start, nr_pages,
-				       pages, vmas, NULL, false,
+				       pages, vmas, NULL,
 				       gup_flags | FOLL_TOUCH);
 }
 EXPORT_SYMBOL(get_user_pages);
@@ -1431,7 +1292,7 @@ long populate_vma_page_range(struct vm_area_struct *vma,
 	VM_BUG_ON(end   & ~PAGE_MASK);
 	VM_BUG_ON_VMA(start < vma->vm_start, vma);
 	VM_BUG_ON_VMA(end   > vma->vm_end, vma);
-	VM_BUG_ON_MM(!rwsem_is_locked(&mm->mmap_sem), mm);
+	VM_BUG_ON_MM(!rwsem_is_locked(&mm->mmap_lock), mm);
 
 	gup_flags = FOLL_TOUCH | FOLL_POPULATE | FOLL_MLOCK;
 	if (vma->vm_flags & VM_LOCKONFAULT)
@@ -1483,7 +1344,7 @@ int __mm_populate(unsigned long start, unsigned long len, int ignore_errors)
 		 */
 		if (!locked) {
 			locked = 1;
-			down_read(&mm->mmap_sem);
+			mmap_read_lock(mm);
 			vma = find_vma(mm, nstart);
 		} else if (nstart >= vma->vm_end)
 			vma = vma->vm_next;
@@ -1515,7 +1376,7 @@ int __mm_populate(unsigned long start, unsigned long len, int ignore_errors)
 		ret = 0;
 	}
 	if (locked)
-		up_read(&mm->mmap_sem);
+		mmap_read_unlock(mm);
 	return ret;	/* 0 or negative error code */
 }
 
@@ -1619,7 +1480,7 @@ static inline struct page *try_get_compound_head(struct page *page, int refs)
 	return head;
 }
 
-#ifdef __HAVE_ARCH_PTE_SPECIAL
+#ifdef CONFIG_ARCH_HAS_PTE_SPECIAL
 static int gup_pte_range(pmd_t pmd, unsigned long addr, unsigned long end,
 			 int write, struct page **pages, int *nr)
 {
@@ -1665,7 +1526,6 @@ static int gup_pte_range(pmd_t pmd, unsigned long addr, unsigned long end,
 
 		VM_BUG_ON_PAGE(compound_head(page) != head, page);
 
-		put_dev_pagemap(pgmap);
 		SetPageReferenced(page);
 		pages[*nr] = page;
 		(*nr)++;
@@ -1675,6 +1535,8 @@ static int gup_pte_range(pmd_t pmd, unsigned long addr, unsigned long end,
 	ret = 1;
 
 pte_unmap:
+	if (pgmap)
+		put_dev_pagemap(pgmap);
 	pte_unmap(ptem);
 	return ret;
 }
@@ -1694,7 +1556,7 @@ static int gup_pte_range(pmd_t pmd, unsigned long addr, unsigned long end,
 {
 	return 0;
 }
-#endif /* __HAVE_ARCH_PTE_SPECIAL */
+#endif /* CONFIG_ARCH_HAS_PTE_SPECIAL */
 
 #if defined(__HAVE_ARCH_PTE_DEVMAP) && defined(CONFIG_TRANSPARENT_HUGEPAGE)
 static int __gup_device_huge(unsigned long pfn, unsigned long addr,
@@ -1714,10 +1576,12 @@ static int __gup_device_huge(unsigned long pfn, unsigned long addr,
 		SetPageReferenced(page);
 		pages[*nr] = page;
 		get_page(page);
-		put_dev_pagemap(pgmap);
 		(*nr)++;
 		pfn++;
 	} while (addr += PAGE_SIZE, addr != end);
+
+	if (pgmap)
+		put_dev_pagemap(pgmap);
 	return 1;
 }
 
@@ -1920,7 +1784,7 @@ static int gup_pmd_range(pud_t pud, unsigned long addr, unsigned long end,
 					 PMD_SHIFT, next, write, pages, nr))
 				return 0;
 		} else if (!gup_pte_range(pmd, addr, next, write, pages, nr))
-				return 0;
+			return 0;
 	} while (pmdp++, addr = next, addr != end);
 
 	return 1;
@@ -2022,7 +1886,9 @@ bool gup_fast_permitted(unsigned long start, int nr_pages, int write)
 
 /*
  * Like get_user_pages_fast() except it's IRQ-safe in that it won't fall back to
- * the regular GUP. It will only return non-negative values.
+ * the regular GUP.
+ * Note a difference with get_user_pages_fast: this always returns the
+ * number of pages pinned, 0 if no pages were pinned.
  *
  * Careful, careful! COW breaking can go either way, so a non-write
  * access can get ambiguous page results. If you call this function without
@@ -2031,12 +1897,11 @@ bool gup_fast_permitted(unsigned long start, int nr_pages, int write)
 int __get_user_pages_fast(unsigned long start, int nr_pages, int write,
 			  struct page **pages)
 {
-	unsigned long addr, len, end;
+	unsigned long len, end;
 	unsigned long flags;
 	int nr = 0;
 
 	start &= PAGE_MASK;
-	addr = start;
 	len = (unsigned long) nr_pages << PAGE_SHIFT;
 	end = start + len;
 
@@ -2064,7 +1929,7 @@ int __get_user_pages_fast(unsigned long start, int nr_pages, int write,
 
 	if (gup_fast_permitted(start, nr_pages, write)) {
 		local_irq_save(flags);
-		gup_pgd_range(addr, end, write, pages, &nr);
+		gup_pgd_range(start, end, write, pages, &nr);
 		local_irq_restore(flags);
 	}
 

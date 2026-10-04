@@ -22,7 +22,7 @@
 #include <linux/power_supply.h>
 #include <linux/usb/gpio_vbus.h>
 #include <linux/regulator/max1586.h>
-#include <linux/i2c/pxa-i2c.h>
+#include <linux/platform_data/i2c-pxa.h>
 
 #include <asm/mach-types.h>
 #include <asm/mach/arch.h>
@@ -220,7 +220,6 @@ void __init palm27x_irda_init(int pwdn)
 static struct wm97xx_batt_pdata palm27x_batt_pdata = {
 	.batt_aux	= WM97XX_AUX_ID3,
 	.temp_aux	= WM97XX_AUX_ID2,
-	.charge_gpio	= -1,
 	.batt_mult	= 1000,
 	.batt_div	= 414,
 	.temp_mult	= 1,

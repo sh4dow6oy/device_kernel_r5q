@@ -50,16 +50,16 @@ int ivtv_claim_stream(struct ivtv_open_id *id, int type)
 
 	if (test_and_set_bit(IVTV_F_S_CLAIMED, &s->s_flags)) {
 		/* someone already claimed this stream */
-		if (s->fh == &id->fh) {
+		if (s->id == id) {
 			/* yes, this file descriptor did. So that's OK. */
 			return 0;
 		}
-		if (s->fh == NULL && (type == IVTV_DEC_STREAM_TYPE_VBI ||
+		if (s->id == NULL && (type == IVTV_DEC_STREAM_TYPE_VBI ||
 					 type == IVTV_ENC_STREAM_TYPE_VBI)) {
 			/* VBI is handled already internally, now also assign
 			   the file descriptor to this stream for external
 			   reading of the stream. */
-			s->fh = &id->fh;
+			s->id = id;
 			IVTV_DEBUG_INFO("Start Read VBI\n");
 			return 0;
 		}
@@ -67,7 +67,7 @@ int ivtv_claim_stream(struct ivtv_open_id *id, int type)
 		IVTV_DEBUG_INFO("Stream %d is busy\n", type);
 		return -EBUSY;
 	}
-	s->fh = &id->fh;
+	s->id = id;
 	if (type == IVTV_DEC_STREAM_TYPE_VBI) {
 		/* Enable reinsertion interrupt */
 		ivtv_clear_irq_mask(itv, IVTV_IRQ_DEC_VBI_RE_INSERT);
@@ -105,7 +105,7 @@ void ivtv_release_stream(struct ivtv_stream *s)
 	struct ivtv *itv = s->itv;
 	struct ivtv_stream *s_vbi;
 
-	s->fh = NULL;
+	s->id = NULL;
 	if ((s->type == IVTV_DEC_STREAM_TYPE_VBI || s->type == IVTV_ENC_STREAM_TYPE_VBI) &&
 		test_bit(IVTV_F_S_INTERNAL_USE, &s->s_flags)) {
 		/* this stream is still in use internally */
@@ -137,7 +137,7 @@ void ivtv_release_stream(struct ivtv_stream *s)
 		/* was already cleared */
 		return;
 	}
-	if (s_vbi->fh) {
+	if (s_vbi->id) {
 		/* VBI stream still claimed by a file descriptor */
 		return;
 	}
@@ -361,7 +361,7 @@ static ssize_t ivtv_read(struct ivtv_stream *s, char __user *ubuf, size_t tot_co
 	size_t tot_written = 0;
 	int single_frame = 0;
 
-	if (atomic_read(&itv->capturing) == 0 && s->fh == NULL) {
+	if (atomic_read(&itv->capturing) == 0 && s->id == NULL) {
 		/* shouldn't happen */
 		IVTV_DEBUG_WARN("Stream %s not initialized before read\n", s->name);
 		return -EIO;
@@ -730,12 +730,12 @@ ssize_t ivtv_v4l2_write(struct file *filp, const char __user *user_buf, size_t c
 	return res;
 }
 
-unsigned int ivtv_v4l2_dec_poll(struct file *filp, poll_table *wait)
+__poll_t ivtv_v4l2_dec_poll(struct file *filp, poll_table *wait)
 {
 	struct ivtv_open_id *id = fh2id(filp->private_data);
 	struct ivtv *itv = id->itv;
 	struct ivtv_stream *s = &itv->streams[id->type];
-	int res = 0;
+	__poll_t res = 0;
 
 	/* add stream's waitq to the poll list */
 	IVTV_DEBUG_HI_FILE("Decoder poll\n");
@@ -747,7 +747,7 @@ unsigned int ivtv_v4l2_dec_poll(struct file *filp, poll_table *wait)
 		/* Turn off the old-style vsync events */
 		clear_bit(IVTV_F_I_EV_VSYNC_ENABLED, &itv->i_flags);
 		if (v4l2_event_pending(&id->fh))
-			res = POLLPRI;
+			res = EPOLLPRI;
 	} else {
 		/* This is the old-style API which is here only for backwards
 		   compatibility. */
@@ -755,28 +755,28 @@ unsigned int ivtv_v4l2_dec_poll(struct file *filp, poll_table *wait)
 		set_bit(IVTV_F_I_EV_VSYNC_ENABLED, &itv->i_flags);
 		if (test_bit(IVTV_F_I_EV_VSYNC, &itv->i_flags) ||
 		    test_bit(IVTV_F_I_EV_DEC_STOPPED, &itv->i_flags))
-			res = POLLPRI;
+			res = EPOLLPRI;
 	}
 
 	/* Allow write if buffers are available for writing */
 	if (s->q_free.buffers)
-		res |= POLLOUT | POLLWRNORM;
+		res |= EPOLLOUT | EPOLLWRNORM;
 	return res;
 }
 
-unsigned int ivtv_v4l2_enc_poll(struct file *filp, poll_table *wait)
+__poll_t ivtv_v4l2_enc_poll(struct file *filp, poll_table *wait)
 {
-	unsigned long req_events = poll_requested_events(wait);
+	__poll_t req_events = poll_requested_events(wait);
 	struct ivtv_open_id *id = fh2id(filp->private_data);
 	struct ivtv *itv = id->itv;
 	struct ivtv_stream *s = &itv->streams[id->type];
 	int eof = test_bit(IVTV_F_S_STREAMOFF, &s->s_flags);
-	unsigned res = 0;
+	__poll_t res = 0;
 
 	/* Start a capture if there is none */
 	if (!eof && !test_bit(IVTV_F_S_STREAMING, &s->s_flags) &&
 			s->type != IVTV_ENC_STREAM_TYPE_RAD &&
-			(req_events & (POLLIN | POLLRDNORM))) {
+			(req_events & (EPOLLIN | EPOLLRDNORM))) {
 		int rc;
 
 		mutex_lock(&itv->serialize_lock);
@@ -785,7 +785,7 @@ unsigned int ivtv_v4l2_enc_poll(struct file *filp, poll_table *wait)
 		if (rc) {
 			IVTV_DEBUG_INFO("Could not start capture for %s (%d)\n",
 					s->name, rc);
-			return POLLERR;
+			return EPOLLERR;
 		}
 		IVTV_DEBUG_FILE("Encoder poll started capture\n");
 	}
@@ -794,14 +794,14 @@ unsigned int ivtv_v4l2_enc_poll(struct file *filp, poll_table *wait)
 	IVTV_DEBUG_HI_FILE("Encoder poll\n");
 	poll_wait(filp, &s->waitq, wait);
 	if (v4l2_event_pending(&id->fh))
-		res |= POLLPRI;
+		res |= EPOLLPRI;
 	else
 		poll_wait(filp, &id->fh.wait, wait);
 
 	if (s->q_full.length || s->q_io.length)
-		return res | POLLIN | POLLRDNORM;
+		return res | EPOLLIN | EPOLLRDNORM;
 	if (eof)
-		return res | POLLHUP;
+		return res | EPOLLHUP;
 	return res;
 }
 
@@ -831,7 +831,7 @@ void ivtv_stop_capture(struct ivtv_open_id *id, int gop_end)
 		     id->type == IVTV_ENC_STREAM_TYPE_VBI) &&
 		    test_bit(IVTV_F_S_INTERNAL_USE, &s->s_flags)) {
 			/* Also used internally, don't stop capturing */
-			s->fh = NULL;
+			s->id = NULL;
 		}
 		else {
 			ivtv_stop_v4l2_encode_stream(s, gop_end);
@@ -915,7 +915,7 @@ int ivtv_v4l2_close(struct file *filp)
 	v4l2_fh_exit(fh);
 
 	/* Easy case first: this stream was never claimed by us */
-	if (s->fh != &id->fh)
+	if (s->id != id)
 		goto close_done;
 
 	/* 'Unclaim' this stream */

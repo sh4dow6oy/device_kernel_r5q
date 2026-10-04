@@ -414,9 +414,9 @@ static void garp_join_timer_arm(struct garp_applicant *app)
 	mod_timer(&app->join_timer, jiffies + delay);
 }
 
-static void garp_join_timer(unsigned long data)
+static void garp_join_timer(struct timer_list *t)
 {
-	struct garp_applicant *app = (struct garp_applicant *)data;
+	struct garp_applicant *app = from_timer(app, t, join_timer);
 
 	spin_lock(&app->lock);
 	garp_gid_event(app, GARP_EVENT_TRANSMIT_PDU);
@@ -455,7 +455,7 @@ static int garp_pdu_parse_attr(struct garp_applicant *app, struct sk_buff *skb,
 	if (!pskb_may_pull(skb, ga->len))
 		return -1;
 	skb_pull(skb, ga->len);
-	dlen = sizeof(*ga) - ga->len;
+	dlen = ga->len - sizeof(*ga);
 
 	if (attrtype > app->app->maxattr)
 		return 0;
@@ -597,7 +597,7 @@ int garp_init_applicant(struct net_device *dev, struct garp_application *appl)
 	spin_lock_init(&app->lock);
 	skb_queue_head_init(&app->queue);
 	rcu_assign_pointer(dev->garp_port->applicants[appl->type], app);
-	setup_timer(&app->join_timer, garp_join_timer, (unsigned long)app);
+	timer_setup(&app->join_timer, garp_join_timer, 0);
 	garp_join_timer_arm(app);
 	return 0;
 

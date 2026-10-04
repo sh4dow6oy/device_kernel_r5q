@@ -47,6 +47,7 @@
 #include "qed_hsi.h"
 #include "qed_hw.h"
 #include "qed_init_ops.h"
+#include "qed_rdma.h"
 #include "qed_reg_addr.h"
 #include "qed_sriov.h"
 
@@ -86,22 +87,22 @@
 
 /* connection context union */
 union conn_context {
-	struct core_conn_context core_ctx;
-	struct eth_conn_context eth_ctx;
-	struct iscsi_conn_context iscsi_ctx;
-	struct fcoe_conn_context fcoe_ctx;
-	struct roce_conn_context roce_ctx;
+	struct e4_core_conn_context core_ctx;
+	struct e4_eth_conn_context eth_ctx;
+	struct e4_iscsi_conn_context iscsi_ctx;
+	struct e4_fcoe_conn_context fcoe_ctx;
+	struct e4_roce_conn_context roce_ctx;
 };
 
 /* TYPE-0 task context - iSCSI, FCOE */
 union type0_task_context {
-	struct iscsi_task_context iscsi_ctx;
-	struct fcoe_task_context fcoe_ctx;
+	struct e4_iscsi_task_context iscsi_ctx;
+	struct e4_fcoe_task_context fcoe_ctx;
 };
 
 /* TYPE-1 task context - ROCE */
 union type1_task_context {
-	struct rdma_task_context roce_ctx;
+	struct e4_rdma_task_context roce_ctx;
 };
 
 struct src_ent {
@@ -109,8 +110,8 @@ struct src_ent {
 	u64 next;
 };
 
-#define CDUT_SEG_ALIGNMET 3	/* in 4k chunks */
-#define CDUT_SEG_ALIGNMET_IN_BYTES (1 << (CDUT_SEG_ALIGNMET + 12))
+#define CDUT_SEG_ALIGNMET		3 /* in 4k chunks */
+#define CDUT_SEG_ALIGNMET_IN_BYTES	BIT(CDUT_SEG_ALIGNMET + 12)
 
 #define CONN_CXT_SIZE(p_hwfn) \
 	ALIGNED_TYPE_SIZE(union conn_context, p_hwfn)
@@ -426,7 +427,7 @@ static void qed_cxt_set_srq_count(struct qed_hwfn *p_hwfn, u32 num_srqs)
 	p_mgr->srq_count = num_srqs;
 }
 
-static u32 qed_cxt_get_srq_count(struct qed_hwfn *p_hwfn)
+u32 qed_cxt_get_srq_count(struct qed_hwfn *p_hwfn)
 {
 	struct qed_cxt_mngr *p_mgr = p_hwfn->p_cxt_mngr;
 
@@ -742,7 +743,7 @@ int qed_cxt_cfg_ilt_compute(struct qed_hwfn *p_hwfn, u32 *line_count)
 	p_blk = qed_cxt_set_blk(&p_cli->pf_blks[0]);
 
 	qed_cxt_qm_iids(p_hwfn, &qm_iids);
-	total = qed_qm_pf_mem_size(p_hwfn->rel_pf_id, qm_iids.cids,
+	total = qed_qm_pf_mem_size(qm_iids.cids,
 				   qm_iids.vf_cids, qm_iids.tids,
 				   p_hwfn->qm_info.num_pqs,
 				   p_hwfn->qm_info.num_vf_pqs);
@@ -936,14 +937,13 @@ static int qed_cxt_src_t2_alloc(struct qed_hwfn *p_hwfn)
 		u32 size = min_t(u32, total_size, psz);
 		void **p_virt = &p_mngr->t2[i].p_virt;
 
-		*p_virt = dma_alloc_coherent(&p_hwfn->cdev->pdev->dev,
-					     size,
-					     &p_mngr->t2[i].p_phys, GFP_KERNEL);
+		*p_virt = dma_zalloc_coherent(&p_hwfn->cdev->pdev->dev,
+					      size, &p_mngr->t2[i].p_phys,
+					      GFP_KERNEL);
 		if (!p_mngr->t2[i].p_virt) {
 			rc = -ENOMEM;
 			goto t2_fail;
 		}
-		memset(*p_virt, 0, size);
 		p_mngr->t2[i].size = size;
 		total_size -= size;
 	}
@@ -1056,11 +1056,10 @@ static int qed_ilt_blk_alloc(struct qed_hwfn *p_hwfn,
 		u32 size;
 
 		size = min_t(u32, sz_left, p_blk->real_size_in_page);
-		p_virt = dma_alloc_coherent(&p_hwfn->cdev->pdev->dev,
-					    size, &p_phys, GFP_KERNEL);
+		p_virt = dma_zalloc_coherent(&p_hwfn->cdev->pdev->dev, size,
+					     &p_phys, GFP_KERNEL);
 		if (!p_virt)
 			return -ENOMEM;
-		memset(p_virt, 0, size);
 
 		ilt_shadow[line].p_phys = p_phys;
 		ilt_shadow[line].p_virt = p_virt;
@@ -1129,12 +1128,14 @@ static void qed_cid_map_free(struct qed_hwfn *p_hwfn)
 	u32 type, vf;
 
 	for (type = 0; type < MAX_CONN_TYPES; type++) {
-		kfree(p_mngr->acquired[type].cid_map);
+		bitmap_free(p_mngr->acquired[type].cid_map);
+		p_mngr->acquired[type].cid_map = NULL;
 		p_mngr->acquired[type].max_count = 0;
 		p_mngr->acquired[type].start_cid = 0;
 
 		for (vf = 0; vf < MAX_NUM_VFS; vf++) {
-			kfree(p_mngr->acquired_vf[type][vf].cid_map);
+			bitmap_free(p_mngr->acquired_vf[type][vf].cid_map);
+			p_mngr->acquired_vf[type][vf].cid_map = NULL;
 			p_mngr->acquired_vf[type][vf].max_count = 0;
 			p_mngr->acquired_vf[type][vf].start_cid = 0;
 		}
@@ -1147,15 +1148,10 @@ qed_cid_map_alloc_single(struct qed_hwfn *p_hwfn,
 			 u32 cid_start,
 			 u32 cid_count, struct qed_cid_acquired_map *p_map)
 {
-	u32 size;
-
 	if (!cid_count)
 		return 0;
 
-	size = DIV_ROUND_UP(cid_count,
-			    sizeof(unsigned long) * BITS_PER_BYTE) *
-	       sizeof(unsigned long);
-	p_map->cid_map = kzalloc(size, GFP_KERNEL);
+	p_map->cid_map = bitmap_zalloc(cid_count, GFP_KERNEL);
 	if (!p_map->cid_map)
 		return -ENOMEM;
 
@@ -1304,7 +1300,6 @@ void qed_cxt_mngr_setup(struct qed_hwfn *p_hwfn)
 	struct qed_cid_acquired_map *p_map;
 	struct qed_conn_type_cfg *p_cfg;
 	int type;
-	u32 len;
 
 	/* Reset acquired cids */
 	for (type = 0; type < MAX_CONN_TYPES; type++) {
@@ -1313,11 +1308,7 @@ void qed_cxt_mngr_setup(struct qed_hwfn *p_hwfn)
 		p_cfg = &p_mngr->conn_cfg[type];
 		if (p_cfg->cid_count) {
 			p_map = &p_mngr->acquired[type];
-			len = DIV_ROUND_UP(p_map->max_count,
-					   sizeof(unsigned long) *
-					   BITS_PER_BYTE) *
-			      sizeof(unsigned long);
-			memset(p_map->cid_map, 0, len);
+			bitmap_zero(p_map->cid_map, p_map->max_count);
 		}
 
 		if (!p_cfg->cids_per_vf)
@@ -1325,11 +1316,7 @@ void qed_cxt_mngr_setup(struct qed_hwfn *p_hwfn)
 
 		for (vf = 0; vf < MAX_NUM_VFS; vf++) {
 			p_map = &p_mngr->acquired_vf[type][vf];
-			len = DIV_ROUND_UP(p_map->max_count,
-					   sizeof(unsigned long) *
-					   BITS_PER_BYTE) *
-			      sizeof(unsigned long);
-			memset(p_map->cid_map, 0, len);
+			bitmap_zero(p_map->cid_map, p_map->max_count);
 		}
 	}
 }
@@ -1497,20 +1484,24 @@ static void qed_cdu_init_pf(struct qed_hwfn *p_hwfn)
 	}
 }
 
-void qed_qm_init_pf(struct qed_hwfn *p_hwfn, struct qed_ptt *p_ptt)
+void qed_qm_init_pf(struct qed_hwfn *p_hwfn,
+		    struct qed_ptt *p_ptt, bool is_pf_loading)
 {
-	struct qed_qm_pf_rt_init_params params;
 	struct qed_qm_info *qm_info = &p_hwfn->qm_info;
+	struct qed_qm_pf_rt_init_params params;
+	struct qed_mcp_link_state *p_link;
 	struct qed_qm_iids iids;
 
 	memset(&iids, 0, sizeof(iids));
 	qed_cxt_qm_iids(p_hwfn, &iids);
 
+	p_link = &QED_LEADING_HWFN(p_hwfn->cdev)->mcp_info->link_output;
+
 	memset(&params, 0, sizeof(params));
 	params.port_id = p_hwfn->port_id;
 	params.pf_id = p_hwfn->rel_pf_id;
 	params.max_phys_tcs_per_port = qm_info->max_phys_tcs_per_port;
-	params.is_first_pf = p_hwfn->first_on_engine;
+	params.is_pf_loading = is_pf_loading;
 	params.num_pf_cids = iids.cids;
 	params.num_vf_cids = iids.vf_cids;
 	params.num_tids = iids.tids;
@@ -1521,6 +1512,7 @@ void qed_qm_init_pf(struct qed_hwfn *p_hwfn, struct qed_ptt *p_ptt)
 	params.num_vports = qm_info->num_vports;
 	params.pf_wfq = qm_info->pf_wfq;
 	params.pf_rl = qm_info->pf_rl;
+	params.link_speed = p_link->speed;
 	params.pq_params = qm_info->qm_pq_params;
 	params.vport_params = qm_info->qm_vport_params;
 
@@ -1528,7 +1520,7 @@ void qed_qm_init_pf(struct qed_hwfn *p_hwfn, struct qed_ptt *p_ptt)
 }
 
 /* CM PF */
-void qed_cm_init_pf(struct qed_hwfn *p_hwfn)
+static void qed_cm_init_pf(struct qed_hwfn *p_hwfn)
 {
 	/* XCM pure-LB queue */
 	STORE_RT_REG(p_hwfn, XCM_REG_CON_PHY_Q3_RT_OFFSET,
@@ -1884,7 +1876,7 @@ void qed_cxt_hw_init_common(struct qed_hwfn *p_hwfn)
 
 void qed_cxt_hw_init_pf(struct qed_hwfn *p_hwfn, struct qed_ptt *p_ptt)
 {
-	qed_qm_init_pf(p_hwfn, p_ptt);
+	qed_qm_init_pf(p_hwfn, p_ptt, true);
 	qed_cm_init_pf(p_hwfn);
 	qed_dq_init_pf(p_hwfn);
 	qed_cdu_init_pf(p_hwfn);
@@ -2068,7 +2060,13 @@ static void qed_rdma_set_pf_params(struct qed_hwfn *p_hwfn,
 	u32 num_cons, num_qps, num_srqs;
 	enum protocol_type proto;
 
-	num_srqs = min_t(u32, 32 * 1024, p_params->num_srqs);
+	num_srqs = min_t(u32, QED_RDMA_MAX_SRQS, p_params->num_srqs);
+
+	if (p_hwfn->mcp_info->func_info.protocol == QED_PCI_ETH_RDMA) {
+		DP_VERBOSE(p_hwfn, QED_MSG_SP,
+			   "Current day drivers don't support RoCE & iWARP simultaneously on the same PF. Default to RoCE-only\n");
+		p_hwfn->hw_info.personality = QED_PCI_ETH_ROCE;
+	}
 
 	switch (p_hwfn->hw_info.personality) {
 	case QED_PCI_ETH_IWARP:
@@ -2298,14 +2296,13 @@ qed_cxt_dynamic_ilt_alloc(struct qed_hwfn *p_hwfn,
 		goto out0;
 	}
 
-	p_virt = dma_alloc_coherent(&p_hwfn->cdev->pdev->dev,
-				    p_blk->real_size_in_page,
-				    &p_phys, GFP_KERNEL);
+	p_virt = dma_zalloc_coherent(&p_hwfn->cdev->pdev->dev,
+				     p_blk->real_size_in_page, &p_phys,
+				     GFP_KERNEL);
 	if (!p_virt) {
 		rc = -ENOMEM;
 		goto out1;
 	}
-	memset(p_virt, 0, p_blk->real_size_in_page);
 
 	/* configuration of refTagMask to 0xF is required for RoCE DIF MR only,
 	 * to compensate for a HW bug, but it is configured even if DIF is not
@@ -2321,7 +2318,7 @@ qed_cxt_dynamic_ilt_alloc(struct qed_hwfn *p_hwfn,
 		for (elem_i = 0; elem_i < elems_per_p; elem_i++) {
 			elem = (union type1_task_context *)elem_start;
 			SET_FIELD(elem->roce_ctx.tdif_context.flags1,
-				  TDIF_TASK_CONTEXT_REFTAGMASK, 0xf);
+				  TDIF_TASK_CONTEXT_REF_TAG_MASK, 0xf);
 			elem_start += TYPE1_TASK_CXT_SIZE(p_hwfn);
 		}
 	}

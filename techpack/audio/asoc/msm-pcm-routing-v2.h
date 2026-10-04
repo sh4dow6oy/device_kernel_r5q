@@ -1,20 +1,10 @@
-/* Copyright (c) 2012-2020, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+/* SPDX-License-Identifier: GPL-2.0-only */
+/* Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
  */
 #ifndef _MSM_PCM_ROUTING_H
 #define _MSM_PCM_ROUTING_H
 #include <dsp/apr_audio-v2.h>
-#ifdef CONFIG_SEC_SND_ADAPTATION
-#include <dsp/sec_adaptation.h>
-#endif
+#include <dsp/q6adm-v2.h>
 
 /*
  * These names are used by HAL to specify the BE. If any changes are
@@ -27,6 +17,7 @@
 #define LPASS_BE_SLIMBUS_0_RX "SLIMBUS_0_RX"
 #define LPASS_BE_SLIMBUS_0_TX "SLIMBUS_0_TX"
 #define LPASS_BE_HDMI "HDMI"
+#define LPASS_BE_HDMI_MS "HDMI_MS"
 #define LPASS_BE_DISPLAY_PORT "DISPLAY_PORT"
 #define LPASS_BE_DISPLAY_PORT1 "DISPLAY_PORT1"
 #define LPASS_BE_INT_BT_SCO_RX "INT_BT_SCO_RX"
@@ -93,6 +84,9 @@
 #define LPASS_BE_SENARY_MI2S_TX "SENARY_MI2S_TX"
 #define LPASS_BE_SENARY_MI2S_RX "SENARY_MI2S_RX"
 
+#define LPASS_BE_PRI_META_MI2S_RX "PRI_META_MI2S_RX"
+#define LPASS_BE_SEC_META_MI2S_RX "SEC_META_MI2S_RX"
+
 #define LPASS_BE_PRI_TDM_RX_0 "PRI_TDM_RX_0"
 #define LPASS_BE_PRI_TDM_TX_0 "PRI_TDM_TX_0"
 #define LPASS_BE_PRI_TDM_RX_1 "PRI_TDM_RX_1"
@@ -157,6 +151,7 @@
 #define LPASS_BE_QUAT_TDM_TX_6 "QUAT_TDM_TX_6"
 #define LPASS_BE_QUAT_TDM_RX_7 "QUAT_TDM_RX_7"
 #define LPASS_BE_QUAT_TDM_TX_7 "QUAT_TDM_TX_7"
+#define LPASS_BE_AFE_LOOPBACK_TX "AFE_LOOPBACK_TX"
 #define LPASS_BE_QUIN_TDM_RX_0 "QUIN_TDM_RX_0"
 #define LPASS_BE_QUIN_TDM_TX_0 "QUIN_TDM_TX_0"
 #define LPASS_BE_QUIN_TDM_RX_1 "QUIN_TDM_RX_1"
@@ -173,6 +168,22 @@
 #define LPASS_BE_QUIN_TDM_TX_6 "QUIN_TDM_TX_6"
 #define LPASS_BE_QUIN_TDM_RX_7 "QUIN_TDM_RX_7"
 #define LPASS_BE_QUIN_TDM_TX_7 "QUIN_TDM_TX_7"
+#define LPASS_BE_SEN_TDM_RX_0 "SEN_TDM_RX_0"
+#define LPASS_BE_SEN_TDM_TX_0 "SEN_TDM_TX_0"
+#define LPASS_BE_SEN_TDM_RX_1 "SEN_TDM_RX_1"
+#define LPASS_BE_SEN_TDM_TX_1 "SEN_TDM_TX_1"
+#define LPASS_BE_SEN_TDM_RX_2 "SEN_TDM_RX_2"
+#define LPASS_BE_SEN_TDM_TX_2 "SEN_TDM_TX_2"
+#define LPASS_BE_SEN_TDM_RX_3 "SEN_TDM_RX_3"
+#define LPASS_BE_SEN_TDM_TX_3 "SEN_TDM_TX_3"
+#define LPASS_BE_SEN_TDM_RX_4 "SEN_TDM_RX_4"
+#define LPASS_BE_SEN_TDM_TX_4 "SEN_TDM_TX_4"
+#define LPASS_BE_SEN_TDM_RX_5 "SEN_TDM_RX_5"
+#define LPASS_BE_SEN_TDM_TX_5 "SEN_TDM_TX_5"
+#define LPASS_BE_SEN_TDM_RX_6 "SEN_TDM_RX_6"
+#define LPASS_BE_SEN_TDM_TX_6 "SEN_TDM_TX_6"
+#define LPASS_BE_SEN_TDM_RX_7 "SEN_TDM_RX_7"
+#define LPASS_BE_SEN_TDM_TX_7 "SEN_TDM_TX_7"
 
 #define LPASS_BE_SLIMBUS_7_RX "SLIMBUS_7_RX"
 #define LPASS_BE_SLIMBUS_7_TX "SLIMBUS_7_TX"
@@ -201,11 +212,13 @@
 
 #define LPASS_BE_WSA_CDC_DMA_RX_0 "WSA_CDC_DMA_RX_0"
 #define LPASS_BE_WSA_CDC_DMA_TX_0 "WSA_CDC_DMA_TX_0"
+#define LPASS_BE_WSA_CDC_DMA_TX_0_VI "WSA_CDC_DMA_TX_0_VI"
 #define LPASS_BE_WSA_CDC_DMA_RX_1 "WSA_CDC_DMA_RX_1"
 #define LPASS_BE_WSA_CDC_DMA_TX_1 "WSA_CDC_DMA_TX_1"
 #define LPASS_BE_WSA_CDC_DMA_TX_2 "WSA_CDC_DMA_TX_2"
 #define LPASS_BE_VA_CDC_DMA_TX_0 "VA_CDC_DMA_TX_0"
 #define LPASS_BE_VA_CDC_DMA_TX_1 "VA_CDC_DMA_TX_1"
+#define LPASS_BE_VA_CDC_DMA_TX_2 "VA_CDC_DMA_TX_2"
 
 #define LPASS_BE_RX_CDC_DMA_RX_0 "RX_CDC_DMA_RX_0"
 #define LPASS_BE_RX_CDC_DMA_RX_1 "RX_CDC_DMA_RX_1"
@@ -250,12 +263,18 @@ enum {
 	MSM_FRONTEND_DAI_MULTIMEDIA19,
 	MSM_FRONTEND_DAI_MULTIMEDIA20,
 	MSM_FRONTEND_DAI_MULTIMEDIA21,
+	MSM_FRONTEND_DAI_MULTIMEDIA22,
+	MSM_FRONTEND_DAI_MULTIMEDIA23,
+	MSM_FRONTEND_DAI_MULTIMEDIA24,
+	MSM_FRONTEND_DAI_MULTIMEDIA25,
 	MSM_FRONTEND_DAI_MULTIMEDIA26,
 	MSM_FRONTEND_DAI_MULTIMEDIA27,
 	MSM_FRONTEND_DAI_MULTIMEDIA28,
 	MSM_FRONTEND_DAI_MULTIMEDIA29,
 	MSM_FRONTEND_DAI_MULTIMEDIA30,
+#ifdef CONFIG_SND_SOC_SM8150
 	MSM_FRONTEND_DAI_MULTIMEDIA31,
+#endif
 	MSM_FRONTEND_DAI_VOIP,
 	MSM_FRONTEND_DAI_AFE_RX,
 	MSM_FRONTEND_DAI_AFE_TX,
@@ -277,8 +296,13 @@ enum {
 	MSM_FRONTEND_DAI_MAX,
 };
 
+#ifdef CONFIG_SND_SOC_SM8150
 #define MSM_FRONTEND_DAI_MM_SIZE (MSM_FRONTEND_DAI_VOLTE_STUB + 1)
 #define MSM_FRONTEND_DAI_MM_MAX_ID MSM_FRONTEND_DAI_VOLTE_STUB
+#else
+#define MSM_FRONTEND_DAI_MM_SIZE (MSM_FRONTEND_DAI_MULTIMEDIA30 + 1)
+#define MSM_FRONTEND_DAI_MM_MAX_ID MSM_FRONTEND_DAI_MULTIMEDIA30
+#endif
 
 enum {
 	MSM_BACKEND_DAI_PRI_I2S_RX = 0,
@@ -416,6 +440,22 @@ enum {
 	MSM_BACKEND_DAI_QUIN_TDM_TX_6,
 	MSM_BACKEND_DAI_QUIN_TDM_RX_7,
 	MSM_BACKEND_DAI_QUIN_TDM_TX_7,
+	MSM_BACKEND_DAI_SEN_TDM_RX_0,
+	MSM_BACKEND_DAI_SEN_TDM_TX_0,
+	MSM_BACKEND_DAI_SEN_TDM_RX_1,
+	MSM_BACKEND_DAI_SEN_TDM_TX_1,
+	MSM_BACKEND_DAI_SEN_TDM_RX_2,
+	MSM_BACKEND_DAI_SEN_TDM_TX_2,
+	MSM_BACKEND_DAI_SEN_TDM_RX_3,
+	MSM_BACKEND_DAI_SEN_TDM_TX_3,
+	MSM_BACKEND_DAI_SEN_TDM_RX_4,
+	MSM_BACKEND_DAI_SEN_TDM_TX_4,
+	MSM_BACKEND_DAI_SEN_TDM_RX_5,
+	MSM_BACKEND_DAI_SEN_TDM_TX_5,
+	MSM_BACKEND_DAI_SEN_TDM_RX_6,
+	MSM_BACKEND_DAI_SEN_TDM_TX_6,
+	MSM_BACKEND_DAI_SEN_TDM_RX_7,
+	MSM_BACKEND_DAI_SEN_TDM_TX_7,
 	MSM_BACKEND_DAI_INT_BT_A2DP_RX,
 	MSM_BACKEND_DAI_USB_RX,
 	MSM_BACKEND_DAI_USB_TX,
@@ -451,6 +491,7 @@ enum {
 	MSM_BACKEND_DAI_WSA_CDC_DMA_TX_2,
 	MSM_BACKEND_DAI_VA_CDC_DMA_TX_0,
 	MSM_BACKEND_DAI_VA_CDC_DMA_TX_1,
+	MSM_BACKEND_DAI_VA_CDC_DMA_TX_2,
 	MSM_BACKEND_DAI_RX_CDC_DMA_RX_0,
 	MSM_BACKEND_DAI_TX_CDC_DMA_TX_0,
 	MSM_BACKEND_DAI_RX_CDC_DMA_RX_1,
@@ -470,8 +511,12 @@ enum {
 	MSM_BACKEND_DAI_SEC_SPDIF_TX,
 	MSM_BACKEND_DAI_SLIMBUS_9_RX,
 	MSM_BACKEND_DAI_SLIMBUS_9_TX,
+	MSM_BACKEND_DAI_AFE_LOOPBACK_TX,
+	MSM_BACKEND_DAI_PRI_META_MI2S_RX,
+	MSM_BACKEND_DAI_SEC_META_MI2S_RX,
 	MSM_BACKEND_DAI_PROXY_RX,
 	MSM_BACKEND_DAI_PROXY_TX,
+	MSM_BACKEND_DAI_HDMI_RX_MS,
 	MSM_BACKEND_DAI_MAX,
 };
 
@@ -489,6 +534,7 @@ enum {
 	EXT_EC_REF_QUAT_MI2S_TX,
 	EXT_EC_REF_QUIN_MI2S_TX,
 	EXT_EC_REF_SLIM_1_TX,
+	EXT_EC_REF_PRI_TDM_TX,
 	EXT_EC_REF_SEC_TDM_TX,
 };
 
@@ -502,7 +548,7 @@ enum {
 #define RELEASE_LOCK	0
 #define ACQUIRE_LOCK	1
 
-#define MSM_BACKEND_DAI_PP_PARAMS_REQ_MAX	2
+#define MSM_BACKEND_DAI_PP_PARAMS_REQ_MAX	3
 #define HDMI_RX_ID				0x8001
 #define ADM_PP_PARAM_MUTE_ID			0
 #define ADM_PP_PARAM_MUTE_BIT			1
@@ -607,9 +653,13 @@ int msm_pcm_routing_send_chmix_cfg(int fe_id, int ip_channel_cnt,
 	int op_channel_cnt, int *ch_wght_coeff,
 	int session_type, int stream_type);
 int msm_pcm_routing_get_pp_ch_cnt(int fe_id, int session_type);
-#ifdef CONFIG_SEC_SND_ADAPTATION
-int q6audio_get_copp_idx_from_port_id(int port_id, enum sb_type func_type,
-	int *copp_idx);
-int sec_get_copp_idx(int port_id, int func_type);
-#endif
+
+int msm_pcm_routing_set_channel_mixer_cfg(
+	int fe_id, int session_type,
+	struct msm_pcm_channel_mixer *params);
+
+int msm_pcm_routing_set_channel_mixer_runtime(
+	int be_id, int session_id,
+	int session_type,
+	struct msm_pcm_channel_mixer *params);
 #endif /*_MSM_PCM_H*/

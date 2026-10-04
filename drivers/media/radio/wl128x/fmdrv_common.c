@@ -472,11 +472,12 @@ int fmc_send_cmd(struct fmdev *fmdev, u8 fm_op, u16 type, void *payload,
 			   jiffies_to_msecs(FM_DRV_TX_TIMEOUT) / 1000);
 		return -ETIMEDOUT;
 	}
+	spin_lock_irqsave(&fmdev->resp_skb_lock, flags);
 	if (!fmdev->resp_skb) {
+		spin_unlock_irqrestore(&fmdev->resp_skb_lock, flags);
 		fmerr("Response SKB is missing\n");
 		return -EFAULT;
 	}
-	spin_lock_irqsave(&fmdev->resp_skb_lock, flags);
 	skb = fmdev->resp_skb;
 	fmdev->resp_skb = NULL;
 	spin_unlock_irqrestore(&fmdev->resp_skb_lock, flags);
@@ -544,13 +545,13 @@ static inline void fm_irq_common_cmd_resp_helper(struct fmdev *fmdev, u8 stage)
  * interrupt process. Therefore reset stage index to re-enable default
  * interrupts. So that next interrupt will be processed as usual.
  */
-static void int_timeout_handler(unsigned long data)
+static void int_timeout_handler(struct timer_list *t)
 {
 	struct fmdev *fmdev;
 	struct fm_irq *fmirq;
 
 	fmdbg("irq: timeout,trying to re-enable fm interrupts\n");
-	fmdev = (struct fmdev *)data;
+	fmdev = from_timer(fmdev, t, irq_info.timer);
 	fmirq = &fmdev->irq_info;
 	fmirq->retry++;
 
@@ -1554,8 +1555,7 @@ int fmc_prepare(struct fmdev *fmdev)
 	atomic_set(&fmdev->tx_cnt, 1);
 	fmdev->resp_comp = NULL;
 
-	setup_timer(&fmdev->irq_info.timer, &int_timeout_handler,
-		    (unsigned long)fmdev);
+	timer_setup(&fmdev->irq_info.timer, int_timeout_handler, 0);
 	/*TODO: add FM_STIC_EVENT later */
 	fmdev->irq_info.mask = FM_MAL_EVENT;
 

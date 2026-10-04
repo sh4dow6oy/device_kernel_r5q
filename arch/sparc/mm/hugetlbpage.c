@@ -14,7 +14,7 @@
 
 #include <asm/mman.h>
 #include <asm/pgalloc.h>
-#include <asm/pgtable.h>
+#include <linux/pgtable.h>
 #include <asm/tlb.h>
 #include <asm/tlbflush.h>
 #include <asm/cacheflush.h>
@@ -134,6 +134,26 @@ hugetlb_get_unmapped_area(struct file *file, unsigned long addr,
 
 static pte_t sun4u_hugepage_shift_to_tte(pte_t entry, unsigned int shift)
 {
+	unsigned long hugepage_size = _PAGE_SZ4MB_4U;
+
+	pte_val(entry) = pte_val(entry) & ~_PAGE_SZALL_4U;
+
+	switch (shift) {
+	case HPAGE_256MB_SHIFT:
+		hugepage_size = _PAGE_SZ256MB_4U;
+		pte_val(entry) |= _PAGE_PMD_HUGE;
+		break;
+	case HPAGE_SHIFT:
+		pte_val(entry) |= _PAGE_PMD_HUGE;
+		break;
+	case HPAGE_64K_SHIFT:
+		hugepage_size = _PAGE_SZ64K_4U;
+		break;
+	default:
+		WARN_ONCE(1, "unsupported hugepage shift=%u\n", shift);
+	}
+
+	pte_val(entry) = pte_val(entry) | hugepage_size;
 	return entry;
 }
 
@@ -182,8 +202,20 @@ pte_t arch_make_huge_pte(pte_t entry, struct vm_area_struct *vma,
 			 struct page *page, int writeable)
 {
 	unsigned int shift = huge_page_shift(hstate_vma(vma));
+	pte_t pte;
 
-	return hugepage_shift_to_tte(entry, shift);
+	pte = hugepage_shift_to_tte(entry, shift);
+
+#ifdef CONFIG_SPARC64
+	/* If this vma has ADI enabled on it, turn on TTE.mcd
+	 */
+	if (vma->vm_flags & VM_SPARC_ADI)
+		return pte_mkmcd(pte);
+	else
+		return pte_mknotmcd(pte);
+#else
+	return pte;
+#endif
 }
 
 static unsigned int sun4v_huge_tte_to_shift(pte_t entry)

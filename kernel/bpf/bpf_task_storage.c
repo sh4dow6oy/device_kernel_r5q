@@ -15,6 +15,7 @@
 #include <linux/bpf_local_storage.h>
 #include <linux/filter.h>
 #include <uapi/linux/btf.h>
+#include <linux/bpf_lsm.h>
 #include <linux/btf_ids.h>
 #include <linux/fdtable.h>
 
@@ -23,8 +24,12 @@ DEFINE_BPF_STORAGE_CACHE(task_cache);
 static struct bpf_local_storage __rcu **task_storage_ptr(void *owner)
 {
 	struct task_struct *task = owner;
+	struct bpf_storage_blob *bsb;
 
-	return &task->bpf_storage;
+	bsb = bpf_task(task);
+	if (!bsb)
+		return NULL;
+	return &bsb->storage;
 }
 
 static struct bpf_local_storage_data *
@@ -33,8 +38,13 @@ task_storage_lookup(struct task_struct *task, struct bpf_map *map,
 {
 	struct bpf_local_storage *task_storage;
 	struct bpf_local_storage_map *smap;
+	struct bpf_storage_blob *bsb;
 
-	task_storage = rcu_dereference(task->bpf_storage);
+	bsb = bpf_task(task);
+	if (!bsb)
+		return NULL;
+
+	task_storage = rcu_dereference(bsb->storage);
 	if (!task_storage)
 		return NULL;
 
@@ -47,12 +57,16 @@ void bpf_task_storage_free(struct task_struct *task)
 	struct bpf_local_storage_elem *selem;
 	struct bpf_local_storage *local_storage;
 	bool free_task_storage = false;
+	struct bpf_storage_blob *bsb;
 	struct hlist_node *n;
-	unsigned long flags;
+
+	bsb = bpf_task(task);
+	if (!bsb)
+		return;
 
 	rcu_read_lock();
 
-	local_storage = rcu_dereference(task->bpf_storage);
+	local_storage = rcu_dereference(bsb->storage);
 	if (!local_storage) {
 		rcu_read_unlock();
 		return;
@@ -67,7 +81,7 @@ void bpf_task_storage_free(struct task_struct *task)
 	 * when unlinking elem from the local_storage->list and
 	 * the map's bucket->list.
 	 */
-	raw_spin_lock_irqsave(&local_storage->lock, flags);
+	raw_spin_lock_bh(&local_storage->lock);
 	hlist_for_each_entry_safe(selem, n, &local_storage->list, snode) {
 		/* Always unlink from map before unlinking from
 		 * local_storage.
@@ -76,7 +90,7 @@ void bpf_task_storage_free(struct task_struct *task)
 		free_task_storage = bpf_selem_unlink_storage_nolock(
 			local_storage, selem, false);
 	}
-	raw_spin_unlock_irqrestore(&local_storage->lock, flags);
+	raw_spin_unlock_bh(&local_storage->lock);
 	rcu_read_unlock();
 
 	/* free_task_storage should always be true as long as
@@ -136,7 +150,7 @@ static int bpf_pid_task_storage_update_elem(struct bpf_map *map, void *key,
 	 */
 	WARN_ON_ONCE(!rcu_read_lock_held());
 	task = pid_task(pid, PIDTYPE_PID);
-	if (!task) {
+	if (!task || !task_storage_ptr(task)) {
 		err = -ENOENT;
 		goto out;
 	}
@@ -199,16 +213,23 @@ BPF_CALL_4(bpf_task_storage_get, struct bpf_map *, map, struct task_struct *,
 	if (flags & ~(BPF_LOCAL_STORAGE_GET_F_CREATE))
 		return (unsigned long)NULL;
 
-	if (!task)
+	/* explicitly check that the task_storage_ptr is not
+	 * NULL as task_storage_lookup returns NULL in this case and
+	 * bpf_local_storage_update expects the owner to have a
+	 * valid storage pointer.
+	 */
+	if (!task_storage_ptr(task))
 		return (unsigned long)NULL;
 
 	sdata = task_storage_lookup(task, map, true);
 	if (sdata)
 		return (unsigned long)sdata->data;
 
-	/* Only allocate new storage while the task is still refcounted. */
-	if (atomic_read(&task->usage) &&
-	    (flags & BPF_LOCAL_STORAGE_GET_F_CREATE)) {
+	/* This helper must only be called from places where the lifetime of the task
+	 * is guaranteed. Either by being refcounted or by being protected
+	 * by an RCU read-side critical section.
+	 */
+	if (flags & BPF_LOCAL_STORAGE_GET_F_CREATE) {
 		sdata = bpf_local_storage_update(
 			task, (struct bpf_local_storage_map *)map, value,
 			BPF_NOEXIST);
@@ -222,9 +243,6 @@ BPF_CALL_4(bpf_task_storage_get, struct bpf_map *, map, struct task_struct *,
 BPF_CALL_2(bpf_task_storage_delete, struct bpf_map *, map, struct task_struct *,
 	   task)
 {
-	if (!task)
-		return -EINVAL;
-
 	/* This helper must only be called from places where the lifetime of the task
 	 * is guaranteed. Either by being refcounted or by being protected
 	 * by an RCU read-side critical section.

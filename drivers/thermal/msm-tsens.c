@@ -1,14 +1,6 @@
-/* Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
  */
 
 #include <linux/err.h>
@@ -20,21 +12,11 @@
 #include <linux/io.h>
 #include <linux/slab.h>
 #include <linux/thermal.h>
-#include "thermal_core.h"
 #include "tsens.h"
+#include "thermal_core.h"
 #include "qcom/qti_virtual_sensor.h"
 
 LIST_HEAD(tsens_device_list);
-
-#if defined(CONFIG_SEC_PM)
-static struct delayed_work ts_print_work;
-struct tsens_device *ts_tmdev0 = NULL;
-struct tsens_device *ts_tmdev1 = NULL;
-static int ts_print_num0[] = {1, 2, 3, 4, 7, 8, 9, 10, 5, 15};
-static int ts_print_num1[] = {3, 5, 7};
-static int ts_print_count;
-#endif
-
 
 static int tsens_get_temp(void *data, int *temp)
 {
@@ -42,6 +24,13 @@ static int tsens_get_temp(void *data, int *temp)
 	struct tsens_device *tmdev = s->tmdev;
 
 	return tmdev->ops->get_temp(s, temp);
+}
+
+static int tsens_get_min_temp(void *data, int *temp)
+{
+	struct tsens_sensor *s = data;
+
+	return tsens_2xxx_get_min_temp(s, temp);
 }
 
 static int tsens_set_trip_temp(void *data, int low_temp, int high_temp)
@@ -101,14 +90,14 @@ static const struct of_device_id tsens_table[] = {
 	{	.compatible = "qcom,tsens24xx",
 		.data = &data_tsens24xx,
 	},
+	{	.compatible = "qcom,tsens26xx",
+		.data = &data_tsens26xx,
+	},
 	{	.compatible = "qcom,msm8937-tsens",
 		.data = &data_tsens14xx,
 	},
 	{	.compatible = "qcom,qcs405-tsens",
 		.data = &data_tsens14xx_405,
-	},
-	{	.compatible = "qcom,mdm9607-tsens",
-		.data = &data_tsens14xx_9607,
 	},
 	{}
 };
@@ -119,6 +108,10 @@ static struct thermal_zone_of_device_ops tsens_tm_thermal_zone_ops = {
 	.set_trips = tsens_set_trip_temp,
 };
 
+static struct thermal_zone_of_device_ops tsens_tm_min_thermal_zone_ops = {
+	.get_temp = tsens_get_min_temp,
+};
+
 static int get_device_tree_data(struct platform_device *pdev,
 				struct tsens_device *tmdev)
 {
@@ -127,6 +120,7 @@ static int get_device_tree_data(struct platform_device *pdev,
 	const struct tsens_data *data;
 	int rc = 0;
 	struct resource *res_tsens_mem;
+	u32 min_temp_id;
 
 	if (!of_match_node(tsens_table, of_node)) {
 		pr_err("Need to read SoC specific fuse map\n");
@@ -200,9 +194,14 @@ static int get_device_tree_data(struct platform_device *pdev,
 			}
 		}
 	}
-	tmdev->tsens_reinit_wa =
-			of_property_read_bool(of_node, "tsens-reinit-wa");
 
+	if (!of_property_read_u32(of_node, "0C-sensor-num", &min_temp_id))
+		tmdev->min_temp_sensor_id = (int)min_temp_id;
+	else
+		tmdev->min_temp_sensor_id = MIN_TEMP_DEF_OFFSET;
+
+	tmdev->tsens_reinit_wa =
+		of_property_read_bool(of_node, "tsens-reinit-wa");
 	return rc;
 }
 
@@ -233,6 +232,17 @@ static int tsens_thermal_zone_register(struct tsens_device *tmdev)
 		return -ENODEV;
 	}
 
+	if (tmdev->min_temp_sensor_id != MIN_TEMP_DEF_OFFSET) {
+		tmdev->min_temp.tmdev = tmdev;
+		tmdev->min_temp.hw_id = tmdev->min_temp_sensor_id;
+		tmdev->min_temp.tzd =
+			devm_thermal_zone_of_sensor_register(
+			&tmdev->pdev->dev, tmdev->min_temp_sensor_id,
+			&tmdev->min_temp, &tsens_tm_min_thermal_zone_ops);
+		if (IS_ERR(tmdev->min_temp.tzd))
+			pr_err("Error registering min temp sensor\n");
+	}
+
 	/* Register virtual thermal sensors. */
 	qti_virtual_sensor_register(&tmdev->pdev->dev);
 
@@ -242,10 +252,6 @@ static int tsens_thermal_zone_register(struct tsens_device *tmdev)
 static int tsens_tm_remove(struct platform_device *pdev)
 {
 	platform_set_drvdata(pdev, NULL);
-
-#if defined(CONFIG_SEC_PM)
-	cancel_delayed_work_sync(&ts_print_work);
-#endif
 
 	return 0;
 }
@@ -270,45 +276,17 @@ static void tsens_therm_fwk_notify(struct work_struct *work)
 			of_thermal_handle_trip(tmdev->sensor[i].tzd);
 		}
 	}
-}
-
-#if defined(CONFIG_SEC_PM)
-static void __ref ts_print(struct work_struct *work)
-{
-	struct tsens_sensor ts_sensor;
-	int temp = 0;
-	size_t i;
-	int added = 0, ret = 0;
-	char buffer[500] = { 0, };
-
-	ret = snprintf(buffer + added, sizeof(buffer) - added, "tsens");
-	added += ret;
-
-	/* print tsens0 (controller 0) */
-	ts_sensor.tmdev = ts_tmdev0;
-	for (i = 0; i < (sizeof(ts_print_num0) / sizeof(int)); i++) {
-		ts_sensor = ts_tmdev0->sensor[ts_print_num0[i]];
-		tsens_get_temp(&ts_sensor, &temp);
-		ret = snprintf(buffer + added, sizeof(buffer) - added,
-				   "[%d:%d]", ts_print_num0[i], temp/100);
-		added += ret;
+	if (tmdev->min_temp_sensor_id != MIN_TEMP_DEF_OFFSET) {
+		rc = tsens_get_temp(&tmdev->min_temp, &temp);
+		if (rc) {
+			pr_err("%s: Error:%d reading temp sensor:%d\n",
+				   __func__, rc, i);
+			return;
+		}
+		TSENS_DBG(tmdev, "Calling trip_temp for sensor %d\n", i);
+		of_thermal_handle_trip(tmdev->min_temp.tzd);
 	}
-
-	/* print tsens0 (controller 1) */
-	ts_sensor.tmdev = ts_tmdev1;
-	for (i = 0; i < (sizeof(ts_print_num1) / sizeof(int)); i++) {
-		ts_sensor = ts_tmdev1->sensor[ts_print_num1[i]];
-		tsens_get_temp(&ts_sensor, &temp);
-		ret = snprintf(buffer + added, sizeof(buffer) - added,
-					   "[%d:%d]", ts_print_num1[i] + 16, temp/100);
-		added += ret;
-	}
-
-	pr_info("%s\n", buffer);
-
-	schedule_delayed_work(&ts_print_work, HZ * 5);
 }
-#endif
 
 int tsens_tm_probe(struct platform_device *pdev)
 {
@@ -349,7 +327,6 @@ int tsens_tm_probe(struct platform_device *pdev)
 		return rc;
 	}
 	INIT_WORK(&tmdev->therm_fwk_notify, tsens_therm_fwk_notify);
-
 	rc = tsens_thermal_zone_register(tmdev);
 	if (rc) {
 		pr_err("Error registering the thermal zone\n");
@@ -368,7 +345,7 @@ int tsens_tm_probe(struct platform_device *pdev)
 	tmdev->ipc_log0 = ipc_log_context_create(IPC_LOGPAGES,
 							tsens_name, 0);
 	if (!tmdev->ipc_log0)
-		pr_err("%s : unable to create IPC Logging 0 for tsens %pa",
+		pr_err("%s : unable to create IPC Logging 0 for tsens %pa\n",
 					__func__, &tmdev->phys_addr_tm);
 
 	snprintf(tsens_name, sizeof(tsens_name), "tsens_%pa_1",
@@ -377,7 +354,7 @@ int tsens_tm_probe(struct platform_device *pdev)
 	tmdev->ipc_log1 = ipc_log_context_create(IPC_LOGPAGES,
 							tsens_name, 0);
 	if (!tmdev->ipc_log1)
-		pr_err("%s : unable to create IPC Logging 1 for tsens %pa",
+		pr_err("%s : unable to create IPC Logging 1 for tsens %pa\n",
 					__func__, &tmdev->phys_addr_tm);
 
 	snprintf(tsens_name, sizeof(tsens_name), "tsens_%pa_2",
@@ -386,26 +363,11 @@ int tsens_tm_probe(struct platform_device *pdev)
 	tmdev->ipc_log2 = ipc_log_context_create(IPC_LOGPAGES,
 							tsens_name, 0);
 	if (!tmdev->ipc_log2)
-		pr_err("%s : unable to create IPC Logging 2 for tsens %pa",
+		pr_err("%s : unable to create IPC Logging 2 for tsens %pa\n",
 					__func__, &tmdev->phys_addr_tm);
 
 	list_add_tail(&tmdev->list, &tsens_device_list);
 	platform_set_drvdata(pdev, tmdev);
-
-#if defined(CONFIG_SEC_PM)
-	if (!strncmp(tmdev->pdev->name, "c222000", 7)) {
-		ts_tmdev0 = tmdev;
-	} else if (!strncmp(tmdev->pdev->name, "c223000", 7)) {
-		ts_tmdev1 = tmdev;
-	}
-
-	if (ts_print_count == 0 && ts_tmdev1 != NULL) {
-		INIT_DELAYED_WORK(&ts_print_work, ts_print);
-		schedule_delayed_work(&ts_print_work, 0);
-		ts_print_count++;
-	}
-
-#endif
 
 	return rc;
 }
@@ -415,7 +377,6 @@ static struct platform_driver tsens_tm_driver = {
 	.remove = tsens_tm_remove,
 	.driver = {
 		.name = "msm-tsens",
-		.owner = THIS_MODULE,
 		.of_match_table = tsens_table,
 	},
 };

@@ -280,6 +280,7 @@ static void offb_destroy(struct fb_info *info)
 	if (info->screen_base)
 		iounmap(info->screen_base);
 	release_mem_region(info->apertures->ranges[0].base, info->apertures->ranges[0].size);
+	fb_dealloc_cmap(&info->cmap);
 	framebuffer_release(info);
 }
 
@@ -518,6 +519,7 @@ static void __init offb_init_fb(const char *name,
 	return;
 
 out_err:
+	fb_dealloc_cmap(&info->cmap);
 	iounmap(info->screen_base);
 out_aper:
 	iounmap(par->cmap_adr);
@@ -635,8 +637,13 @@ static void __init offb_init_nodriver(struct device_node *dp, int no_real_node)
 			vid = be32_to_cpup(vidp);
 			did = be32_to_cpup(didp);
 			pdev = pci_get_device(vid, did, NULL);
-			if (!pdev || pci_enable_device(pdev))
+			if (!pdev)
 				return;
+
+			if (pci_enable_device(pdev)) {
+				pci_dev_put(pdev);
+				return;
+			}
 		}
 #endif
 		/* kludge for valkyrie */

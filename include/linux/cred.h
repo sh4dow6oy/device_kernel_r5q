@@ -19,7 +19,6 @@
 #include <linux/uidgid.h>
 #include <linux/sched.h>
 #include <linux/sched/user.h>
-#include <linux/security.h>
 
 struct cred;
 struct inode;
@@ -65,6 +64,12 @@ extern void groups_free(struct group_info *);
 
 extern int in_group_p(kgid_t);
 extern int in_egroup_p(kgid_t);
+extern int groups_search(const struct group_info *, kgid_t);
+
+extern int set_current_groups(struct group_info *);
+extern void set_groups(struct cred *, struct group_info *);
+extern bool may_setgroups(void);
+extern void groups_sort(struct group_info *);
 #else
 static inline void groups_free(struct group_info *group_info)
 {
@@ -78,12 +83,11 @@ static inline int in_egroup_p(kgid_t grp)
 {
         return 1;
 }
+static inline int groups_search(const struct group_info *group_info, kgid_t grp)
+{
+	return 1;
+}
 #endif
-extern int set_current_groups(struct group_info *);
-extern void set_groups(struct cred *, struct group_info *);
-extern int groups_search(const struct group_info *, kgid_t);
-extern bool may_setgroups(void);
-extern void groups_sort(struct group_info *);
 
 /*
  * The security context of a task
@@ -109,7 +113,7 @@ extern void groups_sort(struct group_info *);
  * same context as task->real_cred.
  */
 struct cred {
-	atomic_long_t	usage;
+	atomic_t	usage;
 #ifdef CONFIG_DEBUG_CREDENTIALS
 	atomic_t	subscribers;	/* number of processes subscribed */
 	void		*put_addr;
@@ -226,7 +230,7 @@ static inline bool cap_ambient_invariant_ok(const struct cred *cred)
  */
 static inline struct cred *get_new_cred(struct cred *cred)
 {
-	atomic_long_inc(&cred->usage);
+	atomic_inc(&cred->usage);
 	return cred;
 }
 
@@ -249,7 +253,7 @@ static inline const struct cred *get_cred(const struct cred *cred)
 	if (!cred)
 		return cred;
 	validate_creds(cred);
-		nonconst_cred->non_rcu = 0;
+	nonconst_cred->non_rcu = 0;
 	return get_new_cred(nonconst_cred);
 }
 
@@ -270,7 +274,7 @@ static inline void put_cred(const struct cred *_cred)
 
 	if (cred) {
 		validate_creds(cred);
-		if (atomic_long_dec_and_test(&(cred)->usage))
+		if (atomic_dec_and_test(&(cred)->usage))
 			__put_cred(cred);
 	}
 }

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * <linux/usb/gadget.h>
  *
@@ -25,6 +26,7 @@
 #include <linux/workqueue.h>
 #include <linux/usb/ch9.h>
 #include <linux/pm_runtime.h>
+#include <linux/android_kabi.h>
 
 #define UDC_TRACE_STR_MAX	512
 
@@ -230,6 +232,7 @@ struct usb_ep_ops {
 	int (*enable) (struct usb_ep *ep,
 		const struct usb_endpoint_descriptor *desc);
 	int (*disable) (struct usb_ep *ep);
+	void (*dispose) (struct usb_ep *ep);
 
 	struct usb_request *(*alloc_request) (struct usb_ep *ep,
 		gfp_t gfp_flags);
@@ -244,7 +247,7 @@ struct usb_ep_ops {
 
 	int (*fifo_status) (struct usb_ep *ep);
 	void (*fifo_flush) (struct usb_ep *ep);
-	int (*gsi_ep_op)(struct usb_ep *ep, void *op_data,
+	int (*gsi_ep_op) (struct usb_ep *ep, void *op_data,
 		enum gsi_ep_op op);
 
 };
@@ -293,6 +296,8 @@ struct usb_ep_caps {
  * @ops: Function pointers used to access hardware-specific operations.
  * @ep_list:the gadget's ep_list holds all of its endpoints
  * @caps:The structure describing types and directions supported by endoint.
+ * @enabled: The current endpoint enabled/disabled state.
+ * @claimed: True if this endpoint is claimed by a function.
  * @maxpacket:The maximum packet size used on this endpoint.  The initial
  *	value can sometimes be reduced (hardware allowing), according to
  *	the endpoint descriptor used to configure the endpoint.
@@ -391,7 +396,7 @@ static inline int usb_ep_fifo_status(struct usb_ep *ep)
 static inline void usb_ep_fifo_flush(struct usb_ep *ep)
 { }
 
-static int usb_gsi_ep_op(struct usb_ep *ep,
+static inline int usb_gsi_ep_op(struct usb_ep *ep,
 		struct usb_gsi_request *req, enum gsi_ep_op op)
 { return 0; }
 #endif /* USB_GADGET */
@@ -416,7 +421,7 @@ struct usb_udc;
 struct usb_gadget_ops {
 	int	(*get_frame)(struct usb_gadget *);
 	int	(*wakeup)(struct usb_gadget *);
-	int	(*func_wakeup)(struct usb_gadget *, int interface_id);
+	int	(*func_wakeup)(struct usb_gadget *g, int interface_id);
 	int	(*set_selfpowered) (struct usb_gadget *, int is_selfpowered);
 	int	(*vbus_session) (struct usb_gadget *, int is_active);
 	int	(*vbus_draw) (struct usb_gadget *, unsigned mA);
@@ -431,7 +436,7 @@ struct usb_gadget_ops {
 	struct usb_ep *(*match_ep)(struct usb_gadget *,
 			struct usb_endpoint_descriptor *,
 			struct usb_ss_ep_comp_descriptor *);
-	int	(*restart)(struct usb_gadget *);
+	int	(*restart)(struct usb_gadget *g);
 };
 
 /**
@@ -446,9 +451,13 @@ struct usb_gadget_ops {
  * @max_speed: Maximal speed the UDC can handle.  UDC must support this
  *      and all slower speeds.
  * @state: the state we are now (attached, suspended, configured, etc)
+ * @state_lock: Spinlock protecting the `state` and `teardown` members.
+ * @teardown: True if the device is undergoing teardown, used to prevent
+ *	new work from being scheduled during cleanup.
  * @name: Identifies the controller hardware type.  Used in diagnostics
  *	and sometimes configuration.
  * @dev: Driver model state for this abstract device.
+ * @isoch_delay: value from Set Isoch Delay request. Only valid on SS/SSP
  * @out_epnum: last used out ep number
  * @in_epnum: last used in ep number
  * @mA: last set mA value
@@ -471,6 +480,9 @@ struct usb_gadget_ops {
  *	or B-Peripheral wants to take host role.
  * @quirk_ep_out_aligned_size: epout requires buffer size to be aligned to
  *	MaxPacketSize.
+ * @quirk_altset_not_supp: UDC controller doesn't support alt settings.
+ * @quirk_stall_not_supp: UDC controller doesn't support stalling.
+ * @quirk_zlp_not_supp: UDC controller doesn't support ZLP.
  * @quirk_avoids_skb_reserve: udc/platform wants to avoid skb_reserve() in
  *	u_ether.c to improve performance.
  * @is_selfpowered: if the gadget is self-powered.
@@ -479,6 +491,8 @@ struct usb_gadget_ops {
  * @connected: True if gadget is connected.
  * @lpm_capable: If the gadget max_speed is FULL or HIGH, this flag
  *	indicates that it supports LPM as per the LPM ECN & errata.
+ * @remote_wakeup: Indicates if the host has enabled the remote_wakeup
+ * feature.
  *
  * Gadgets have a mostly-portable "gadget driver" implementing device
  * functions, handling all usb configurations and interfaces.  Gadget
@@ -508,8 +522,11 @@ struct usb_gadget {
 	enum usb_device_speed		speed;
 	enum usb_device_speed		max_speed;
 	enum usb_device_state		state;
+	spinlock_t			state_lock;
+	bool				teardown;
 	const char			*name;
 	struct device			dev;
+	unsigned			isoch_delay;
 	unsigned			out_epnum;
 	unsigned			in_epnum;
 	unsigned			mA;
@@ -533,11 +550,20 @@ struct usb_gadget {
 	unsigned			connected:1;
 	unsigned			lpm_capable:1;
 	unsigned			remote_wakeup:1;
-	bool				bam2bam_func_enabled;
+
+#ifdef __GENKSYMS__
+	ANDROID_KABI_RESERVE(1);
+#else
+	bool				bam2bam_func_enabled:1;
 	u32				extra_buf_alloc;
-	bool				l1_supported;
-	bool				is_chipidea;
-	bool				self_powered;
+	bool				l1_supported:1;
+	bool				is_chipidea:1;
+	bool				self_powered:1;
+#endif
+
+	ANDROID_KABI_RESERVE(2);
+	ANDROID_KABI_RESERVE(3);
+	ANDROID_KABI_RESERVE(4);
 };
 #define work_to_gadget(w)	(container_of((w), struct usb_gadget, work))
 
@@ -686,7 +712,8 @@ static inline int usb_gadget_frame_number(struct usb_gadget *gadget)
 { return 0; }
 static inline int usb_gadget_wakeup(struct usb_gadget *gadget)
 { return 0; }
-static int usb_gadget_func_wakeup(struct usb_gadget *gadget, int interface_id)
+static inline int usb_gadget_func_wakeup(struct usb_gadget *gadget,
+					 int interface_id)
 { return 0; }
 static inline int usb_gadget_set_selfpowered(struct usb_gadget *gadget)
 { return 0; }
@@ -885,7 +912,7 @@ struct usb_gadget_string_container {
 };
 
 /* put descriptor for string with that id into buf (buflen >= 256) */
-int usb_gadget_get_string(struct usb_gadget_strings *table, int id, u8 *buf);
+int usb_gadget_get_string(const struct usb_gadget_strings *table, int id, u8 *buf);
 
 /*-------------------------------------------------------------------------*/
 
@@ -926,19 +953,6 @@ int usb_otg_descriptor_init(struct usb_gadget *gadget,
 		struct usb_descriptor_header *otg_desc);
 /*-------------------------------------------------------------------------*/
 
-/**
- * usb_func_ep_queue - queues (submits) an I/O request to a function endpoint.
- * This function is similar to the usb_ep_queue function, but in addition it
- * also checks whether the function is in Super Speed USB Function Suspend
- * state, and if so a Function Wake notification is sent to the host
- * (USB 3.0 spec, section 9.2.5.2).
- * @func: the function which issues the USB I/O request.
- * @ep:the endpoint associated with the request
- * @req:the request being submitted
- * @gfp_flags: GFP_* flags to use in case the lower level driver couldn't
- *	pre-allocate all necessary memory with the request.
- *
- */
 int usb_func_ep_queue(struct usb_function *func, struct usb_ep *ep,
 				struct usb_request *req, gfp_t gfp_flags);
 
@@ -946,6 +960,7 @@ int usb_func_ep_queue(struct usb_function *func, struct usb_ep *ep,
 
 /* utility to simplify map/unmap of usb_requests to/from DMA */
 
+#ifdef	CONFIG_HAS_DMA
 extern int usb_gadget_map_request_by_dev(struct device *dev,
 		struct usb_request *req, int is_in);
 extern int usb_gadget_map_request(struct usb_gadget *gadget,
@@ -955,6 +970,17 @@ extern void usb_gadget_unmap_request_by_dev(struct device *dev,
 		struct usb_request *req, int is_in);
 extern void usb_gadget_unmap_request(struct usb_gadget *gadget,
 		struct usb_request *req, int is_in);
+#else /* !CONFIG_HAS_DMA */
+static inline int usb_gadget_map_request_by_dev(struct device *dev,
+		struct usb_request *req, int is_in) { return -ENOSYS; }
+static inline int usb_gadget_map_request(struct usb_gadget *gadget,
+		struct usb_request *req, int is_in) { return -ENOSYS; }
+
+static inline void usb_gadget_unmap_request_by_dev(struct device *dev,
+		struct usb_request *req, int is_in) { }
+static inline void usb_gadget_unmap_request(struct usb_gadget *gadget,
+		struct usb_request *req, int is_in) { }
+#endif /* !CONFIG_HAS_DMA */
 
 /*-------------------------------------------------------------------------*/
 

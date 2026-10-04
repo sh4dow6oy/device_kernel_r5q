@@ -1,13 +1,6 @@
-/* Copyright (c) 2012-2018, 2020, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2012-2018, 2020, The Linux Foundation. All rights reserved.
  */
 
 #include "ipa_i.h"
@@ -45,14 +38,13 @@ static int ipa_generate_hdr_hw_tbl(struct ipa_mem_buffer *mem)
 	}
 	IPADBG_LOW("tbl_sz=%d\n", ipa_ctx->hdr_tbl.end);
 
-	mem->base = dma_alloc_coherent(ipa_ctx->pdev, mem->size,
+	mem->base = dma_zalloc_coherent(ipa_ctx->pdev, mem->size,
 			&mem->phys_base, GFP_KERNEL);
 	if (!mem->base) {
 		IPAERR("fail to alloc DMA buff of size %d\n", mem->size);
 		return -ENOMEM;
 	}
 
-	memset(mem->base, 0, mem->size);
 	list_for_each_entry(entry, &ipa_ctx->hdr_tbl.head_hdr_entry_list,
 			link) {
 		if (entry->is_hdr_proc_ctx)

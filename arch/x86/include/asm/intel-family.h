@@ -8,9 +8,6 @@
  * The "_X" parts are generally the EP and EX Xeons, or the
  * "Extreme" ones, like Broadwell-E, or Atom microserver.
  *
- * Things ending in "2" are usually because we have no better
- * name for them.  There's no processor called "SILVERMONT2".
- *
  * While adding a new CPUID for a new microarchitecture, add a new
  * group to keep logically sorted out in chronological order. Within
  * that group keep the CPUID for the variants sorted by model number.
@@ -62,6 +59,10 @@
 #define INTEL_FAM6_ICELAKE_XEON_D	0x6C
 #define INTEL_FAM6_ICELAKE_DESKTOP	0x7D
 #define INTEL_FAM6_ICELAKE_MOBILE	0x7E
+#define INTEL_FAM6_ICELAKE_NNPI		0x9D
+
+#define INTEL_FAM6_TIGERLAKE_L		0x8C
+#define INTEL_FAM6_TIGERLAKE		0x8D
 
 #define INTEL_FAM6_COMETLAKE		0xA5
 #define INTEL_FAM6_COMETLAKE_L		0xA6
@@ -78,9 +79,6 @@
 #define INTEL_FAM6_RAPTORLAKE		0xB7
 #define INTEL_FAM6_RAPTORLAKE_P		0xBA
 #define INTEL_FAM6_RAPTORLAKE_S		0xBF
-
-#define INTEL_FAM6_TIGERLAKE_L		0x8C
-#define INTEL_FAM6_TIGERLAKE		0x8D
 
 /* "Small Core" Processors (Atom) */
 
@@ -113,5 +111,18 @@
 
 /* Family 5 */
 #define INTEL_FAM5_QUARK_X1000		0x09 /* Quark X1000 SoC */
+
+/* Useful macros */
+#define INTEL_CPU_FAM_ANY(_family, _model, _driver_data)	\
+{								\
+	.vendor		= X86_VENDOR_INTEL,			\
+	.family		= _family,				\
+	.model		= _model,				\
+	.feature	= X86_FEATURE_ANY,			\
+	.driver_data	= (kernel_ulong_t)&_driver_data		\
+}
+
+#define INTEL_CPU_FAM6(_model, _driver_data)			\
+	INTEL_CPU_FAM_ANY(6, INTEL_FAM6_##_model, _driver_data)
 
 #endif /* _ASM_X86_INTEL_FAMILY_H */

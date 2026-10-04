@@ -34,6 +34,7 @@
 #include <linux/quotaops.h>
 #include <linux/buffer_head.h>
 #include <linux/bio.h>
+#include <linux/iversion.h>
 #include <linux/unicode.h>
 #include "ext4.h"
 #include "ext4_jbd2.h"
@@ -1396,7 +1397,7 @@ static int ext4_ci_compare(const struct inode *parent, const struct qstr *name,
 		/* Handle invalid character sequence as either an error
 		 * or as an opaque byte sequence.
 		 */
-		if (sb_has_enc_strict_mode(sb))
+		if (sb_has_strict_encoding(sb))
 			ret = -EINVAL;
 		else if (name->len != entry.len)
 			ret = 1;
@@ -1730,7 +1731,7 @@ static struct buffer_head *ext4_lookup_entry(struct inode *dir,
 	struct buffer_head *bh;
 
 	err = ext4_fname_prepare_lookup(dir, dentry, &fname);
-	generic_set_encrypted_ci_d_ops(dir, dentry);
+	generic_set_encrypted_ci_d_ops(dentry);
 	if (err == -ENOENT)
 		return NULL;
 	if (err)
@@ -1810,14 +1811,11 @@ static struct dentry *ext4_lookup(struct inode *dir, struct dentry *dentry, unsi
 	inode = NULL;
 	if (bh) {
 		__u32 ino = le32_to_cpu(de->inode);
+		brelse(bh);
 		if (!ext4_valid_inum(dir->i_sb, ino)) {
-			printk(KERN_ERR "Name of directory entry has bad");
-			print_bh(dir->i_sb, bh, 0, EXT4_BLOCK_SIZE(dir->i_sb));
-			brelse(bh);
 			EXT4_ERROR_INODE(dir, "bad inode number: %u", ino);
 			return ERR_PTR(-EFSCORRUPTED);
 		}
-		brelse(bh);
 		if (unlikely(ino == dir->i_ino)) {
 			EXT4_ERROR_INODE(dir, "'%pd' linked to parent dir",
 					 dentry);
@@ -1826,9 +1824,8 @@ static struct dentry *ext4_lookup(struct inode *dir, struct dentry *dentry, unsi
 		inode = ext4_iget(dir->i_sb, ino, EXT4_IGET_NORMAL);
 		if (inode == ERR_PTR(-ESTALE)) {
 			EXT4_ERROR_INODE(dir,
-					"deleted inode referenced: %u"
-					"at parent inode : %lu",
-					ino, dir->i_ino);
+					 "deleted inode referenced: %u",
+					 ino);
 			return ERR_PTR(-EFSCORRUPTED);
 		}
 		if (!IS_ERR(inode) && IS_ENCRYPTED(dir) &&
@@ -2003,7 +2000,7 @@ static struct ext4_dir_entry_2 *do_split(handle_t *handle, struct inode *dir,
 	 * split it in half by count; each resulting block will have at least
 	 * half the space free.
 	 */
-	if (i > 0)
+	if (i >= 0)
 		split = count - move;
 	else
 		split = count/2;
@@ -2396,10 +2393,13 @@ static int ext4_add_entry(handle_t *handle, struct dentry *dentry,
 		return -EINVAL;
 
 #ifdef CONFIG_UNICODE
-	if (sb_has_enc_strict_mode(sb) && IS_CASEFOLDED(dir) &&
+	if (sb_has_strict_encoding(sb) && IS_CASEFOLDED(dir) &&
 	    sb->s_encoding && utf8_validate(sb->s_encoding, &dentry->d_name))
 		return -EINVAL;
 #endif
+
+	if (fscrypt_is_nokey_name(dentry))
+		return -ENOKEY;
 
 	retval = ext4_fname_setup_filename(dir, &dentry->d_name, 0, &fname);
 	if (retval)
@@ -3060,7 +3060,6 @@ bool ext4_empty_dir(struct inode *inode)
 	if (ext4_check_dir_entry(inode, NULL, de, bh, bh->b_data, bh->b_size,
 				 0) ||
 	    le32_to_cpu(de->inode) != inode->i_ino || strcmp(".", de->name)) {
-		print_bh(sb, bh, 0, EXT4_BLOCK_SIZE(sb));
 		ext4_warning_inode(inode, "directory missing '.'");
 		brelse(bh);
 		return true;
@@ -3070,7 +3069,6 @@ bool ext4_empty_dir(struct inode *inode)
 	if (ext4_check_dir_entry(inode, NULL, de, bh, bh->b_data, bh->b_size,
 				 offset) ||
 	    le32_to_cpu(de->inode) == 0 || strcmp("..", de->name)) {
-		print_bh(sb, bh, 0, EXT4_BLOCK_SIZE(sb));
 		ext4_warning_inode(inode, "directory missing '..'");
 		brelse(bh);
 		return true;
@@ -3333,7 +3331,7 @@ static int ext4_rmdir(struct inode *dir, struct dentry *dentry)
 			     "empty directory '%.*s' has too many links (%u)",
 			     dentry->d_name.len, dentry->d_name.name,
 			     inode->i_nlink);
-	inode->i_version++;
+	inode_inc_iversion(inode);
 	clear_nlink(inode);
 	/* There's no need to set i_disksize: the fact that i_nlink is
 	 * zero will ensure that the right thing happens during any
@@ -3341,16 +3339,6 @@ static int ext4_rmdir(struct inode *dir, struct dentry *dentry)
 	inode->i_size = 0;
 	ext4_orphan_add(handle, inode);
 	inode->i_ctime = dir->i_ctime = dir->i_mtime = current_time(inode);
-	/* @fs.sec -- 868333f69f69eab81cceeb26fac51f0b4de49c70 -- */
-	/* log unlinker's uid or first 4 bytes of comm
-	 * to ext4_inode->i_version_hi */
-	inode->i_version &= 0x00000000FFFFFFFF;
-	if (current_uid().val) {
-		inode->i_version |= (u64)current_uid().val << 32;
-	} else {
-		u32 *comm = (u32 *)current->comm;
-		inode->i_version |= (u64)(*comm) << 32;
-	}
 	ext4_mark_inode_dirty(handle, inode);
 	ext4_dec_count(handle, dir);
 	ext4_update_dx_flag(dir);
@@ -3433,15 +3421,6 @@ static int ext4_unlink(struct inode *dir, struct dentry *dentry)
 	if (!inode->i_nlink)
 		ext4_orphan_add(handle, inode);
 	inode->i_ctime = current_time(inode);
-	/* log unlinker's uid or first 4 bytes of comm
-	 * to ext4_inode->i_version_hi */
-	inode->i_version &= 0x00000000FFFFFFFF;
-	if (current_uid().val) {
-		inode->i_version |= (u64)current_uid().val << 32;
-	} else {
-		u32 *comm = (u32 *)current->comm;
-		inode->i_version |= (u64)(*comm) << 32;
-	}
 	ext4_mark_inode_dirty(handle, inode);
 
 #ifdef CONFIG_UNICODE
@@ -3607,9 +3586,9 @@ static int ext4_link(struct dentry *old_dentry,
 	if (err)
 		return err;
 
-       if ((ext4_test_inode_flag(dir, EXT4_INODE_PROJINHERIT)) &&
-	   (!projid_eq(EXT4_I(dir)->i_projid,
-		       EXT4_I(old_dentry->d_inode)->i_projid)))
+	if ((ext4_test_inode_flag(dir, EXT4_INODE_PROJINHERIT)) &&
+	    (!projid_eq(EXT4_I(dir)->i_projid,
+			EXT4_I(old_dentry->d_inode)->i_projid)))
 		return -EXDEV;
 
 	err = dquot_initialize(dir);
@@ -3775,7 +3754,7 @@ static int ext4_setent(handle_t *handle, struct ext4_renament *ent,
 	ent->de->inode = cpu_to_le32(ino);
 	if (ext4_has_feature_filetype(ent->dir->i_sb))
 		ent->de->file_type = file_type;
-	ent->dir->i_version++;
+	inode_inc_iversion(ent->dir);
 	ent->dir->i_ctime = ent->dir->i_mtime =
 		current_time(ent->dir);
 	ext4_mark_inode_dirty(handle, ent->dir);

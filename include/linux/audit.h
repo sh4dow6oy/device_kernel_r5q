@@ -87,17 +87,17 @@ struct audit_field {
 
 extern int is_audit_feature_set(int which);
 
-extern int __init audit_register_class(int class, unsigned *list);
-extern int audit_classify_syscall(int abi, unsigned syscall);
+extern int __init audit_register_class(int class, unsigned int *list);
+extern int audit_classify_syscall(int abi, unsigned int syscall);
 extern int audit_classify_arch(int arch);
 /* only for compat system calls */
-extern unsigned compat_write_class[];
-extern unsigned compat_read_class[];
-extern unsigned compat_dir_class[];
-extern unsigned compat_chattr_class[];
-extern unsigned compat_signal_class[];
+extern unsigned int compat_write_class[];
+extern unsigned int compat_read_class[];
+extern unsigned int compat_dir_class[];
+extern unsigned int compat_chattr_class[];
+extern unsigned int compat_signal_class[];
 
-extern int audit_classify_compat_syscall(int abi, unsigned syscall);
+extern int audit_classify_compat_syscall(int abi, unsigned int syscall);
 
 /* audit_names->type values */
 #define	AUDIT_TYPE_UNKNOWN	0	/* we don't know yet */
@@ -149,15 +149,8 @@ extern void		    audit_log_d_path(struct audit_buffer *ab,
 					     const struct path *path);
 extern void		    audit_log_key(struct audit_buffer *ab,
 					  char *key);
-extern void		    audit_log_link_denied(const char *operation,
-						  const struct path *link);
+extern void		    audit_log_link_denied(const char *operation);
 extern void		    audit_log_lost(const char *message);
-#ifdef CONFIG_SECURITY
-extern void 		    audit_log_secctx(struct audit_buffer *ab, u32 secid);
-#else
-static inline void	    audit_log_secctx(struct audit_buffer *ab, u32 secid)
-{ }
-#endif
 
 extern int audit_log_task_context(struct audit_buffer *ab);
 extern void audit_log_task_info(struct audit_buffer *ab,
@@ -203,10 +196,7 @@ static inline void audit_log_d_path(struct audit_buffer *ab,
 { }
 static inline void audit_log_key(struct audit_buffer *ab, char *key)
 { }
-static inline void audit_log_link_denied(const char *string,
-					 const struct path *link)
-{ }
-static inline void audit_log_secctx(struct audit_buffer *ab, u32 secid)
+static inline void audit_log_link_denied(const char *string)
 { }
 static inline int audit_log_task_context(struct audit_buffer *ab)
 {
@@ -245,8 +235,15 @@ extern void __audit_file(const struct file *);
 extern void __audit_inode_child(struct inode *parent,
 				const struct dentry *dentry,
 				const unsigned char type);
-extern void __audit_seccomp(unsigned long syscall, long signr, int code);
+extern void audit_seccomp(unsigned long syscall, long signr, int code);
+extern void audit_seccomp_actions_logged(const char *names,
+					 const char *old_names, int res);
 extern void __audit_ptrace(struct task_struct *t);
+
+static inline void audit_set_context(struct task_struct *task, struct audit_context *ctx)
+{
+	task->audit_context = ctx;
+}
 
 static inline struct audit_context *audit_context(void)
 {
@@ -319,12 +316,6 @@ static inline void audit_inode_child(struct inode *parent,
 		__audit_inode_child(parent, dentry, type);
 }
 void audit_core_dumps(long signr);
-
-static inline void audit_seccomp(unsigned long syscall, long signr, int code)
-{
-	if (audit_enabled && unlikely(!audit_dummy_context()))
-		__audit_seccomp(syscall, signr, code);
-}
 
 static inline void audit_ptrace(struct task_struct *t)
 {
@@ -486,6 +477,8 @@ static inline bool audit_dummy_context(void)
 {
 	return true;
 }
+static inline void audit_set_context(struct task_struct *task, struct audit_context *ctx)
+{ }
 static inline struct audit_context *audit_context(void)
 {
 	return NULL;
@@ -520,9 +513,10 @@ static inline void audit_inode_child(struct inode *parent,
 { }
 static inline void audit_core_dumps(long signr)
 { }
-static inline void __audit_seccomp(unsigned long syscall, long signr, int code)
-{ }
 static inline void audit_seccomp(unsigned long syscall, long signr, int code)
+{ }
+static inline void audit_seccomp_actions_logged(const char *names,
+						const char *old_names, int res)
 { }
 static inline int auditsc_get_stamp(struct audit_context *ctx,
 			      struct timespec64 *t, unsigned int *serial)
@@ -535,7 +529,7 @@ static inline kuid_t audit_get_loginuid(struct task_struct *tsk)
 }
 static inline unsigned int audit_get_sessionid(struct task_struct *tsk)
 {
-	return -1;
+	return AUDIT_SID_UNSET;
 }
 static inline void audit_ipc_obj(struct kern_ipc_perm *ipcp)
 { }

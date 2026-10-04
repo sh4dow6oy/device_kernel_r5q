@@ -616,7 +616,7 @@ static void __init lsm_early_task(struct task_struct *task)
 #define LSM_RET_DEFAULT(NAME) (NAME##_default)
 #define DECLARE_LSM_RET_DEFAULT_void(DEFAULT, NAME)
 #define DECLARE_LSM_RET_DEFAULT_int(DEFAULT, NAME) \
-	static const int LSM_RET_DEFAULT(NAME) = (DEFAULT);
+	static const int __maybe_unused LSM_RET_DEFAULT(NAME) = (DEFAULT);
 #define LSM_HOOK(RET, DEFAULT, NAME, ...) \
 	DECLARE_LSM_RET_DEFAULT_##RET(DEFAULT, NAME)
 
@@ -633,12 +633,6 @@ static void __init lsm_early_task(struct task_struct *task)
  *	This is a hook that returns a value.
  */
 
-/*
- * security_integrity_current() is added, 
- * which has a dependency of CONFIG_RKP_KDP.
- * security_integrity_current is added to check integrity of credential context.
- * if CONFIG_RKP_KDP is disabled, it will always return 0.
- */
 #define call_void_hook(FUNC, ...)				\
 	do {							\
 		struct security_hook_list *P;			\
@@ -790,6 +784,11 @@ void security_bprm_committed_creds(struct linux_binprm *bprm)
 	call_void_hook(bprm_committed_creds, bprm);
 }
 
+int security_fs_context_parse_param(struct fs_context *fc, struct fs_parameter *param)
+{
+	return call_int_hook(fs_context_parse_param, -ENOPARAM, fc, param);
+}
+
 int security_sb_alloc(struct super_block *sb)
 {
 	return call_int_hook(sb_alloc_security, 0, sb);
@@ -800,20 +799,31 @@ void security_sb_free(struct super_block *sb)
 	call_void_hook(sb_free_security, sb);
 }
 
-int security_sb_copy_data(char *orig, char *copy)
+void security_free_mnt_opts(void **mnt_opts)
 {
-	return call_int_hook(sb_copy_data, 0, orig, copy);
+	if (!*mnt_opts)
+		return;
+	call_void_hook(sb_free_mnt_opts, *mnt_opts);
+	*mnt_opts = NULL;
 }
-EXPORT_SYMBOL(security_sb_copy_data);
+EXPORT_SYMBOL(security_free_mnt_opts);
 
-int security_sb_remount(struct super_block *sb, void *data)
+int security_sb_eat_lsm_opts(char *options, void **mnt_opts)
 {
-	return call_int_hook(sb_remount, 0, sb, data);
+	return call_int_hook(sb_eat_lsm_opts, 0, options, mnt_opts);
 }
+EXPORT_SYMBOL(security_sb_eat_lsm_opts);
 
-int security_sb_kern_mount(struct super_block *sb, int flags, void *data)
+int security_sb_remount(struct super_block *sb,
+			void *mnt_opts)
 {
-	return call_int_hook(sb_kern_mount, 0, sb, flags, data);
+	return call_int_hook(sb_remount, 0, sb, mnt_opts);
+}
+EXPORT_SYMBOL(security_sb_remount);
+
+int security_sb_kern_mount(struct super_block *sb)
+{
+	return call_int_hook(sb_kern_mount, 0, sb);
 }
 
 int security_sb_show_options(struct seq_file *m, struct super_block *sb)
@@ -843,13 +853,13 @@ int security_sb_pivotroot(const struct path *old_path, const struct path *new_pa
 }
 
 int security_sb_set_mnt_opts(struct super_block *sb,
-				struct security_mnt_opts *opts,
+				void *mnt_opts,
 				unsigned long kern_flags,
 				unsigned long *set_kern_flags)
 {
 	return call_int_hook(sb_set_mnt_opts,
-				opts->num_mnt_opts ? -EOPNOTSUPP : 0, sb,
-				opts, kern_flags, set_kern_flags);
+				mnt_opts ? -EOPNOTSUPP : 0, sb,
+				mnt_opts, kern_flags, set_kern_flags);
 }
 EXPORT_SYMBOL(security_sb_set_mnt_opts);
 
@@ -863,11 +873,13 @@ int security_sb_clone_mnt_opts(const struct super_block *oldsb,
 }
 EXPORT_SYMBOL(security_sb_clone_mnt_opts);
 
-int security_sb_parse_opts_str(char *options, struct security_mnt_opts *opts)
+int security_add_mnt_opt(const char *option, const char *val, int len,
+			 void **mnt_opts)
 {
-	return call_int_hook(sb_parse_opts_str, 0, options, opts);
+	return call_int_hook(sb_add_mnt_opt, -EINVAL,
+					option, val, len, mnt_opts);
 }
-EXPORT_SYMBOL(security_sb_parse_opts_str);
+EXPORT_SYMBOL(security_add_mnt_opt);
 
 int security_inode_alloc(struct inode *inode)
 {
@@ -911,8 +923,18 @@ int security_dentry_init_security(struct dentry *dentry, int mode,
 					const struct qstr *name, void **ctx,
 					u32 *ctxlen)
 {
-	return call_int_hook(dentry_init_security, -EOPNOTSUPP, dentry, mode,
-				name, ctx, ctxlen);
+	struct security_hook_list *hp;
+	int rc;
+
+	/*
+	 * Only one module will provide a security context.
+	 */
+	hlist_for_each_entry(hp, &security_hook_heads.dentry_init_security, list) {
+		rc = hp->hook.dentry_init_security(dentry, mode, name, ctx, ctxlen);
+		if (rc != LSM_RET_DEFAULT(dentry_init_security))
+			return rc;
+	}
+	return LSM_RET_DEFAULT(dentry_init_security);
 }
 EXPORT_SYMBOL(security_dentry_init_security);
 
@@ -1068,7 +1090,7 @@ int security_path_chown(const struct path *path, kuid_t uid, kgid_t gid)
 		return 0;
 	return call_int_hook(path_chown, 0, path, uid, gid);
 }
-EXPORT_SYMBOL(security_path_chown);
+EXPORT_SYMBOL_GPL(security_path_chown);
 
 int security_path_chroot(const struct path *path)
 {
@@ -1326,7 +1348,22 @@ EXPORT_SYMBOL(security_inode_copy_up);
 
 int security_inode_copy_up_xattr(const char *name)
 {
-	return call_int_hook(inode_copy_up_xattr, -EOPNOTSUPP, name);
+	struct security_hook_list *hp;
+	int rc;
+
+	/*
+	 * The implementation can return 0 (accept the xattr), 1 (discard the
+	 * xattr), -EOPNOTSUPP if it does not know anything about the xattr or
+	 * any other error code incase of an error.
+	 */
+	hlist_for_each_entry(hp,
+		&security_hook_heads.inode_copy_up_xattr, list) {
+		rc = hp->hook.inode_copy_up_xattr(name);
+		if (rc != LSM_RET_DEFAULT(inode_copy_up_xattr))
+			return rc;
+	}
+
+	return LSM_RET_DEFAULT(inode_copy_up_xattr);
 }
 EXPORT_SYMBOL(security_inode_copy_up_xattr);
 
@@ -1443,6 +1480,7 @@ int security_mmap_addr(unsigned long addr)
 {
 	return call_int_hook(mmap_addr, 0, addr);
 }
+EXPORT_SYMBOL_GPL(security_mmap_addr);
 
 int security_file_mprotect(struct vm_area_struct *vma, unsigned long reqprot,
 			    unsigned long prot)
@@ -1572,7 +1610,12 @@ int security_kernel_create_files_as(struct cred *new, struct inode *inode)
 
 int security_kernel_module_request(char *kmod_name)
 {
-	return call_int_hook(kernel_module_request, 0, kmod_name);
+	int ret;
+
+	ret = call_int_hook(kernel_module_request, 0, kmod_name);
+	if (ret)
+		return ret;
+	return integrity_kernel_module_request(kmod_name);
 }
 
 int security_kernel_read_file(struct file *file, enum kernel_read_file_id id)
@@ -1600,8 +1643,14 @@ EXPORT_SYMBOL_GPL(security_kernel_post_read_file);
 
 int security_kernel_load_data(enum kernel_load_data_id id)
 {
-	return call_int_hook(kernel_load_data, 0, id);
+	int ret;
+
+	ret = call_int_hook(kernel_load_data, 0, id);
+	if (ret)
+		return ret;
+	return ima_load_data(id);
 }
+EXPORT_SYMBOL_GPL(security_kernel_load_data);
 
 int security_task_fix_setuid(struct cred *new, const struct cred *old,
 			     int flags)
@@ -1889,8 +1938,20 @@ EXPORT_SYMBOL(security_ismaclabel);
 
 int security_secid_to_secctx(u32 secid, char **secdata, u32 *seclen)
 {
-	return call_int_hook(secid_to_secctx, -EOPNOTSUPP, secid, secdata,
-				seclen);
+	struct security_hook_list *hp;
+	int rc;
+
+	/*
+	 * Currently, only one LSM can implement secid_to_secctx (i.e this
+	 * LSM hook is not "stackable").
+	 */
+	hlist_for_each_entry(hp, &security_hook_heads.secid_to_secctx, list) {
+		rc = hp->hook.secid_to_secctx(secid, secdata, seclen);
+		if (rc != LSM_RET_DEFAULT(secid_to_secctx))
+			return rc;
+	}
+
+	return LSM_RET_DEFAULT(secid_to_secctx);
 }
 EXPORT_SYMBOL(security_secid_to_secctx);
 
@@ -1927,7 +1988,19 @@ EXPORT_SYMBOL(security_inode_setsecctx);
 
 int security_inode_getsecctx(struct inode *inode, void **ctx, u32 *ctxlen)
 {
-	return call_int_hook(inode_getsecctx, -EOPNOTSUPP, inode, ctx, ctxlen);
+	struct security_hook_list *hp;
+	int rc;
+
+	/*
+	 * Only one module will provide a security context.
+	 */
+	hlist_for_each_entry(hp, &security_hook_heads.inode_getsecctx, list) {
+		rc = hp->hook.inode_getsecctx(inode, ctx, ctxlen);
+		if (rc != LSM_RET_DEFAULT(inode_getsecctx))
+			return rc;
+	}
+
+	return LSM_RET_DEFAULT(inode_getsecctx);
 }
 EXPORT_SYMBOL(security_inode_getsecctx);
 
@@ -2025,17 +2098,40 @@ int security_sock_rcv_skb(struct sock *sk, struct sk_buff *skb)
 }
 EXPORT_SYMBOL(security_sock_rcv_skb);
 
-int security_socket_getpeersec_stream(struct socket *sock, char __user *optval,
-				      int __user *optlen, unsigned len)
+int security_socket_getpeersec_stream(struct socket *sock, sockptr_t optval,
+				      sockptr_t optlen, unsigned int len)
 {
-	return call_int_hook(socket_getpeersec_stream, -ENOPROTOOPT, sock,
-				optval, optlen, len);
+	struct security_hook_list *hp;
+	int rc;
+
+	/*
+	 * Only one module will provide a security context.
+	 */
+	hlist_for_each_entry(hp, &security_hook_heads.socket_getpeersec_stream,
+			     list) {
+		rc = hp->hook.socket_getpeersec_stream(sock, optval, optlen,
+						       len);
+		if (rc != LSM_RET_DEFAULT(socket_getpeersec_stream))
+			return rc;
+	}
+	return LSM_RET_DEFAULT(socket_getpeersec_stream);
 }
 
 int security_socket_getpeersec_dgram(struct socket *sock, struct sk_buff *skb, u32 *secid)
 {
-	return call_int_hook(socket_getpeersec_dgram, -ENOPROTOOPT, sock,
-			     skb, secid);
+	struct security_hook_list *hp;
+	int rc;
+
+	/*
+	 * Only one module will provide a security context.
+	 */
+	hlist_for_each_entry(hp, &security_hook_heads.socket_getpeersec_dgram,
+			     list) {
+		rc = hp->hook.socket_getpeersec_dgram(sock, skb, secid);
+		if (rc != LSM_RET_DEFAULT(socket_getpeersec_dgram))
+			return rc;
+	}
+	return LSM_RET_DEFAULT(socket_getpeersec_dgram);
 }
 EXPORT_SYMBOL(security_socket_getpeersec_dgram);
 
@@ -2408,3 +2504,4 @@ int security_locked_down(enum lockdown_reason what)
 	return call_int_hook(locked_down, 0, what);
 }
 EXPORT_SYMBOL(security_locked_down);
+

@@ -523,7 +523,8 @@ static void wanxl_pci_remove_one(struct pci_dev *pdev)
 	if (card->irq)
 		free_irq(card->irq, card);
 
-	wanxl_reset(card);
+	if (card->plx)
+		wanxl_reset(card);
 
 	for (i = 0; i < RX_QUEUE_LENGTH; i++)
 		if (card->rx_skbs[i]) {
@@ -734,7 +735,6 @@ static int wanxl_pci_init_one(struct pci_dev *pdev,
 		return -ENODEV;
 	}
 
-	stat = 0;
 	timeout = jiffies + 5 * HZ;
 	do {
 		if ((stat = readl(card->plx + PLX_MAILBOX_5)) != 0)

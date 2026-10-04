@@ -152,9 +152,9 @@ static void mv88e6xxx_phy_ppu_reenable_work(struct work_struct *ugly)
 	mutex_unlock(&chip->reg_lock);
 }
 
-static void mv88e6xxx_phy_ppu_reenable_timer(unsigned long _ps)
+static void mv88e6xxx_phy_ppu_reenable_timer(struct timer_list *t)
 {
-	struct mv88e6xxx_chip *chip = (void *)_ps;
+	struct mv88e6xxx_chip *chip = from_timer(chip, t, ppu_timer);
 
 	schedule_work(&chip->ppu_work);
 }
@@ -196,13 +196,15 @@ static void mv88e6xxx_phy_ppu_state_init(struct mv88e6xxx_chip *chip)
 {
 	mutex_init(&chip->ppu_mutex);
 	INIT_WORK(&chip->ppu_work, mv88e6xxx_phy_ppu_reenable_work);
-	setup_timer(&chip->ppu_timer, mv88e6xxx_phy_ppu_reenable_timer,
-		    (unsigned long)chip);
+	timer_setup(&chip->ppu_timer, mv88e6xxx_phy_ppu_reenable_timer, 0);
 }
 
 static void mv88e6xxx_phy_ppu_state_destroy(struct mv88e6xxx_chip *chip)
 {
+	mutex_lock(&chip->ppu_mutex);
 	del_timer_sync(&chip->ppu_timer);
+	cancel_work_sync(&chip->ppu_work);
+	mutex_unlock(&chip->ppu_mutex);
 }
 
 int mv88e6185_phy_ppu_read(struct mv88e6xxx_chip *chip, struct mii_bus *bus,

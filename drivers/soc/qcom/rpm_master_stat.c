@@ -1,15 +1,9 @@
-/* Copyright (c) 2012-2014, 2016-2017, 2020 The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
+// SPDX-License-Identifier: GPL-2.0-only
+
+/*
+ * Copyright (c) 2012-2020, The Linux Foundation. All rights reserved.
  */
+
 #include <linux/debugfs.h>
 #include <linux/delay.h>
 #include <linux/errno.h>
@@ -448,7 +442,7 @@ static  int msm_rpm_master_stats_probe(struct platform_device *pdev)
 
 	if (!res) {
 		dev_err(&pdev->dev,
-			"%s: Failed to get IO resource from platform device",
+			"%s: Failed to get IO resource from platform device\n",
 			__func__);
 		return -ENXIO;
 	}
@@ -489,7 +483,6 @@ static struct platform_driver msm_rpm_master_stats_driver = {
 	.remove = msm_rpm_master_stats_remove,
 	.driver = {
 		.name = "msm_rpm_master_stats",
-		.owner = THIS_MODULE,
 		.of_match_table = rpm_master_table,
 	},
 };

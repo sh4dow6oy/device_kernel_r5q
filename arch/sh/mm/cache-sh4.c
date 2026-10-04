@@ -16,7 +16,7 @@
 #include <linux/mutex.h>
 #include <linux/fs.h>
 #include <linux/highmem.h>
-#include <asm/pgtable.h>
+#include <linux/pgtable.h>
 #include <asm/mmu_context.h>
 #include <asm/cache_insns.h>
 #include <asm/cacheflush.h>
@@ -112,7 +112,7 @@ static void sh4_flush_dcache_page(void *arg)
 	struct page *page = arg;
 	unsigned long addr = (unsigned long)page_address(page);
 #ifndef CONFIG_SMP
-	struct address_space *mapping = page_mapping(page);
+	struct address_space *mapping = page_mapping_file(page);
 
 	if (mapping && !mapping_mapped(mapping))
 		clear_bit(PG_dcache_clean, &page->flags);

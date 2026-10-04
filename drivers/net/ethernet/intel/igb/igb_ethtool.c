@@ -1,25 +1,5 @@
-/* Intel(R) Gigabit Ethernet Linux driver
- * Copyright(c) 2007-2014 Intel Corporation.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License along with
- * this program; if not, see <http://www.gnu.org/licenses/>.
- *
- * The full GNU General Public License is included in this distribution in
- * the file called "COPYING".
- *
- * Contact Information:
- * e1000-devel Mailing List <e1000-devel@lists.sourceforge.net>
- * Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
- */
+// SPDX-License-Identifier: GPL-2.0
+/* Copyright(c) 2007 - 2018 Intel Corporation. */
 
 /* ethtool support for igb */
 
@@ -46,7 +26,7 @@ struct igb_stats {
 
 #define IGB_STAT(_name, _stat) { \
 	.stat_string = _name, \
-	.sizeof_stat = FIELD_SIZEOF(struct igb_adapter, _stat), \
+	.sizeof_stat = sizeof_field(struct igb_adapter, _stat), \
 	.stat_offset = offsetof(struct igb_adapter, _stat) \
 }
 static const struct igb_stats igb_gstrings_stats[] = {
@@ -96,7 +76,7 @@ static const struct igb_stats igb_gstrings_stats[] = {
 
 #define IGB_NETDEV_STAT(_net_stat) { \
 	.stat_string = __stringify(_net_stat), \
-	.sizeof_stat = FIELD_SIZEOF(struct rtnl_link_stats64, _net_stat), \
+	.sizeof_stat = sizeof_field(struct rtnl_link_stats64, _net_stat), \
 	.stat_offset = offsetof(struct rtnl_link_stats64, _net_stat) \
 }
 static const struct igb_stats igb_gstrings_net_stats[] = {
@@ -757,8 +737,8 @@ static int igb_get_eeprom(struct net_device *netdev,
 	first_word = eeprom->offset >> 1;
 	last_word = (eeprom->offset + eeprom->len - 1) >> 1;
 
-	eeprom_buff = kmalloc(sizeof(u16) *
-			(last_word - first_word + 1), GFP_KERNEL);
+	eeprom_buff = kmalloc_array(last_word - first_word + 1, sizeof(u16),
+				    GFP_KERNEL);
 	if (!eeprom_buff)
 		return -ENOMEM;
 
@@ -926,11 +906,11 @@ static int igb_set_ringparam(struct net_device *netdev,
 	}
 
 	if (adapter->num_tx_queues > adapter->num_rx_queues)
-		temp_ring = vmalloc(adapter->num_tx_queues *
-				    sizeof(struct igb_ring));
+		temp_ring = vmalloc(array_size(sizeof(struct igb_ring),
+					       adapter->num_tx_queues));
 	else
-		temp_ring = vmalloc(adapter->num_rx_queues *
-				    sizeof(struct igb_ring));
+		temp_ring = vmalloc(array_size(sizeof(struct igb_ring),
+					       adapter->num_rx_queues));
 
 	if (!temp_ring) {
 		err = -ENOMEM;
@@ -1675,7 +1655,7 @@ static int igb_integrated_phy_loopback(struct igb_adapter *adapter)
 	if (hw->phy.type == e1000_phy_m88)
 		igb_phy_disable_receiver(adapter);
 
-	mdelay(500);
+	msleep(500);
 	return 0;
 }
 
@@ -2087,11 +2067,8 @@ static void igb_diag_test(struct net_device *netdev,
 	} else {
 		dev_info(&adapter->pdev->dev, "online testing starting\n");
 
-		/* PHY is powered down when interface is down */
-		if (if_running && igb_link_test(adapter, &data[TEST_LINK]))
+		if (igb_link_test(adapter, &data[TEST_LINK]))
 			eth_test->flags |= ETH_TEST_FL_FAILED;
-		else
-			data[TEST_LINK] = 0;
 
 		/* Online tests aren't run; pass by default */
 		data[TEST_REG] = 0;
@@ -2500,6 +2477,23 @@ static int igb_get_ethtool_nfc_entry(struct igb_adapter *adapter,
 			fsp->h_ext.vlan_tci = rule->filter.vlan_tci;
 			fsp->m_ext.vlan_tci = htons(VLAN_PRIO_MASK);
 		}
+		if (rule->filter.match_flags & IGB_FILTER_FLAG_DST_MAC_ADDR) {
+			ether_addr_copy(fsp->h_u.ether_spec.h_dest,
+					rule->filter.dst_addr);
+			/* As we only support matching by the full
+			 * mask, return the mask to userspace
+			 */
+			eth_broadcast_addr(fsp->m_u.ether_spec.h_dest);
+		}
+		if (rule->filter.match_flags & IGB_FILTER_FLAG_SRC_MAC_ADDR) {
+			ether_addr_copy(fsp->h_u.ether_spec.h_source,
+					rule->filter.src_addr);
+			/* As we only support matching by the full
+			 * mask, return the mask to userspace
+			 */
+			eth_broadcast_addr(fsp->m_u.ether_spec.h_source);
+		}
+
 		return 0;
 	}
 	return -EINVAL;
@@ -2773,10 +2767,37 @@ static int igb_rxnfc_write_vlan_prio_filter(struct igb_adapter *adapter,
 
 int igb_add_filter(struct igb_adapter *adapter, struct igb_nfc_filter *input)
 {
+	struct e1000_hw *hw = &adapter->hw;
 	int err = -EINVAL;
+
+	if (hw->mac.type == e1000_i210 &&
+	    !(input->filter.match_flags & ~IGB_FILTER_FLAG_SRC_MAC_ADDR)) {
+		dev_err(&adapter->pdev->dev,
+			"i210 doesn't support flow classification rules specifying only source addresses.\n");
+		return -EOPNOTSUPP;
+	}
 
 	if (input->filter.match_flags & IGB_FILTER_FLAG_ETHER_TYPE) {
 		err = igb_rxnfc_write_etype_filter(adapter, input);
+		if (err)
+			return err;
+	}
+
+	if (input->filter.match_flags & IGB_FILTER_FLAG_DST_MAC_ADDR) {
+		err = igb_add_mac_steering_filter(adapter,
+						  input->filter.dst_addr,
+						  input->action, 0);
+		err = min_t(int, err, 0);
+		if (err)
+			return err;
+	}
+
+	if (input->filter.match_flags & IGB_FILTER_FLAG_SRC_MAC_ADDR) {
+		err = igb_add_mac_steering_filter(adapter,
+						  input->filter.src_addr,
+						  input->action,
+						  IGB_MAC_STATE_SRC_ADDR);
+		err = min_t(int, err, 0);
 		if (err)
 			return err;
 	}
@@ -2829,6 +2850,15 @@ int igb_erase_filter(struct igb_adapter *adapter, struct igb_nfc_filter *input)
 		igb_clear_vlan_prio_filter(adapter,
 					   ntohs(input->filter.vlan_tci));
 
+	if (input->filter.match_flags & IGB_FILTER_FLAG_SRC_MAC_ADDR)
+		igb_del_mac_steering_filter(adapter, input->filter.src_addr,
+					    input->action,
+					    IGB_MAC_STATE_SRC_ADDR);
+
+	if (input->filter.match_flags & IGB_FILTER_FLAG_DST_MAC_ADDR)
+		igb_del_mac_steering_filter(adapter, input->filter.dst_addr,
+					    input->action, 0);
+
 	return 0;
 }
 
@@ -2870,7 +2900,7 @@ static int igb_update_ethtool_nfc_entry(struct igb_adapter *adapter,
 
 	/* add filter to the list */
 	if (parent)
-		hlist_add_behind(&parent->nfc_node, &input->nfc_node);
+		hlist_add_behind(&input->nfc_node, &parent->nfc_node);
 	else
 		hlist_add_head(&input->nfc_node, &adapter->nfc_filter_list);
 
@@ -2910,10 +2940,6 @@ static int igb_add_ethtool_nfc_entry(struct igb_adapter *adapter,
 	if ((fsp->flow_type & ~FLOW_EXT) != ETHER_FLOW)
 		return -EINVAL;
 
-	if (fsp->m_u.ether_spec.h_proto != ETHER_TYPE_FULL_MASK &&
-	    fsp->m_ext.vlan_tci != htons(VLAN_PRIO_MASK))
-		return -EINVAL;
-
 	input = kzalloc(sizeof(*input), GFP_KERNEL);
 	if (!input)
 		return -ENOMEM;
@@ -2921,6 +2947,20 @@ static int igb_add_ethtool_nfc_entry(struct igb_adapter *adapter,
 	if (fsp->m_u.ether_spec.h_proto == ETHER_TYPE_FULL_MASK) {
 		input->filter.etype = fsp->h_u.ether_spec.h_proto;
 		input->filter.match_flags = IGB_FILTER_FLAG_ETHER_TYPE;
+	}
+
+	/* Only support matching addresses by the full mask */
+	if (is_broadcast_ether_addr(fsp->m_u.ether_spec.h_source)) {
+		input->filter.match_flags |= IGB_FILTER_FLAG_SRC_MAC_ADDR;
+		ether_addr_copy(input->filter.src_addr,
+				fsp->h_u.ether_spec.h_source);
+	}
+
+	/* Only support matching addresses by the full mask */
+	if (is_broadcast_ether_addr(fsp->m_u.ether_spec.h_dest)) {
+		input->filter.match_flags |= IGB_FILTER_FLAG_DST_MAC_ADDR;
+		ether_addr_copy(input->filter.dst_addr,
+				fsp->h_u.ether_spec.h_dest);
 	}
 
 	if ((fsp->flow_type & FLOW_EXT) && fsp->m_ext.vlan_tci) {
@@ -3212,8 +3252,8 @@ static int igb_get_module_eeprom(struct net_device *netdev,
 	first_word = ee->offset >> 1;
 	last_word = (ee->offset + ee->len - 1) >> 1;
 
-	dataword = kmalloc(sizeof(u16) * (last_word - first_word + 1),
-			   GFP_KERNEL);
+	dataword = kmalloc_array(last_word - first_word + 1, sizeof(u16),
+				 GFP_KERNEL);
 	if (!dataword)
 		return -ENOMEM;
 
@@ -3348,37 +3388,7 @@ static int igb_set_rxfh(struct net_device *netdev, const u32 *indir,
 
 static unsigned int igb_max_channels(struct igb_adapter *adapter)
 {
-	struct e1000_hw *hw = &adapter->hw;
-	unsigned int max_combined = 0;
-
-	switch (hw->mac.type) {
-	case e1000_i211:
-		max_combined = IGB_MAX_RX_QUEUES_I211;
-		break;
-	case e1000_82575:
-	case e1000_i210:
-		max_combined = IGB_MAX_RX_QUEUES_82575;
-		break;
-	case e1000_i350:
-		if (!!adapter->vfs_allocated_count) {
-			max_combined = 1;
-			break;
-		}
-		/* fall through */
-	case e1000_82576:
-		if (!!adapter->vfs_allocated_count) {
-			max_combined = 2;
-			break;
-		}
-		/* fall through */
-	case e1000_82580:
-	case e1000_i354:
-	default:
-		max_combined = IGB_MAX_RX_QUEUES;
-		break;
-	}
-
-	return max_combined;
+	return igb_get_max_rss_queues(adapter);
 }
 
 static void igb_get_channels(struct net_device *netdev,

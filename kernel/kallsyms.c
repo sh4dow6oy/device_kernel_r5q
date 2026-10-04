@@ -22,17 +22,8 @@
 #include <linux/ctype.h>
 #include <linux/slab.h>
 #include <linux/filter.h>
+#include <linux/ftrace.h>
 #include <linux/compiler.h>
-
-#ifdef CONFIG_SEC_DEBUG
-#include <linux/sec_debug.h>
-#endif
-
-#ifdef CONFIG_KALLSYMS_ALL
-#define all_var 1
-#else
-#define all_var 0
-#endif
 
 /*
  * These will be re-linked against their real values
@@ -56,36 +47,6 @@ extern const u8 kallsyms_token_table[] __weak;
 extern const u16 kallsyms_token_index[] __weak;
 
 extern const unsigned long kallsyms_markers[] __weak;
-
-#ifdef CONFIG_SEC_DEBUG_SUMMARY
-void sec_debug_summary_set_kallsyms_info(
-		struct sec_debug_summary_data_apss *apss)
-{
-	if (!IS_ENABLED(CONFIG_KALLSYMS_BASE_RELATIVE)) {
-		apss->ksyms.addresses_pa = __pa(kallsyms_addresses);
-		apss->ksyms.relative_base = 0x0;
-		apss->ksyms.offsets_pa = 0x0;
-	} else {
-		apss->ksyms.addresses_pa = 0x0;
-		apss->ksyms.relative_base = (uint64_t)kallsyms_relative_base;
-		apss->ksyms.offsets_pa = __pa(kallsyms_offsets);
-	}
-	apss->ksyms.names_pa = __pa(kallsyms_names);
-	apss->ksyms.num_syms = kallsyms_num_syms;
-	apss->ksyms.token_table_pa = __pa(kallsyms_token_table);
-	apss->ksyms.token_index_pa = __pa(kallsyms_token_index);
-	apss->ksyms.markers_pa = __pa(kallsyms_markers);
-
-	apss->ksyms.sect.sinittext = (uintptr_t)_sinittext;
-	apss->ksyms.sect.einittext = (uintptr_t)_einittext;
-	apss->ksyms.sect.stext = (uintptr_t)_stext;
-	apss->ksyms.sect.etext = (uintptr_t)_etext;
-	apss->ksyms.sect.end = (uintptr_t)_end;
-
-	apss->ksyms.kallsyms_all = all_var;
-	apss->ksyms.magic = SEC_DEBUG_SUMMARY_MAGIC1;
-}
-#endif
 
 /*
  * Expand a compressed symbol data into the resulting uncompressed string,
@@ -235,7 +196,6 @@ unsigned long kallsyms_lookup_name(const char *name)
 	}
 	return module_kallsyms_lookup_name(name);
 }
-EXPORT_SYMBOL_GPL(kallsyms_lookup_name);
 
 int kallsyms_on_each_symbol(int (*fn)(void *, const char *, struct module *,
 				      unsigned long),
@@ -254,7 +214,6 @@ int kallsyms_on_each_symbol(int (*fn)(void *, const char *, struct module *,
 	}
 	return module_kallsyms_on_each_symbol(fn, data);
 }
-EXPORT_SYMBOL_GPL(kallsyms_on_each_symbol);
 
 static unsigned long get_symbol_pos(unsigned long addr,
 				    unsigned long *symbolsize,
@@ -369,6 +328,10 @@ const char *kallsyms_lookup(unsigned long addr,
 	if (!ret)
 		ret = bpf_address_lookup(addr, symbolsize,
 					 offset, modname, namebuf);
+
+	if (!ret)
+		ret = ftrace_mod_address_lookup(addr, symbolsize,
+						offset, modname, namebuf);
 
 found:
 	cleanup_symbol_name(namebuf);
@@ -510,21 +473,12 @@ int sprint_backtrace(char *buffer, unsigned long address)
 	return __sprint_symbol(buffer, address, -1, 1);
 }
 
-/* Look up a kernel symbol and print it to the kernel messages. */
-void __print_symbol(const char *fmt, unsigned long address)
-{
-	char buffer[KSYM_SYMBOL_LEN];
-
-	sprint_symbol(buffer, address);
-
-	printk(fmt, buffer);
-}
-EXPORT_SYMBOL(__print_symbol);
-
 /* To avoid using get_symbol_offset for every symbol, we carry prefix along. */
 struct kallsym_iter {
 	loff_t pos;
+	loff_t pos_arch_end;
 	loff_t pos_mod_end;
+	loff_t pos_ftrace_mod_end;
 	unsigned long value;
 	unsigned int nameoff; /* If iterating in core kernel symbols. */
 	char type;
@@ -534,9 +488,29 @@ struct kallsym_iter {
 	int show_value;
 };
 
+int __weak arch_get_kallsym(unsigned int symnum, unsigned long *value,
+			    char *type, char *name)
+{
+	return -EINVAL;
+}
+
+static int get_ksymbol_arch(struct kallsym_iter *iter)
+{
+	int ret = arch_get_kallsym(iter->pos - kallsyms_num_syms,
+				   &iter->value, &iter->type,
+				   iter->name);
+
+	if (ret < 0) {
+		iter->pos_arch_end = iter->pos;
+		return 0;
+	}
+
+	return 1;
+}
+
 static int get_ksymbol_mod(struct kallsym_iter *iter)
 {
-	int ret = module_get_kallsym(iter->pos - kallsyms_num_syms,
+	int ret = module_get_kallsym(iter->pos - iter->pos_arch_end,
 				     &iter->value, &iter->type,
 				     iter->name, iter->module_name,
 				     &iter->exported);
@@ -548,11 +522,25 @@ static int get_ksymbol_mod(struct kallsym_iter *iter)
 	return 1;
 }
 
+static int get_ksymbol_ftrace_mod(struct kallsym_iter *iter)
+{
+	int ret = ftrace_mod_get_kallsym(iter->pos - iter->pos_mod_end,
+					 &iter->value, &iter->type,
+					 iter->name, iter->module_name,
+					 &iter->exported);
+	if (ret < 0) {
+		iter->pos_ftrace_mod_end = iter->pos;
+		return 0;
+	}
+
+	return 1;
+}
+
 static int get_ksymbol_bpf(struct kallsym_iter *iter)
 {
 	iter->module_name[0] = '\0';
 	iter->exported = 0;
-	return bpf_get_kallsym(iter->pos - iter->pos_mod_end,
+	return bpf_get_kallsym(iter->pos - iter->pos_ftrace_mod_end,
 			       &iter->value, &iter->type,
 			       iter->name) < 0 ? 0 : 1;
 }
@@ -577,22 +565,35 @@ static void reset_iter(struct kallsym_iter *iter, loff_t new_pos)
 	iter->name[0] = '\0';
 	iter->nameoff = get_symbol_offset(new_pos);
 	iter->pos = new_pos;
-	if (new_pos == 0)
+	if (new_pos == 0) {
+		iter->pos_arch_end = 0;
 		iter->pos_mod_end = 0;
+		iter->pos_ftrace_mod_end = 0;
+	}
 }
 
+/*
+ * The end position (last + 1) of each additional kallsyms section is recorded
+ * in iter->pos_..._end as each section is added, and so can be used to
+ * determine which get_ksymbol_...() function to call next.
+ */
 static int update_iter_mod(struct kallsym_iter *iter, loff_t pos)
 {
 	iter->pos = pos;
 
-	if (iter->pos_mod_end > 0 &&
-	    iter->pos_mod_end < iter->pos)
-		return get_ksymbol_bpf(iter);
+	if ((!iter->pos_arch_end || iter->pos_arch_end > pos) &&
+	    get_ksymbol_arch(iter))
+		return 1;
 
-	if (!get_ksymbol_mod(iter))
-		return get_ksymbol_bpf(iter);
+	if ((!iter->pos_mod_end || iter->pos_mod_end > pos) &&
+	    get_ksymbol_mod(iter))
+		return 1;
 
-	return 1;
+	if ((!iter->pos_ftrace_mod_end || iter->pos_ftrace_mod_end > pos) &&
+	    get_ksymbol_ftrace_mod(iter))
+		return 1;
+
+	return get_ksymbol_bpf(iter);
 }
 
 /* Returns false if pos at or past end of file. */
@@ -634,11 +635,14 @@ static void s_stop(struct seq_file *m, void *p)
 
 static int s_show(struct seq_file *m, void *p)
 {
+	void *value;
 	struct kallsym_iter *iter = m->private;
 
 	/* Some debugging symbols have no name.  Ignore them. */
 	if (!iter->name[0])
 		return 0;
+
+	value = iter->show_value ? (void *)iter->value : NULL;
 
 	if (iter->module_name[0]) {
 		char type;
@@ -649,10 +653,10 @@ static int s_show(struct seq_file *m, void *p)
 		 */
 		type = iter->exported ? toupper(iter->type) :
 					tolower(iter->type);
-		seq_printf(m, "%pK %c %s\t[%s]\n", (void *)iter->value,
+		seq_printf(m, "%px %c %s\t[%s]\n", value,
 			   type, iter->name, iter->module_name);
 	} else
-		seq_printf(m, "%pK %c %s\n", (void *)iter->value,
+		seq_printf(m, "%px %c %s\n", value,
 			   iter->type, iter->name);
 	return 0;
 }

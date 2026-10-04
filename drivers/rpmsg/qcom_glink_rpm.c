@@ -1,14 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (c) 2016-2017, Linaro Ltd
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #include <linux/idr.h>
@@ -339,7 +331,6 @@ static struct platform_driver glink_rpm_driver = {
 	.driver = {
 		.name = "qcom_glink_rpm",
 		.of_match_table = glink_rpm_of_match,
-		.pm = &glink_native_pm_ops,
 	},
 };
 

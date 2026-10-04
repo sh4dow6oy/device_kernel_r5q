@@ -1,13 +1,6 @@
-/* Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+/* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
  */
 
 #ifndef _NPU_HW_ACCESS_H
@@ -23,12 +16,12 @@
  * Defines
  * -------------------------------------------------------------------------
  */
-#define IPC_MEM_OFFSET_FROM_SSTCM 0x00010000
+#define IPC_MEM_OFFSET_FROM_SSTCM 0x00018000
 #define SYS_CACHE_SCID 23
 
-#define QFPROM_FMAX_REG_OFFSET 0x000001C8
-#define QFPROM_FMAX_BITS_MASK  0x0000000C
-#define QFPROM_FMAX_BITS_SHIFT 2
+#define QFPROM_FMAX_REG_OFFSET 0x00006010
+#define QFPROM_FMAX_BITS_MASK  0x0003FC00
+#define QFPROM_FMAX_BITS_SHIFT 10
 
 #define REGW(npu_dev, off, val) npu_core_reg_write(npu_dev, off, val)
 #define REGR(npu_dev, off) npu_core_reg_read(npu_dev, off)
@@ -50,7 +43,6 @@ struct npu_ion_buf_t;
 struct npu_host_ctx;
 struct npu_client;
 typedef irqreturn_t (*intr_hdlr_fn)(int32_t irq, void *ptr);
-typedef void (*wq_hdlr_fn) (struct work_struct *work);
 
 /* -------------------------------------------------------------------------
  * Function Prototypes
@@ -58,13 +50,17 @@ typedef void (*wq_hdlr_fn) (struct work_struct *work);
  */
 uint32_t npu_core_reg_read(struct npu_device *npu_dev, uint32_t off);
 void npu_core_reg_write(struct npu_device *npu_dev, uint32_t off, uint32_t val);
-uint32_t npu_bwmon_reg_read(struct npu_device *npu_dev, uint32_t off);
-void npu_bwmon_reg_write(struct npu_device *npu_dev, uint32_t off,
+uint32_t npu_tcsr_reg_read(struct npu_device *npu_dev, uint32_t off);
+uint32_t npu_apss_shared_reg_read(struct npu_device *npu_dev, uint32_t off);
+void npu_apss_shared_reg_write(struct npu_device *npu_dev, uint32_t off,
+	uint32_t val);
+uint32_t npu_cc_reg_read(struct npu_device *npu_dev, uint32_t off);
+void npu_cc_reg_write(struct npu_device *npu_dev, uint32_t off,
 	uint32_t val);
 void npu_mem_write(struct npu_device *npu_dev, void *dst, void *src,
-	size_t size);
+	uint32_t size);
 int32_t npu_mem_read(struct npu_device *npu_dev, void *src, void *dst,
-	size_t size);
+	uint32_t size);
 uint32_t npu_qfprom_reg_read(struct npu_device *npu_dev, uint32_t off);
 
 int npu_mem_map(struct npu_client *client, int buf_hdl, uint32_t size,
@@ -89,8 +85,5 @@ void npu_disable_sys_cache(struct npu_device *npu_dev);
 
 void *subsystem_get_local(char *sub_system);
 void subsystem_put_local(void *sub_system_handle);
-
-void npu_process_log_message(struct npu_device *npu_dev, uint32_t *msg,
-	uint32_t size);
 
 #endif /* _NPU_HW_ACCESS_H*/

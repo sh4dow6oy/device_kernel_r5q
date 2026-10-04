@@ -83,7 +83,7 @@ const char *const bpf_alu_string[16] = {
 static const char *const bpf_atomic_alu_string[16] = {
 	[BPF_ADD >> 4]  = "add",
 	[BPF_AND >> 4]  = "and",
-	[BPF_OR >> 4]   = "or",
+	[BPF_OR >> 4]  = "or",
 	[BPF_XOR >> 4]  = "xor",
 };
 
@@ -174,8 +174,7 @@ void print_bpf_insn(const struct bpf_insn_cbs *cbs,
 			    insn->imm == (BPF_AND | BPF_FETCH) ||
 			    insn->imm == (BPF_OR | BPF_FETCH) ||
 			    insn->imm == (BPF_XOR | BPF_FETCH))) {
-			verbose(cbs->private_data,
-				"(%02x) r%d = atomic%s_fetch_%s((%s *)(r%d %+d), r%d)\n",
+			verbose(cbs->private_data, "(%02x) r%d = atomic%s_fetch_%s((%s *)(r%d %+d), r%d)\n",
 				insn->code, insn->src_reg,
 				BPF_SIZE(insn->code) == BPF_DW ? "64" : "",
 				bpf_atomic_alu_string[BPF_OP(insn->imm) >> 4],
@@ -183,16 +182,15 @@ void print_bpf_insn(const struct bpf_insn_cbs *cbs,
 				insn->dst_reg, insn->off, insn->src_reg);
 		} else if (BPF_MODE(insn->code) == BPF_ATOMIC &&
 			   insn->imm == BPF_CMPXCHG) {
-			verbose(cbs->private_data,
-				"(%02x) r0 = atomic%s_cmpxchg((%s *)(r%d %+d), r0, r%d)\n",
+			verbose(cbs->private_data, "(%02x) r0 = atomic%s_cmpxchg((%s *)(r%d %+d), r0, r%d)\n",
 				insn->code,
 				BPF_SIZE(insn->code) == BPF_DW ? "64" : "",
 				bpf_ldst_string[BPF_SIZE(insn->code) >> 3],
-				insn->dst_reg, insn->off, insn->src_reg);
+				insn->dst_reg, insn->off,
+				insn->src_reg);
 		} else if (BPF_MODE(insn->code) == BPF_ATOMIC &&
 			   insn->imm == BPF_XCHG) {
-			verbose(cbs->private_data,
-				"(%02x) r%d = atomic%s_xchg((%s *)(r%d %+d), r%d)\n",
+			verbose(cbs->private_data, "(%02x) r%d = atomic%s_xchg((%s *)(r%d %+d), r%d)\n",
 				insn->code, insn->src_reg,
 				BPF_SIZE(insn->code) == BPF_DW ? "64" : "",
 				bpf_ldst_string[BPF_SIZE(insn->code) >> 3],

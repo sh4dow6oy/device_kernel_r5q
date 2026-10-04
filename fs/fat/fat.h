@@ -1,9 +1,4 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-
-/* @fs.sec -- d315380a99f81d98b0c3718617b5da5a -- */
-/* @fs.sec -- 0aada64b546ebb65e2ae266910f5b40a -- */
-/* @fs.sec -- fafc95ecfe8e741015d6cc26a6a3af41 -- */
-
 #ifndef _FAT_H
 #define _FAT_H
 
@@ -12,13 +7,6 @@
 #include <linux/hash.h>
 #include <linux/ratelimit.h>
 #include <linux/msdos_fs.h>
-#include <linux/kobject.h>
-
-#ifdef CONFIG_FAT_SUPPORT_STLOG
-#include <linux/fslog.h>
-#else
-#define ST_LOG(fmt, ...)
-#endif
 
 /*
  * vfat shortname flags
@@ -316,7 +304,7 @@ extern int fat_scan_logstart(struct inode *dir, int i_logstart,
 			     struct fat_slot_info *sinfo);
 extern int fat_get_dotdot_entry(struct inode *dir, struct buffer_head **bh,
 				struct msdos_dir_entry **de);
-extern int fat_alloc_new_dir(struct inode *dir, struct timespec *ts);
+extern int fat_alloc_new_dir(struct inode *dir, struct timespec64 *ts);
 extern int fat_add_entries(struct inode *dir, void *slots, int nr_slots,
 			   struct fat_slot_info *sinfo);
 extern int fat_remove_entries(struct inode *dir, struct fat_slot_info *sinfo);
@@ -374,6 +362,7 @@ extern int fat_alloc_clusters(struct inode *inode, int *cluster,
 			      int nr_cluster);
 extern int fat_free_clusters(struct inode *inode, int cluster);
 extern int fat_count_free_clusters(struct super_block *sb);
+extern int fat_trim_fs(struct inode *inode, struct fstrim_range *range);
 
 /* fat/file.c */
 extern long fat_generic_ioctl(struct file *filp, unsigned int cmd,
@@ -408,18 +397,6 @@ static inline unsigned long fat_dir_hash(int logstart)
 extern int fat_add_cluster(struct inode *inode);
 
 /* fat/misc.c */
-#ifdef CONFIG_FAT_UEVENT
-extern int fat_uevent_init(struct kset *fat_kset);
-extern void fat_uevent_uninit(void);
-extern void fat_uevent_ro_remount(struct super_block *sb);
-#else
-static inline int fat_uevent_init(struct kset *fat_kset)
-{
-	return 0;
-}
-static inline void fat_uevent_uninit(void) {};
-static inline void fat_uevent_ro_remount(struct super_block *sb) {};
-#endif
 extern __printf(3, 4) __cold
 void __fat_fs_error(struct super_block *sb, int report, const char *fmt, ...);
 #define fat_fs_error(sb, fmt, args...)		\
@@ -435,9 +412,9 @@ void fat_msg(struct super_block *sb, const char *level, const char *fmt, ...);
 	 } while (0)
 extern int fat_clusters_flush(struct super_block *sb);
 extern int fat_chain_add(struct inode *inode, int new_dclus, int nr_cluster);
-extern void fat_time_fat2unix(struct msdos_sb_info *sbi, struct timespec *ts,
+extern void fat_time_fat2unix(struct msdos_sb_info *sbi, struct timespec64 *ts,
 			      __le16 __time, __le16 __date, u8 time_cs);
-extern void fat_time_unix2fat(struct msdos_sb_info *sbi, struct timespec *ts,
+extern void fat_time_unix2fat(struct msdos_sb_info *sbi, struct timespec64 *ts,
 			      __le16 *time, __le16 *date, u8 *time_cs);
 extern int fat_sync_bhs(struct buffer_head **bhs, int nr_bhs);
 
@@ -447,14 +424,6 @@ void fat_cache_destroy(void);
 /* fat/nfs.c */
 extern const struct export_operations fat_export_ops;
 extern const struct export_operations fat_export_ops_nostale;
-
-/* fat/xattr.c */
-#ifdef CONFIG_FAT_VIRTUAL_XATTR
-void setup_fat_xattr_handler(struct super_block *sb);
-extern ssize_t fat_listxattr(struct dentry *dentry, char *list, size_t size);
-#else
-static inline void setup_fat_xattr_handler(struct super_block *sb) {};
-#endif
 
 /* helper for printk */
 typedef unsigned long long	llu;

@@ -16,8 +16,8 @@
 #include <linux/mutex.h>
 #include <asm/div64.h>
 
-#include "dvb_math.h"
-#include "dvb_frontend.h"
+#include <media/dvb_math.h>
+#include <media/dvb_frontend.h>
 
 #include "dib7000p.h"
 
@@ -809,7 +809,7 @@ static int dib7000p_set_dds(struct dib7000p_state *state, s32 offset_khz)
 {
 	u32 internal = dib7000p_get_internal_freq(state);
 	s32 unit_khz_dds_val;
-	u32 abs_offset_khz = ABS(offset_khz);
+	u32 abs_offset_khz = abs(offset_khz);
 	u32 dds = state->cfg.bw->ifreq & 0x1ffffff;
 	u8 invert = !!(state->cfg.bw->ifreq & (1 << 25));
 	if (internal == 0) {
@@ -2018,10 +2018,10 @@ static int dib7000pc_detection(struct i2c_adapter *i2c_adap)
 	};
 	int ret = 0;
 
-	tx = kzalloc(2*sizeof(u8), GFP_KERNEL);
+	tx = kzalloc(2, GFP_KERNEL);
 	if (!tx)
 		return -ENOMEM;
-	rx = kzalloc(2*sizeof(u8), GFP_KERNEL);
+	rx = kzalloc(2, GFP_KERNEL);
 	if (!rx) {
 		ret = -ENOMEM;
 		goto rx_memory_error;
@@ -2195,7 +2195,11 @@ static int w7090p_tuner_write_serpar(struct i2c_adapter *i2c_adap, struct i2c_ms
 	struct dib7000p_state *state = i2c_get_adapdata(i2c_adap);
 	u8 n_overflow = 1;
 	u16 i = 1000;
-	u16 serpar_num = msg[0].buf[0];
+	u16 serpar_num;
+
+	if (msg[0].len < 3)
+		return -EOPNOTSUPP;
+	serpar_num = msg[0].buf[0];
 
 	while (n_overflow == 1 && i) {
 		n_overflow = (dib7000p_read_word(state, 1984) >> 1) & 0x1;
@@ -2214,8 +2218,12 @@ static int w7090p_tuner_read_serpar(struct i2c_adapter *i2c_adap, struct i2c_msg
 	struct dib7000p_state *state = i2c_get_adapdata(i2c_adap);
 	u8 n_overflow = 1, n_empty = 1;
 	u16 i = 1000;
-	u16 serpar_num = msg[0].buf[0];
+	u16 serpar_num;
 	u16 read_word;
+
+	if (msg[0].len < 1 || msg[1].len < 2)
+		return -EOPNOTSUPP;
+	serpar_num = msg[0].buf[0];
 
 	while (n_overflow == 1 && i) {
 		n_overflow = (dib7000p_read_word(state, 1984) >> 1) & 0x1;
@@ -2258,8 +2266,12 @@ static int dib7090p_rw_on_apb(struct i2c_adapter *i2c_adap,
 	u16 word;
 
 	if (num == 1) {		/* write */
+		if (msg[0].len < 3)
+			return -EOPNOTSUPP;
 		dib7000p_write_word(state, apb_address, ((msg[0].buf[1] << 8) | (msg[0].buf[2])));
 	} else {
+		if (msg[1].len < 2)
+			return -EOPNOTSUPP;
 		word = dib7000p_read_word(state, apb_address);
 		msg[1].buf[0] = (word >> 8) & 0xff;
 		msg[1].buf[1] = (word) & 0xff;
@@ -2824,9 +2836,9 @@ static const struct dvb_frontend_ops dib7000p_ops = {
 	.delsys = { SYS_DVBT },
 	.info = {
 		 .name = "DiBcom 7000PC",
-		 .frequency_min = 44250000,
-		 .frequency_max = 867250000,
-		 .frequency_stepsize = 62500,
+		 .frequency_min_hz =  44250 * kHz,
+		 .frequency_max_hz = 867250 * kHz,
+		 .frequency_stepsize_hz = 62500,
 		 .caps = FE_CAN_INVERSION_AUTO |
 		 FE_CAN_FEC_1_2 | FE_CAN_FEC_2_3 | FE_CAN_FEC_3_4 |
 		 FE_CAN_FEC_5_6 | FE_CAN_FEC_7_8 | FE_CAN_FEC_AUTO |

@@ -99,6 +99,8 @@ static int ufshcd_crypto_qti_keyslot_program(struct keyslot_manager *ksm,
 	      hba->crypto_cap_array[crypto_alg_id].sdus_mask))
 		return -EINVAL;
 
+	if (!hba->pm_op_in_progress)
+		pm_runtime_get_sync(hba->dev);
 	err = ufshcd_hold(hba, false);
 	if (err) {
 		pr_err("%s: failed to enable clocks, err %d\n", __func__, err);
@@ -111,8 +113,11 @@ static int ufshcd_crypto_qti_keyslot_program(struct keyslot_manager *ksm,
 		pr_err("%s: failed with error %d\n", __func__, err);
 
 	ufshcd_release(hba, false);
+
 out:
-		return err;
+	if (!hba->pm_op_in_progress)
+		pm_runtime_put_sync(hba->dev);
+	return err;
 }
 
 static int ufshcd_crypto_qti_keyslot_evict(struct keyslot_manager *ksm,
@@ -243,8 +248,6 @@ static int ufshcd_hba_init_crypto_qti_spec(struct ufs_hba *hba,
 		err = -ENOMEM;
 		goto out;
 	}
-	keyslot_manager_set_max_dun_bytes(hba->ksm, sizeof(u64));
-
 	pr_debug("%s: keyslot manager created\n", __func__);
 
 	return 0;
@@ -268,7 +271,9 @@ int ufshcd_crypto_qti_init_crypto(struct ufs_hba *hba,
 	mmio_base = devm_ioremap_resource(hba->dev, mem_res);
 	if (IS_ERR(mmio_base)) {
 		pr_err("%s: Unable to get ufs_crypto mmio base\n", __func__);
-		return PTR_ERR(mmio_base);
+		hba->caps &= ~UFSHCD_CAP_CRYPTO;
+		hba->quirks |= UFSHCD_QUIRK_BROKEN_CRYPTO;
+		return err;
 	}
 
 	err = ufshcd_hba_init_crypto_qti_spec(hba, &ufshcd_crypto_qti_ksm_ops);

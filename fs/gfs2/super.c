@@ -46,258 +46,6 @@
 #include "sys.h"
 #include "xattr.h"
 
-#define args_neq(a1, a2, x) ((a1)->ar_##x != (a2)->ar_##x)
-
-enum {
-	Opt_lockproto,
-	Opt_locktable,
-	Opt_hostdata,
-	Opt_spectator,
-	Opt_ignore_local_fs,
-	Opt_localflocks,
-	Opt_localcaching,
-	Opt_debug,
-	Opt_nodebug,
-	Opt_upgrade,
-	Opt_acl,
-	Opt_noacl,
-	Opt_quota_off,
-	Opt_quota_account,
-	Opt_quota_on,
-	Opt_quota,
-	Opt_noquota,
-	Opt_suiddir,
-	Opt_nosuiddir,
-	Opt_data_writeback,
-	Opt_data_ordered,
-	Opt_meta,
-	Opt_discard,
-	Opt_nodiscard,
-	Opt_commit,
-	Opt_err_withdraw,
-	Opt_err_panic,
-	Opt_statfs_quantum,
-	Opt_statfs_percent,
-	Opt_quota_quantum,
-	Opt_barrier,
-	Opt_nobarrier,
-	Opt_rgrplvb,
-	Opt_norgrplvb,
-	Opt_loccookie,
-	Opt_noloccookie,
-	Opt_error,
-};
-
-static const match_table_t tokens = {
-	{Opt_lockproto, "lockproto=%s"},
-	{Opt_locktable, "locktable=%s"},
-	{Opt_hostdata, "hostdata=%s"},
-	{Opt_spectator, "spectator"},
-	{Opt_spectator, "norecovery"},
-	{Opt_ignore_local_fs, "ignore_local_fs"},
-	{Opt_localflocks, "localflocks"},
-	{Opt_localcaching, "localcaching"},
-	{Opt_debug, "debug"},
-	{Opt_nodebug, "nodebug"},
-	{Opt_upgrade, "upgrade"},
-	{Opt_acl, "acl"},
-	{Opt_noacl, "noacl"},
-	{Opt_quota_off, "quota=off"},
-	{Opt_quota_account, "quota=account"},
-	{Opt_quota_on, "quota=on"},
-	{Opt_quota, "quota"},
-	{Opt_noquota, "noquota"},
-	{Opt_suiddir, "suiddir"},
-	{Opt_nosuiddir, "nosuiddir"},
-	{Opt_data_writeback, "data=writeback"},
-	{Opt_data_ordered, "data=ordered"},
-	{Opt_meta, "meta"},
-	{Opt_discard, "discard"},
-	{Opt_nodiscard, "nodiscard"},
-	{Opt_commit, "commit=%d"},
-	{Opt_err_withdraw, "errors=withdraw"},
-	{Opt_err_panic, "errors=panic"},
-	{Opt_statfs_quantum, "statfs_quantum=%d"},
-	{Opt_statfs_percent, "statfs_percent=%d"},
-	{Opt_quota_quantum, "quota_quantum=%d"},
-	{Opt_barrier, "barrier"},
-	{Opt_nobarrier, "nobarrier"},
-	{Opt_rgrplvb, "rgrplvb"},
-	{Opt_norgrplvb, "norgrplvb"},
-	{Opt_loccookie, "loccookie"},
-	{Opt_noloccookie, "noloccookie"},
-	{Opt_error, NULL}
-};
-
-/**
- * gfs2_mount_args - Parse mount options
- * @args: The structure into which the parsed options will be written
- * @options: The options to parse
- *
- * Return: errno
- */
-
-int gfs2_mount_args(struct gfs2_args *args, char *options)
-{
-	char *o;
-	int token;
-	substring_t tmp[MAX_OPT_ARGS];
-	int rv;
-
-	/* Split the options into tokens with the "," character and
-	   process them */
-
-	while (1) {
-		o = strsep(&options, ",");
-		if (o == NULL)
-			break;
-		if (*o == '\0')
-			continue;
-
-		token = match_token(o, tokens, tmp);
-		switch (token) {
-		case Opt_lockproto:
-			match_strlcpy(args->ar_lockproto, &tmp[0],
-				      GFS2_LOCKNAME_LEN);
-			break;
-		case Opt_locktable:
-			match_strlcpy(args->ar_locktable, &tmp[0],
-				      GFS2_LOCKNAME_LEN);
-			break;
-		case Opt_hostdata:
-			match_strlcpy(args->ar_hostdata, &tmp[0],
-				      GFS2_LOCKNAME_LEN);
-			break;
-		case Opt_spectator:
-			args->ar_spectator = 1;
-			break;
-		case Opt_ignore_local_fs:
-			/* Retained for backwards compat only */
-			break;
-		case Opt_localflocks:
-			args->ar_localflocks = 1;
-			break;
-		case Opt_localcaching:
-			/* Retained for backwards compat only */
-			break;
-		case Opt_debug:
-			if (args->ar_errors == GFS2_ERRORS_PANIC) {
-				pr_warn("-o debug and -o errors=panic are mutually exclusive\n");
-				return -EINVAL;
-			}
-			args->ar_debug = 1;
-			break;
-		case Opt_nodebug:
-			args->ar_debug = 0;
-			break;
-		case Opt_upgrade:
-			/* Retained for backwards compat only */
-			break;
-		case Opt_acl:
-			args->ar_posix_acl = 1;
-			break;
-		case Opt_noacl:
-			args->ar_posix_acl = 0;
-			break;
-		case Opt_quota_off:
-		case Opt_noquota:
-			args->ar_quota = GFS2_QUOTA_OFF;
-			break;
-		case Opt_quota_account:
-			args->ar_quota = GFS2_QUOTA_ACCOUNT;
-			break;
-		case Opt_quota_on:
-		case Opt_quota:
-			args->ar_quota = GFS2_QUOTA_ON;
-			break;
-		case Opt_suiddir:
-			args->ar_suiddir = 1;
-			break;
-		case Opt_nosuiddir:
-			args->ar_suiddir = 0;
-			break;
-		case Opt_data_writeback:
-			args->ar_data = GFS2_DATA_WRITEBACK;
-			break;
-		case Opt_data_ordered:
-			args->ar_data = GFS2_DATA_ORDERED;
-			break;
-		case Opt_meta:
-			args->ar_meta = 1;
-			break;
-		case Opt_discard:
-			args->ar_discard = 1;
-			break;
-		case Opt_nodiscard:
-			args->ar_discard = 0;
-			break;
-		case Opt_commit:
-			rv = match_int(&tmp[0], &args->ar_commit);
-			if (rv || args->ar_commit <= 0) {
-				pr_warn("commit mount option requires a positive numeric argument\n");
-				return rv ? rv : -EINVAL;
-			}
-			break;
-		case Opt_statfs_quantum:
-			rv = match_int(&tmp[0], &args->ar_statfs_quantum);
-			if (rv || args->ar_statfs_quantum < 0) {
-				pr_warn("statfs_quantum mount option requires a non-negative numeric argument\n");
-				return rv ? rv : -EINVAL;
-			}
-			break;
-		case Opt_quota_quantum:
-			rv = match_int(&tmp[0], &args->ar_quota_quantum);
-			if (rv || args->ar_quota_quantum <= 0) {
-				pr_warn("quota_quantum mount option requires a positive numeric argument\n");
-				return rv ? rv : -EINVAL;
-			}
-			break;
-		case Opt_statfs_percent:
-			rv = match_int(&tmp[0], &args->ar_statfs_percent);
-			if (rv || args->ar_statfs_percent < 0 ||
-			    args->ar_statfs_percent > 100) {
-				pr_warn("statfs_percent mount option requires a numeric argument between 0 and 100\n");
-				return rv ? rv : -EINVAL;
-			}
-			break;
-		case Opt_err_withdraw:
-			args->ar_errors = GFS2_ERRORS_WITHDRAW;
-			break;
-		case Opt_err_panic:
-			if (args->ar_debug) {
-				pr_warn("-o debug and -o errors=panic are mutually exclusive\n");
-				return -EINVAL;
-			}
-			args->ar_errors = GFS2_ERRORS_PANIC;
-			break;
-		case Opt_barrier:
-			args->ar_nobarrier = 0;
-			break;
-		case Opt_nobarrier:
-			args->ar_nobarrier = 1;
-			break;
-		case Opt_rgrplvb:
-			args->ar_rgrplvb = 1;
-			break;
-		case Opt_norgrplvb:
-			args->ar_rgrplvb = 0;
-			break;
-		case Opt_loccookie:
-			args->ar_loccookie = 1;
-			break;
-		case Opt_noloccookie:
-			args->ar_loccookie = 0;
-			break;
-		case Opt_error:
-		default:
-			pr_warn("invalid mount option: %s\n", o);
-			return -EINVAL;
-		}
-	}
-
-	return 0;
-}
-
 /**
  * gfs2_jindex_free - Clear all the journal index information
  * @sdp: The GFS2 superblock
@@ -396,6 +144,7 @@ static int init_threads(struct gfs2_sbd *sdp)
 
 fail:
 	kthread_stop(sdp->sd_logd_process);
+	sdp->sd_logd_process = NULL;
 	return error;
 }
 
@@ -453,8 +202,12 @@ fail:
 	freeze_gh.gh_flags |= GL_NOCACHE;
 	gfs2_glock_dq_uninit(&freeze_gh);
 fail_threads:
-	kthread_stop(sdp->sd_quotad_process);
-	kthread_stop(sdp->sd_logd_process);
+	if (sdp->sd_quotad_process)
+		kthread_stop(sdp->sd_quotad_process);
+	sdp->sd_quotad_process = NULL;
+	if (sdp->sd_logd_process)
+		kthread_stop(sdp->sd_logd_process);
+	sdp->sd_logd_process = NULL;
 	return error;
 }
 
@@ -754,17 +507,26 @@ static int gfs2_write_inode(struct inode *inode, struct writeback_control *wbc)
 	struct address_space *metamapping = gfs2_glock2aspace(ip->i_gl);
 	struct backing_dev_info *bdi = inode_to_bdi(metamapping->host);
 	int ret = 0;
+	bool flush_all = (wbc->sync_mode == WB_SYNC_ALL || gfs2_is_jdata(ip));
 
-	if (wbc->sync_mode == WB_SYNC_ALL)
-		gfs2_log_flush(GFS2_SB(inode), ip->i_gl, NORMAL_FLUSH);
+	if (flush_all)
+		gfs2_log_flush(GFS2_SB(inode), ip->i_gl,
+			       GFS2_LOG_HEAD_FLUSH_NORMAL |
+			       GFS2_LFC_WRITE_INODE);
 	if (bdi->wb.dirty_exceeded)
 		gfs2_ail1_flush(sdp, wbc);
 	else
 		filemap_fdatawrite(metamapping);
-	if (wbc->sync_mode == WB_SYNC_ALL)
+	if (flush_all)
 		ret = filemap_fdatawait(metamapping);
 	if (ret)
 		mark_inode_dirty_sync(inode);
+	else {
+		spin_lock(&inode->i_lock);
+		if (!(inode->i_flags & I_DIRTY))
+			gfs2_ordered_del_inode(ip);
+		spin_unlock(&inode->i_lock);
+	}
 	return ret;
 }
 
@@ -835,7 +597,7 @@ out:
  * Returns: errno
  */
 
-static int gfs2_make_fs_ro(struct gfs2_sbd *sdp)
+int gfs2_make_fs_ro(struct gfs2_sbd *sdp)
 {
 	struct gfs2_holder freeze_gh;
 	int error;
@@ -846,13 +608,18 @@ static int gfs2_make_fs_ro(struct gfs2_sbd *sdp)
 		return error;
 
 	flush_workqueue(gfs2_delete_workqueue);
-	kthread_stop(sdp->sd_quotad_process);
-	kthread_stop(sdp->sd_logd_process);
+	if (sdp->sd_quotad_process)
+		kthread_stop(sdp->sd_quotad_process);
+	sdp->sd_quotad_process = NULL;
+	if (sdp->sd_logd_process)
+		kthread_stop(sdp->sd_logd_process);
+	sdp->sd_logd_process = NULL;
 
 	gfs2_quota_sync(sdp->sd_vfs, 0);
 	gfs2_statfs_sync(sdp->sd_vfs, 0);
 
-	gfs2_log_flush(sdp, NULL, SHUTDOWN_FLUSH);
+	gfs2_log_flush(sdp, NULL, GFS2_LOG_HEAD_FLUSH_SHUTDOWN |
+		       GFS2_LFC_MAKE_FS_RO);
 	wait_event(sdp->sd_reserving_log_wait, atomic_read(&sdp->sd_reserving_log) == 0);
 	gfs2_assert_warn(sdp, atomic_read(&sdp->sd_log_blks_free) == sdp->sd_jdesc->jd_blocks);
 
@@ -946,7 +713,8 @@ static int gfs2_sync_fs(struct super_block *sb, int wait)
 
 	gfs2_quota_sync(sb, -1);
 	if (wait)
-		gfs2_log_flush(sdp, NULL, NORMAL_FLUSH);
+		gfs2_log_flush(sdp, NULL, GFS2_LOG_HEAD_FLUSH_NORMAL |
+			       GFS2_LFC_SYNC_FS);
 	return sdp->sd_log_error;
 }
 
@@ -1089,7 +857,7 @@ static int gfs2_statfs_slow(struct gfs2_sbd *sdp, struct gfs2_statfs_change_host
 	int error = 0, err;
 
 	memset(sc, 0, sizeof(struct gfs2_statfs_change_host));
-	gha = kmalloc(slots * sizeof(struct gfs2_holder), GFP_KERNEL);
+	gha = kmalloc_array(slots, sizeof(struct gfs2_holder), GFP_KERNEL);
 	if (!gha)
 		return -ENOMEM;
 	for (x = 0; x < slots; x++)
@@ -1212,86 +980,6 @@ static int gfs2_statfs(struct dentry *dentry, struct kstatfs *buf)
 	buf->f_ffree = sc.sc_free;
 	buf->f_namelen = GFS2_FNAMESIZE;
 
-	return 0;
-}
-
-/**
- * gfs2_remount_fs - called when the FS is remounted
- * @sb:  the filesystem
- * @flags:  the remount flags
- * @data:  extra data passed in (not used right now)
- *
- * Returns: errno
- */
-
-static int gfs2_remount_fs(struct super_block *sb, int *flags, char *data)
-{
-	struct gfs2_sbd *sdp = sb->s_fs_info;
-	struct gfs2_args args = sdp->sd_args; /* Default to current settings */
-	struct gfs2_tune *gt = &sdp->sd_tune;
-	int error;
-
-	sync_filesystem(sb);
-
-	spin_lock(&gt->gt_spin);
-	args.ar_commit = gt->gt_logd_secs;
-	args.ar_quota_quantum = gt->gt_quota_quantum;
-	if (gt->gt_statfs_slow)
-		args.ar_statfs_quantum = 0;
-	else
-		args.ar_statfs_quantum = gt->gt_statfs_quantum;
-	spin_unlock(&gt->gt_spin);
-	error = gfs2_mount_args(&args, data);
-	if (error)
-		return error;
-
-	/* Not allowed to change locking details */
-	if (strcmp(args.ar_lockproto, sdp->sd_args.ar_lockproto) ||
-	    strcmp(args.ar_locktable, sdp->sd_args.ar_locktable) ||
-	    strcmp(args.ar_hostdata, sdp->sd_args.ar_hostdata))
-		return -EINVAL;
-
-	/* Some flags must not be changed */
-	if (args_neq(&args, &sdp->sd_args, spectator) ||
-	    args_neq(&args, &sdp->sd_args, localflocks) ||
-	    args_neq(&args, &sdp->sd_args, meta))
-		return -EINVAL;
-
-	if (sdp->sd_args.ar_spectator)
-		*flags |= MS_RDONLY;
-
-	if ((sb->s_flags ^ *flags) & MS_RDONLY) {
-		if (*flags & MS_RDONLY)
-			error = gfs2_make_fs_ro(sdp);
-		else
-			error = gfs2_make_fs_rw(sdp);
-		if (error)
-			return error;
-	}
-
-	sdp->sd_args = args;
-	if (sdp->sd_args.ar_posix_acl)
-		sb->s_flags |= MS_POSIXACL;
-	else
-		sb->s_flags &= ~MS_POSIXACL;
-	if (sdp->sd_args.ar_nobarrier)
-		set_bit(SDF_NOBARRIERS, &sdp->sd_flags);
-	else
-		clear_bit(SDF_NOBARRIERS, &sdp->sd_flags);
-	spin_lock(&gt->gt_spin);
-	gt->gt_logd_secs = args.ar_commit;
-	gt->gt_quota_quantum = args.ar_quota_quantum;
-	if (args.ar_statfs_quantum) {
-		gt->gt_statfs_slow = 0;
-		gt->gt_statfs_quantum = args.ar_statfs_quantum;
-	}
-	else {
-		gt->gt_statfs_slow = 1;
-		gt->gt_statfs_quantum = 30;
-	}
-	spin_unlock(&gt->gt_spin);
-
-	gfs2_online_uevent(sdp);
 	return 0;
 }
 
@@ -1664,7 +1352,8 @@ alloc_failed:
 	goto out_unlock;
 
 out_truncate:
-	gfs2_log_flush(sdp, ip->i_gl, NORMAL_FLUSH);
+	gfs2_log_flush(sdp, ip->i_gl, GFS2_LOG_HEAD_FLUSH_NORMAL |
+		       GFS2_LFC_EVICT_INODE);
 	metamapping = gfs2_glock2aspace(ip->i_gl);
 	if (test_bit(GLF_DIRTY, &ip->i_gl->gl_flags)) {
 		filemap_fdatawrite(metamapping);
@@ -1732,7 +1421,6 @@ static struct inode *gfs2_alloc_inode(struct super_block *sb)
 	if (ip) {
 		ip->i_flags = 0;
 		ip->i_gl = NULL;
-		ip->i_rgd = NULL;
 		memset(&ip->i_res, 0, sizeof(ip->i_res));
 		RB_CLEAR_NODE(&ip->i_res.rs_node);
 		ip->i_rahead = 0;
@@ -1762,7 +1450,6 @@ const struct super_operations gfs2_super_ops = {
 	.freeze_super		= gfs2_freeze,
 	.thaw_super		= gfs2_unfreeze,
 	.statfs			= gfs2_statfs,
-	.remount_fs		= gfs2_remount_fs,
 	.drop_inode		= gfs2_drop_inode,
 	.show_options		= gfs2_show_options,
 };

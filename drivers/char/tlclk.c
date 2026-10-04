@@ -184,9 +184,8 @@ static unsigned int telclk_interrupt;
 static int int_events;		/* Event that generate a interrupt */
 static int got_event;		/* if events processing have been done */
 
-static void switchover_timeout(unsigned long data);
-static struct timer_list switchover_timer =
-	TIMER_INITIALIZER(switchover_timeout , 0, 0);
+static void switchover_timeout(struct timer_list *t);
+static struct timer_list switchover_timer;
 static unsigned long tlclk_timer_data;
 
 static struct tlclk_alarms *alarm_events;
@@ -264,6 +263,7 @@ static ssize_t tlclk_read(struct file *filp, char __user *buf, size_t count,
 }
 
 static const struct file_operations tlclk_fops = {
+	.owner = THIS_MODULE,
 	.read = tlclk_read,
 	.open = tlclk_open,
 	.release = tlclk_release,
@@ -808,7 +808,7 @@ static int __init tlclk_init(void)
 		goto out3;
 	}
 
-	init_timer(&switchover_timer);
+	timer_setup(&switchover_timer, switchover_timeout, 0);
 
 	ret = misc_register(&tlclk_miscdev);
 	if (ret < 0) {
@@ -852,15 +852,18 @@ static void __exit tlclk_cleanup(void)
 	misc_deregister(&tlclk_miscdev);
 	unregister_chrdev(tlclk_major, "telco_clock");
 
+	got_event = 1;
+	wake_up_all(&wq);
+
 	release_region(TLCLK_BASE, 8);
 	del_timer_sync(&switchover_timer);
 	kfree(alarm_events);
 
 }
 
-static void switchover_timeout(unsigned long data)
+static void switchover_timeout(struct timer_list *unused)
 {
-	unsigned long flags = *(unsigned long *) data;
+	unsigned long flags = tlclk_timer_data;
 
 	if ((flags & 1)) {
 		if ((inb(TLCLK_REG1) & 0x08) != (flags & 0x08))
@@ -925,7 +928,6 @@ static irqreturn_t tlclk_interrupt(int irq, void *dev_id)
 		/* TIMEOUT in ~10ms */
 		switchover_timer.expires = jiffies + msecs_to_jiffies(10);
 		tlclk_timer_data = inb(TLCLK_REG1);
-		switchover_timer.data = (unsigned long) &tlclk_timer_data;
 		mod_timer(&switchover_timer, switchover_timer.expires);
 	} else {
 		got_event = 1;

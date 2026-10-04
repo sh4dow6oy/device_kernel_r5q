@@ -33,7 +33,6 @@ static int dev_pm_attach_wake_irq(struct device *dev, int irq,
 				  struct wake_irq *wirq)
 {
 	unsigned long flags;
-	int err;
 
 	if (!dev || !wirq)
 		return -EINVAL;
@@ -45,12 +44,11 @@ static int dev_pm_attach_wake_irq(struct device *dev, int irq,
 		return -EEXIST;
 	}
 
-	err = device_wakeup_attach_irq(dev, wirq);
-	if (!err)
-		dev->power.wakeirq = wirq;
+	dev->power.wakeirq = wirq;
+	device_wakeup_attach_irq(dev, wirq);
 
 	spin_unlock_irqrestore(&dev->power.lock, flags);
-	return err;
+	return 0;
 }
 
 /**
@@ -99,13 +97,16 @@ EXPORT_SYMBOL_GPL(dev_pm_set_wake_irq);
  */
 void dev_pm_clear_wake_irq(struct device *dev)
 {
-	struct wake_irq *wirq = dev->power.wakeirq;
+	struct wake_irq *wirq;
 	unsigned long flags;
 
-	if (!wirq)
-		return;
-
 	spin_lock_irqsave(&dev->power.lock, flags);
+	wirq = dev->power.wakeirq;
+	if (!wirq) {
+		spin_unlock_irqrestore(&dev->power.lock, flags);
+		return;
+	}
+
 	device_wakeup_detach_irq(dev);
 	dev->power.wakeirq = NULL;
 	spin_unlock_irqrestore(&dev->power.lock, flags);
@@ -114,6 +115,7 @@ void dev_pm_clear_wake_irq(struct device *dev)
 		free_irq(wirq->irq, wirq);
 		wirq->status &= ~WAKE_IRQ_DEDICATED_MASK;
 	}
+	kfree(wirq->name);
 	kfree(wirq);
 }
 EXPORT_SYMBOL_GPL(dev_pm_clear_wake_irq);
@@ -169,6 +171,12 @@ static int __dev_pm_set_dedicated_wake_irq(struct device *dev, int irq, unsigned
 	if (!wirq)
 		return -ENOMEM;
 
+	wirq->name = kasprintf(GFP_KERNEL, "%s:wakeup", dev_name(dev));
+	if (!wirq->name) {
+		err = -ENOMEM;
+		goto err_free;
+	}
+
 	wirq->dev = dev;
 	wirq->irq = irq;
 	irq_set_status_flags(irq, IRQ_NOAUTOEN);
@@ -181,9 +189,9 @@ static int __dev_pm_set_dedicated_wake_irq(struct device *dev, int irq, unsigned
 	 * so we use a threaded irq.
 	 */
 	err = request_threaded_irq(irq, NULL, handle_threaded_wake_irq,
-				   IRQF_ONESHOT, dev_name(dev), wirq);
+				   IRQF_ONESHOT, wirq->name, wirq);
 	if (err)
-		goto err_free;
+		goto err_free_name;
 
 	err = dev_pm_attach_wake_irq(dev, irq, wirq);
 	if (err)
@@ -195,6 +203,8 @@ static int __dev_pm_set_dedicated_wake_irq(struct device *dev, int irq, unsigned
 
 err_free_irq:
 	free_irq(irq, wirq);
+err_free_name:
+	kfree(wirq->name);
 err_free:
 	kfree(wirq);
 

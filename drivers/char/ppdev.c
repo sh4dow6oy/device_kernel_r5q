@@ -303,7 +303,7 @@ static int register_device(int minor, struct pp_struct *pp)
 		goto err_free_name;
 	}
 
-	index = ida_simple_get(&ida_index, 0, 0, GFP_KERNEL);
+	index = ida_alloc(&ida_index, GFP_KERNEL);
 	if (index < 0) {
 		pr_warn("%s: failed to get index!\n", name);
 		rc = index;
@@ -319,7 +319,7 @@ static int register_device(int minor, struct pp_struct *pp)
 	if (!pdev) {
 		pr_warn("%s: failed to register device!\n", name);
 		rc = -ENXIO;
-		ida_simple_remove(&ida_index, index);
+		ida_free(&ida_index, index);
 		goto err_put_port;
 	}
 
@@ -773,7 +773,7 @@ static int pp_release(struct inode *inode, struct file *file)
 
 	if (pp->pdev) {
 		parport_unregister_device(pp->pdev);
-		ida_simple_remove(&ida_index, pp->index);
+		ida_free(&ida_index, pp->index);
 		pp->pdev = NULL;
 		pr_debug(CHRDEV "%x: unregistered pardevice\n", minor);
 	}
@@ -784,14 +784,14 @@ static int pp_release(struct inode *inode, struct file *file)
 }
 
 /* No kernel lock held - fine */
-static unsigned int pp_poll(struct file *file, poll_table *wait)
+static __poll_t pp_poll(struct file *file, poll_table *wait)
 {
 	struct pp_struct *pp = file->private_data;
-	unsigned int mask = 0;
+	__poll_t mask = 0;
 
 	poll_wait(file, &pp->irq_wait, wait);
 	if (atomic_read(&pp->irqc))
-		mask |= POLLIN | POLLRDNORM;
+		mask |= EPOLLIN | EPOLLRDNORM;
 
 	return mask;
 }

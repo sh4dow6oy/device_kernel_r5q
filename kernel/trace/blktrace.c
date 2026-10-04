@@ -1,18 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (C) 2006 Jens Axboe <axboe@kernel.dk>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  *
  */
 
@@ -1384,7 +1372,7 @@ static void blk_log_dump_pdu(struct trace_seq *s,
 				 i == 0 ? "" : " ", pdu_buf[i]);
 
 		/*
-		 * stop when the rest is just zeroes and indicate so
+		 * stop when the rest is just zeros and indicate so
 		 * with a ".." appended
 		 */
 		if (i == end && end != pdu_len - 1) {
@@ -1970,7 +1958,6 @@ void blk_trace_remove_sysfs(struct device *dev)
 #endif /* CONFIG_BLK_DEV_IO_TRACE */
 
 #ifdef CONFIG_EVENT_TRACING
-SIO_PATCH_VERSION(ftrace_discard_bugfix, 1, 0, "");
 
 void blk_fill_rwbs(char *rwbs, unsigned int op, int bytes)
 {
@@ -1980,16 +1967,16 @@ void blk_fill_rwbs(char *rwbs, unsigned int op, int bytes)
 		rwbs[i++] = 'F';
 
 	switch (op & REQ_OP_MASK) {
+	case REQ_OP_WRITE:
+	case REQ_OP_WRITE_SAME:
+		rwbs[i++] = 'W';
+		break;
 	case REQ_OP_DISCARD:
 		rwbs[i++] = 'D';
 		break;
 	case REQ_OP_SECURE_ERASE:
 		rwbs[i++] = 'D';
 		rwbs[i++] = 'E';
-		break;
-	case REQ_OP_WRITE:
-	case REQ_OP_WRITE_SAME:
-		rwbs[i++] = 'W';
 		break;
 	case REQ_OP_FLUSH:
 		rwbs[i++] = 'F';

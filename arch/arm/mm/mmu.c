@@ -1266,15 +1266,16 @@ void __init adjust_lowmem_bounds(void)
 
 static inline void prepare_page_table(void)
 {
-	unsigned long addr = 0;
+	unsigned long addr;
 	phys_addr_t end;
 
 	/*
 	 * Clear out all the mappings below the kernel image.
 	 */
-#ifdef CONFIG_XIP_KERNEL
-	for ( ; addr < MODULES_VADDR; addr += PMD_SIZE)
+	for (addr = 0; addr < MODULES_VADDR; addr += PMD_SIZE)
 		pmd_clear(pmd_off_k(addr));
+
+#ifdef CONFIG_XIP_KERNEL
 	/* The XIP kernel is mapped in the module area -- skip over it */
 	addr = ((unsigned long)_exiprom + PMD_SIZE - 1) & PMD_MASK;
 #endif
@@ -1765,13 +1766,11 @@ static void __init early_fixmap_shutdown(void)
 	pmd_clear(fixmap_pmd(va));
 	local_flush_tlb_kernel_page(va);
 
-	BUILD_BUG_ON(__end_of_permanent_fixed_addresses >
-			__end_of_fixed_addresses);
 	for (i = 0; i < __end_of_permanent_fixed_addresses; i++) {
 		pte_t *pte;
 		struct map_desc map;
 
-		map.virtual = __fix_to_virt(i);
+		map.virtual = fix_to_virt(i);
 		pte = pte_offset_early_fixmap(pmd_off_k(map.virtual), map.virtual);
 
 		/* Only i/o device mappings are supported ATM */
@@ -1795,7 +1794,6 @@ void __init paging_init(const struct machine_desc *mdesc)
 {
 	void *zero_page;
 
-	set_memsize_kernel_type(MEMSIZE_KERNEL_PAGING);
 	prepare_page_table();
 	map_lowmem();
 	memblock_set_current_limit(arm_lowmem_limit);
@@ -1818,7 +1816,6 @@ void __init paging_init(const struct machine_desc *mdesc)
 
 	/* Compute the virt/idmap offset, mostly for the sake of KVM */
 	kimage_voffset = (unsigned long)&kimage_voffset - virt_to_idmap(&kimage_voffset);
-	set_memsize_kernel_type(MEMSIZE_KERNEL_OTHERS);
 }
 
 void __init early_mm_init(const struct machine_desc *mdesc)

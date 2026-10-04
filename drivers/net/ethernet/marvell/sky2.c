@@ -142,6 +142,7 @@ static const struct pci_device_id sky2_id_table[] = {
 	{ PCI_DEVICE(PCI_VENDOR_ID_MARVELL, 0x436C) }, /* 88E8072 */
 	{ PCI_DEVICE(PCI_VENDOR_ID_MARVELL, 0x436D) }, /* 88E8055 */
 	{ PCI_DEVICE(PCI_VENDOR_ID_MARVELL, 0x4370) }, /* 88E8075 */
+	{ PCI_DEVICE(PCI_VENDOR_ID_MARVELL, 0x4373) }, /* 88E8075 */
 	{ PCI_DEVICE(PCI_VENDOR_ID_MARVELL, 0x4380) }, /* 88E8057 */
 	{ PCI_DEVICE(PCI_VENDOR_ID_MARVELL, 0x4381) }, /* 88E8059 */
 	{ PCI_DEVICE(PCI_VENDOR_ID_MARVELL, 0x4382) }, /* 88E8079 */
@@ -2975,9 +2976,9 @@ static int sky2_rx_hung(struct net_device *dev)
 	}
 }
 
-static void sky2_watchdog(unsigned long arg)
+static void sky2_watchdog(struct timer_list *t)
 {
-	struct sky2_hw *hw = (struct sky2_hw *) arg;
+	struct sky2_hw *hw = from_timer(hw, t, watchdog_timer);
 
 	/* Check for lost IRQ once a second */
 	if (sky2_read32(hw, B0_ISRC)) {
@@ -4288,7 +4289,7 @@ static int sky2_vpd_wait(const struct sky2_hw *hw, int cap, u16 busy)
 			dev_err(&hw->pdev->dev, "VPD cycle timed out\n");
 			return -ETIMEDOUT;
 		}
-		mdelay(1);
+		msleep(1);
 	}
 
 	return 0;
@@ -4668,7 +4669,7 @@ static int sky2_device_event(struct notifier_block *unused,
 		break;
 
 	case NETDEV_UP:
-		sky2->debugfs = debugfs_create_file(dev->name, S_IRUGO,
+		sky2->debugfs = debugfs_create_file(dev->name, 0444,
 						    sky2_debug, dev,
 						    &sky2_debug_fops);
 		if (IS_ERR(sky2->debugfs))
@@ -5119,7 +5120,7 @@ static int sky2_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		sky2_show_addr(dev1);
 	}
 
-	setup_timer(&hw->watchdog_timer, sky2_watchdog, (unsigned long) hw);
+	timer_setup(&hw->watchdog_timer, sky2_watchdog, 0);
 	INIT_WORK(&hw->restart_work, sky2_restart);
 
 	pci_set_drvdata(pdev, hw);

@@ -33,24 +33,17 @@ static inline void *memset32(uint32_t *p, uint32_t v, __kernel_size_t n)
 }
 
 #define __HAVE_ARCH_MEMSET64
-extern void *__memset64(uint64_t *, uint32_t low, __kernel_size_t, uint32_t hi);
+extern void *__memset64(uint64_t *, uint32_t first, __kernel_size_t, uint32_t second);
 static inline void *memset64(uint64_t *p, uint64_t v, __kernel_size_t n)
 {
-	return __memset64(p, v, n * 8, v >> 32);
+	union {
+		uint64_t val;
+		struct {
+			uint32_t first, second;
+		};
+	} word = { .val = v };
+
+	return __memset64(p, word.first, n * 8, word.second);
 }
-
-extern void __memzero(void *ptr, __kernel_size_t n);
-
-#define memset(p,v,n)							\
-	({								\
-	 	void *__p = (p); size_t __n = n;			\
-		if ((__n) != 0) {					\
-			if (__builtin_constant_p((v)) && (v) == 0)	\
-				__memzero((__p),(__n));			\
-			else						\
-				memset((__p),(v),(__n));		\
-		}							\
-		(__p);							\
-	})
 
 #endif

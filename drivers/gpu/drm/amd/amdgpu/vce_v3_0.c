@@ -39,6 +39,7 @@
 #include "smu/smu_7_1_2_sh_mask.h"
 #include "gca/gfx_8_0_d.h"
 #include "gca/gfx_8_0_sh_mask.h"
+#include "ivsrcid/ivsrcid_vislands30.h"
 
 
 #define GRBM_GFX_INDEX__VCE_INSTANCE__SHIFT	0x04
@@ -86,9 +87,9 @@ static uint64_t vce_v3_0_ring_get_rptr(struct amdgpu_ring *ring)
 	else if (adev->vce.harvest_config == AMDGPU_VCE_HARVEST_VCE0)
 		WREG32(mmGRBM_GFX_INDEX, GET_VCE_INSTANCE(1));
 
-	if (ring == &adev->vce.ring[0])
+	if (ring->me == 0)
 		v = RREG32(mmVCE_RB_RPTR);
-	else if (ring == &adev->vce.ring[1])
+	else if (ring->me == 1)
 		v = RREG32(mmVCE_RB_RPTR2);
 	else
 		v = RREG32(mmVCE_RB_RPTR3);
@@ -118,9 +119,9 @@ static uint64_t vce_v3_0_ring_get_wptr(struct amdgpu_ring *ring)
 	else if (adev->vce.harvest_config == AMDGPU_VCE_HARVEST_VCE0)
 		WREG32(mmGRBM_GFX_INDEX, GET_VCE_INSTANCE(1));
 
-	if (ring == &adev->vce.ring[0])
+	if (ring->me == 0)
 		v = RREG32(mmVCE_RB_WPTR);
-	else if (ring == &adev->vce.ring[1])
+	else if (ring->me == 1)
 		v = RREG32(mmVCE_RB_WPTR2);
 	else
 		v = RREG32(mmVCE_RB_WPTR3);
@@ -149,9 +150,9 @@ static void vce_v3_0_ring_set_wptr(struct amdgpu_ring *ring)
 	else if (adev->vce.harvest_config == AMDGPU_VCE_HARVEST_VCE0)
 		WREG32(mmGRBM_GFX_INDEX, GET_VCE_INSTANCE(1));
 
-	if (ring == &adev->vce.ring[0])
+	if (ring->me == 0)
 		WREG32(mmVCE_RB_WPTR, lower_32_bits(ring->wptr));
-	else if (ring == &adev->vce.ring[1])
+	else if (ring->me == 1)
 		WREG32(mmVCE_RB_WPTR2, lower_32_bits(ring->wptr));
 	else
 		WREG32(mmVCE_RB_WPTR3, lower_32_bits(ring->wptr));
@@ -388,7 +389,8 @@ static unsigned vce_v3_0_get_harvest_config(struct amdgpu_device *adev)
 	default:
 		if ((adev->asic_type == CHIP_POLARIS10) ||
 		    (adev->asic_type == CHIP_POLARIS11) ||
-		    (adev->asic_type == CHIP_POLARIS12))
+		    (adev->asic_type == CHIP_POLARIS12) ||
+		    (adev->asic_type == CHIP_VEGAM))
 			return AMDGPU_VCE_HARVEST_VCE1;
 
 		return 0;
@@ -421,7 +423,7 @@ static int vce_v3_0_sw_init(void *handle)
 	int r, i;
 
 	/* VCE */
-	r = amdgpu_irq_add_id(adev, AMDGPU_IH_CLIENTID_LEGACY, 167, &adev->vce.irq);
+	r = amdgpu_irq_add_id(adev, AMDGPU_IH_CLIENTID_LEGACY, VISLANDS30_IV_SRCID_VCE_TRAP, &adev->vce.irq);
 	if (r)
 		return r;
 
@@ -445,6 +447,8 @@ static int vce_v3_0_sw_init(void *handle)
 		if (r)
 			return r;
 	}
+
+	r = amdgpu_vce_entity_init(adev);
 
 	return r;
 }
@@ -834,25 +838,41 @@ out:
 }
 
 static void vce_v3_0_ring_emit_ib(struct amdgpu_ring *ring,
-		struct amdgpu_ib *ib, unsigned int vm_id, bool ctx_switch)
+		struct amdgpu_ib *ib, unsigned int vmid, bool ctx_switch)
 {
 	amdgpu_ring_write(ring, VCE_CMD_IB_VM);
-	amdgpu_ring_write(ring, vm_id);
+	amdgpu_ring_write(ring, vmid);
 	amdgpu_ring_write(ring, lower_32_bits(ib->gpu_addr));
 	amdgpu_ring_write(ring, upper_32_bits(ib->gpu_addr));
 	amdgpu_ring_write(ring, ib->length_dw);
 }
 
+static void vce_v3_0_ring_emit_fence(struct amdgpu_ring *ring, u64 addr,
+			u64 seq, unsigned flags)
+{
+	WARN_ON(flags & AMDGPU_FENCE_FLAG_64BIT);
+
+	amdgpu_ring_write(ring, VCE_CMD_FENCE);
+	amdgpu_ring_write(ring, addr);
+	amdgpu_ring_write(ring, upper_32_bits(addr));
+	amdgpu_ring_write(ring, seq);
+	amdgpu_ring_write(ring, VCE_CMD_TRAP);
+}
+
+static void vce_v3_0_ring_insert_end(struct amdgpu_ring *ring)
+{
+	amdgpu_ring_write(ring, VCE_CMD_END);
+}
+
 static void vce_v3_0_emit_vm_flush(struct amdgpu_ring *ring,
-			 unsigned int vm_id, uint64_t pd_addr)
+				   unsigned int vmid, uint64_t pd_addr)
 {
 	amdgpu_ring_write(ring, VCE_CMD_UPDATE_PTB);
-	amdgpu_ring_write(ring, vm_id);
+	amdgpu_ring_write(ring, vmid);
 	amdgpu_ring_write(ring, pd_addr >> 12);
 
 	amdgpu_ring_write(ring, VCE_CMD_FLUSH_TLB);
-	amdgpu_ring_write(ring, vm_id);
-	amdgpu_ring_write(ring, VCE_CMD_END);
+	amdgpu_ring_write(ring, vmid);
 }
 
 static void vce_v3_0_emit_pipeline_sync(struct amdgpu_ring *ring)
@@ -920,17 +940,19 @@ static const struct amdgpu_ring_funcs vce_v3_0_ring_vm_funcs = {
 	.set_wptr = vce_v3_0_ring_set_wptr,
 	.parse_cs = amdgpu_vce_ring_parse_cs_vm,
 	.emit_frame_size =
-		6 + /* vce_v3_0_emit_vm_flush */
+		5 + /* vce_v3_0_emit_vm_flush */
 		4 + /* vce_v3_0_emit_pipeline_sync */
-		6 + 6, /* amdgpu_vce_ring_emit_fence x2 vm fence */
+		5 + 5 + /* vce_v3_0_ring_emit_fence x2 vm fence */
+		1, /* vce_v3_0_ring_insert_end */
 	.emit_ib_size = 5, /* vce_v3_0_ring_emit_ib */
 	.emit_ib = vce_v3_0_ring_emit_ib,
 	.emit_vm_flush = vce_v3_0_emit_vm_flush,
 	.emit_pipeline_sync = vce_v3_0_emit_pipeline_sync,
-	.emit_fence = amdgpu_vce_ring_emit_fence,
+	.emit_fence = vce_v3_0_ring_emit_fence,
 	.test_ring = amdgpu_vce_ring_test_ring,
 	.test_ib = amdgpu_vce_ring_test_ib,
 	.insert_nop = amdgpu_ring_insert_nop,
+	.insert_end = vce_v3_0_ring_insert_end,
 	.pad_ib = amdgpu_ring_generic_pad_ib,
 	.begin_use = amdgpu_vce_ring_begin_use,
 	.end_use = amdgpu_vce_ring_end_use,
@@ -941,12 +963,16 @@ static void vce_v3_0_set_ring_funcs(struct amdgpu_device *adev)
 	int i;
 
 	if (adev->asic_type >= CHIP_STONEY) {
-		for (i = 0; i < adev->vce.num_rings; i++)
+		for (i = 0; i < adev->vce.num_rings; i++) {
 			adev->vce.ring[i].funcs = &vce_v3_0_ring_vm_funcs;
+			adev->vce.ring[i].me = i;
+		}
 		DRM_INFO("VCE enabled in VM mode\n");
 	} else {
-		for (i = 0; i < adev->vce.num_rings; i++)
+		for (i = 0; i < adev->vce.num_rings; i++) {
 			adev->vce.ring[i].funcs = &vce_v3_0_ring_phys_funcs;
+			adev->vce.ring[i].me = i;
+		}
 		DRM_INFO("VCE enabled in physical mode\n");
 	}
 }

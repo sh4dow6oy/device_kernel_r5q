@@ -14,12 +14,19 @@
 
 #include "trace_output.h"
 
+/* Stub function for events with triggers */
+static int ftrace_event_register(struct trace_event_call *call,
+				 enum trace_reg type, void *data)
+{
+	return 0;
+}
+
 #undef TRACE_SYSTEM
 #define TRACE_SYSTEM	ftrace
 
 /*
  * The FTRACE_ENTRY_REG macro allows ftrace entry to define register
- * function and thus become accesible via perf.
+ * function and thus become accessible via perf.
  */
 #undef FTRACE_ENTRY_REG
 #define FTRACE_ENTRY_REG(name, struct_name, id, tstruct, print, \
@@ -117,7 +124,7 @@ static void __always_unused ____ftrace_check_##name(void)		\
 
 #undef __dynamic_array
 #define __dynamic_array(type, item)					\
-	ret = trace_define_field(event_call, #type, #item,		\
+	ret = trace_define_field(event_call, #type "[]", #item,  \
 				 offsetof(typeof(field), item),		\
 				 0, is_signed_type(type), filter_type);\
 	if (ret)							\

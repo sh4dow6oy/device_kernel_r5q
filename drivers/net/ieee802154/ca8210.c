@@ -634,11 +634,10 @@ static int ca8210_test_int_driver_write(
 	for (i = 0; i < len; i++)
 		dev_dbg(&priv->spi->dev, "%#03x\n", buf[i]);
 
-	fifo_buffer = kmalloc(len, GFP_KERNEL);
+	fifo_buffer = kmemdup(buf, len, GFP_KERNEL);
 	if (!fifo_buffer)
 		return -ENOMEM;
-	memcpy(fifo_buffer, buf, len);
-	kfifo_in(&test->up_fifo, &fifo_buffer, 4);
+	kfifo_in(&test->up_fifo, &fifo_buffer, sizeof(fifo_buffer));
 	wake_up_interruptible(&priv->test.readq);
 
 	return 0;
@@ -924,7 +923,7 @@ static int ca8210_spi_transfer(
 	priv = spi_get_drvdata(spi);
 	reinit_completion(&priv->spi_transfer_complete);
 
-	dev_dbg(&spi->dev, "ca8210_spi_transfer called\n");
+	dev_dbg(&spi->dev, "%s called\n", __func__);
 
 	cas_ctl = kzalloc(sizeof(*cas_ctl), GFP_ATOMIC);
 	if (!cas_ctl)
@@ -961,9 +960,10 @@ static int ca8210_spi_transfer(
 	if (status < 0) {
 		dev_crit(
 			&spi->dev,
-			"status %d from spi_sync in write\n",
+			"status %d from spi_async in write\n",
 			status
 		);
+		kfree(cas_ctl);
 	}
 
 	return status;
@@ -1303,7 +1303,7 @@ static u8 tdme_checkpibattribute(
 		break;
 	/* MAC */
 	case MAC_BATT_LIFE_EXT_PERIODS:
-		if ((value < 6) || (value > 41))
+		if (value < 6 || value > 41)
 			status = MAC_INVALID_PARAMETER;
 		break;
 	case MAC_BEACON_PAYLOAD:
@@ -1319,7 +1319,7 @@ static u8 tdme_checkpibattribute(
 			status = MAC_INVALID_PARAMETER;
 		break;
 	case MAC_MAX_BE:
-		if ((value < 3) || (value > 8))
+		if (value < 3 || value > 8)
 			status = MAC_INVALID_PARAMETER;
 		break;
 	case MAC_MAX_CSMA_BACKOFFS:
@@ -1335,7 +1335,7 @@ static u8 tdme_checkpibattribute(
 			status = MAC_INVALID_PARAMETER;
 		break;
 	case MAC_RESPONSE_WAIT_TIME:
-		if ((value < 2) || (value > 64))
+		if (value < 2 || value > 64)
 			status = MAC_INVALID_PARAMETER;
 		break;
 	case MAC_SUPERFRAME_ORDER:
@@ -1487,8 +1487,7 @@ static u8 mcps_data_request(
 	command.pdata.data_req.src_addr_mode = src_addr_mode;
 	command.pdata.data_req.dst.mode = dst_address_mode;
 	if (dst_address_mode != MAC_MODE_NO_ADDR) {
-		command.pdata.data_req.dst.pan_id[0] = LS_BYTE(dst_pan_id);
-		command.pdata.data_req.dst.pan_id[1] = MS_BYTE(dst_pan_id);
+		put_unaligned_le16(dst_pan_id, command.pdata.data_req.dst.pan_id);
 		if (dst_address_mode == MAC_MODE_SHORT_ADDR) {
 			command.pdata.data_req.dst.address[0] = LS_BYTE(
 				dst_addr->short_address
@@ -1511,7 +1510,7 @@ static u8 mcps_data_request(
 	psec = (struct secspec *)(command.pdata.data_req.msdu + msdu_length);
 	command.length = sizeof(struct mcps_data_request_pset) -
 		MAX_DATA_SIZE + msdu_length;
-	if (!security || (security->security_level == 0)) {
+	if (!security || security->security_level == 0) {
 		psec->security_level = 0;
 		command.length += 1;
 	} else {
@@ -1561,7 +1560,7 @@ static u8 mlme_reset_request_sync(
 	status = response.pdata.status;
 
 	/* reset COORD Bit for Channel Filtering as Coordinator */
-	if (CA8210_MAC_WORKAROUNDS && set_default_pib && (!status)) {
+	if (CA8210_MAC_WORKAROUNDS && set_default_pib && !status) {
 		status = tdme_setsfr_request_sync(
 			0,
 			CA8210_SFR_MACCON,
@@ -1837,12 +1836,12 @@ static int ca8210_skb_rx(
 	}
 	hdr.source.mode = data_ind[0];
 	dev_dbg(&priv->spi->dev, "srcAddrMode: %#03x\n", hdr.source.mode);
-	hdr.source.pan_id = *(u16 *)&data_ind[1];
+	hdr.source.pan_id = cpu_to_le16(get_unaligned_le16(&data_ind[1]));
 	dev_dbg(&priv->spi->dev, "srcPanId: %#06x\n", hdr.source.pan_id);
 	memcpy(&hdr.source.extended_addr, &data_ind[3], 8);
 	hdr.dest.mode = data_ind[11];
 	dev_dbg(&priv->spi->dev, "dstAddrMode: %#03x\n", hdr.dest.mode);
-	hdr.dest.pan_id = *(u16 *)&data_ind[12];
+	hdr.dest.pan_id = cpu_to_le16(get_unaligned_le16(&data_ind[12]));
 	dev_dbg(&priv->spi->dev, "dstPanId: %#06x\n", hdr.dest.pan_id);
 	memcpy(&hdr.dest.extended_addr, &data_ind[14], 8);
 
@@ -1899,7 +1898,7 @@ static int ca8210_net_rx(struct ieee802154_hw *hw, u8 *command, size_t len)
 	unsigned long flags;
 	u8 status;
 
-	dev_dbg(&priv->spi->dev, "ca8210_net_rx(), CmdID = %d\n", command[0]);
+	dev_dbg(&priv->spi->dev, "%s: CmdID = %d\n", __func__, command[0]);
 
 	if (command[0] == SPI_MCPS_DATA_INDICATION) {
 		/* Received data */
@@ -1944,11 +1943,11 @@ static int ca8210_skb_tx(
 	struct ca8210_priv  *priv
 )
 {
-	struct ieee802154_hdr header = { 0 };
+	struct ieee802154_hdr header = { };
 	struct secspec secspec;
 	int mac_len, status;
 
-	dev_dbg(&priv->spi->dev, "ca8210_skb_tx() called\n");
+	dev_dbg(&priv->spi->dev, "%s called\n", __func__);
 
 	/* Get addressing info from skb - ieee802154 layer creates a full
 	 * packet
@@ -1969,7 +1968,7 @@ static int ca8210_skb_tx(
 	status =  mcps_data_request(
 		header.source.mode,
 		header.dest.mode,
-		header.dest.pan_id,
+		le16_to_cpu(header.dest.pan_id),
 		(union macaddr *)&header.dest.extended_addr,
 		skb->len - mac_len,
 		&skb->data[mac_len],
@@ -2053,7 +2052,7 @@ static int ca8210_xmit_async(struct ieee802154_hw *hw, struct sk_buff *skb)
 	struct ca8210_priv *priv = hw->priv;
 	int status;
 
-	dev_dbg(&priv->spi->dev, "calling ca8210_xmit_async()\n");
+	dev_dbg(&priv->spi->dev, "calling %s\n", __func__);
 
 	priv->tx_skb = skb;
 	priv->async_tx_pending = true;
@@ -2371,7 +2370,7 @@ static int ca8210_set_promiscuous_mode(struct ieee802154_hw *hw, const bool on)
 		MAC_PROMISCUOUS_MODE,
 		0,
 		1,
-		(const void*)&on,
+		(const void *)&on,
 		priv->spi
 	);
 	if (status) {
@@ -2570,6 +2569,7 @@ static ssize_t ca8210_test_int_user_read(
 	struct ca8210_priv *priv = filp->private_data;
 	unsigned char *fifo_buffer;
 	unsigned long bytes_not_copied;
+	unsigned int copied;
 
 	if (filp->f_flags & O_NONBLOCK) {
 		/* Non-blocking mode */
@@ -2583,7 +2583,8 @@ static ssize_t ca8210_test_int_user_read(
 		);
 	}
 
-	if (kfifo_out(&priv->test.up_fifo, &fifo_buffer, 4) != 4) {
+	copied = kfifo_out(&priv->test.up_fifo, &fifo_buffer, sizeof(fifo_buffer));
+	if (copied != sizeof(fifo_buffer)) {
 		dev_err(
 			&priv->spi->dev,
 			"test_interface: Wrong number of elements popped from upstream fifo\n"
@@ -2648,21 +2649,21 @@ static long ca8210_test_int_ioctl(
  *
  * Return: set of poll return flags
  */
-static unsigned int ca8210_test_int_poll(
+static __poll_t ca8210_test_int_poll(
 	struct file *filp,
 	struct poll_table_struct *ptable
 )
 {
-	unsigned int return_flags = 0;
+	__poll_t return_flags = 0;
 	struct ca8210_priv *priv = filp->private_data;
 
 	poll_wait(filp, &priv->test.readq, ptable);
 	if (!kfifo_is_empty(&priv->test.up_fifo))
-		return_flags |= (POLLIN | POLLRDNORM);
+		return_flags |= (EPOLLIN | EPOLLRDNORM);
 	if (wait_event_interruptible(
 		priv->test.readq,
 		!kfifo_is_empty(&priv->test.up_fifo))) {
-		return POLLERR;
+		return EPOLLERR;
 	}
 	return return_flags;
 }
@@ -3036,8 +3037,7 @@ static void ca8210_test_interface_clear(struct ca8210_priv *priv)
 {
 	struct ca8210_test *test = &priv->test;
 
-	if (!IS_ERR(test->ca8210_dfs_spi_int))
-		debugfs_remove(test->ca8210_dfs_spi_int);
+	debugfs_remove(test->ca8210_dfs_spi_int);
 	kfifo_free(&test->up_fifo);
 	dev_info(&priv->spi->dev, "Test interface removed\n");
 }
@@ -3132,7 +3132,11 @@ static int ca8210_probe(struct spi_device *spi_device)
 	spi_set_drvdata(priv->spi, priv);
 	if (IS_ENABLED(CONFIG_IEEE802154_CA8210_DEBUGFS)) {
 		cascoda_api_upstream = ca8210_test_int_driver_write;
-		ca8210_test_interface_init(priv);
+		ret = ca8210_test_interface_init(priv);
+		if (ret) {
+			dev_crit(&spi_device->dev, "ca8210_test_interface_init failed\n");
+			goto error;
+		}
 	} else {
 		cascoda_api_upstream = NULL;
 	}

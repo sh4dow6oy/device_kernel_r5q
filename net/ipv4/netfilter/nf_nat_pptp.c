@@ -48,7 +48,7 @@ static void pptp_nat_expected(struct nf_conn *ct,
 	struct nf_conntrack_tuple t = {};
 	const struct nf_ct_pptp_master *ct_pptp_info;
 	const struct nf_nat_pptp *nat_pptp_info;
-	struct nf_nat_range range;
+	struct nf_nat_range2 range;
 	struct nf_conn_nat *nat;
 
 	nat = nf_ct_nat_ext_add(ct);
@@ -166,7 +166,7 @@ pptp_outbound_pkt(struct sk_buff *skb,
 	default:
 		pr_debug("unknown outbound packet 0x%04x:%s\n", msg,
 			 pptp_msg_name(msg));
-		/* fall through */
+		fallthrough;
 	case PPTP_SET_LINK_INFO:
 		/* only need to NAT in case PAC is behind NAT box */
 	case PPTP_START_SESSION_REQUEST:
@@ -267,7 +267,7 @@ pptp_inbound_pkt(struct sk_buff *skb,
 		break;
 	default:
 		pr_debug("unknown inbound packet %s\n", pptp_msg_name(msg));
-		/* fall through */
+		fallthrough;
 	case PPTP_START_SESSION_REQUEST:
 	case PPTP_START_SESSION_REPLY:
 	case PPTP_STOP_SESSION_REQUEST:

@@ -84,6 +84,11 @@
 		mask = <0x1000>;
 	};
 
+	tempsensor: iio-hwmon {
+		compatible = "iio-hwmon";
+		io-channels = <&adc0 16>, <&adc1 16>;
+	};
+
 	soc {
 		#address-cells = <1>;
 		#size-cells = <1>;
@@ -649,7 +654,7 @@
 
 			ftm: ftm@400b8000 {
 				compatible = "fsl,ftm-timer";
-				reg = <0x400b8000 0x1000 0x400b9000 0x1000>;
+				reg = <0x400b8000 0x1000>, <0x400b9000 0x1000>;
 				interrupts = <44 IRQ_TYPE_LEVEL_HIGH>;
 				clock-names = "ftm-evt", "ftm-src",
 					"ftm-evt-counter-en", "ftm-src-counter-en";
@@ -761,11 +766,6 @@
 				dma-names = "rx","tx";
 				status = "disabled";
 			};
-		};
-
-		iio-hwmon {
-			compatible = "iio-hwmon";
-			io-channels = <&adc0 16>, <&adc1 16>;
 		};
 	};
 };

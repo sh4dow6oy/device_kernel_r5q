@@ -161,7 +161,9 @@ static void irq_work_run_list(struct llist_head *list)
 		flags = atomic_read(&work->flags) & ~IRQ_WORK_PENDING;
 		atomic_xchg(&work->flags, flags);
 
+		lockdep_irq_work_enter(work);
 		work->func(work);
+		lockdep_irq_work_exit(work);
 		/*
 		 * Clear the BUSY bit and return to the free state if
 		 * no-one else claimed it meanwhile.
@@ -196,7 +198,7 @@ void irq_work_tick(void)
  */
 void irq_work_sync(struct irq_work *work)
 {
-	WARN_ON_ONCE(irqs_disabled());
+	lockdep_assert_irqs_enabled();
 
 	while (atomic_read(&work->flags) & IRQ_WORK_BUSY)
 		cpu_relax();

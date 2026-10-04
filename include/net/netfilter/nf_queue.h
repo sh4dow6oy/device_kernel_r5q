@@ -10,6 +10,7 @@
 struct nf_queue_entry {
 	struct list_head	list;
 	struct sk_buff		*skb;
+	struct net_device	*skb_dev;
 	unsigned int		id;
 	unsigned int		hook_index;	/* index in hook_entries->hook[] */
 
@@ -25,7 +26,7 @@ struct nf_queue_entry {
 struct nf_queue_handler {
 	int		(*outfn)(struct nf_queue_entry *entry,
 				 unsigned int queuenum);
-	unsigned int	(*nf_hook_drop)(struct net *net);
+	void		(*nf_hook_drop)(struct net *net);
 };
 
 void nf_register_queue_handler(struct net *net, const struct nf_queue_handler *qh);

@@ -11,6 +11,7 @@
 #include <linux/crc32.h>
 #include <linux/sunrpc/svc.h>
 #include <uapi/linux/nfsd/nfsfh.h>
+#include <linux/iversion.h>
 
 static inline __u32 ino_t_to_u32(ino_t ino)
 {
@@ -41,8 +42,8 @@ typedef struct svc_fh {
 
 	/* Pre-op attributes saved during fh_lock */
 	__u64			fh_pre_size;	/* size before operation */
-	struct timespec64	fh_pre_mtime;	/* mtime before oper */
-	struct timespec64	fh_pre_ctime;	/* ctime before oper */
+	struct timespec		fh_pre_mtime;	/* mtime before oper */
+	struct timespec		fh_pre_ctime;	/* ctime before oper */
 	/*
 	 * pre-op nfsv4 change attr: note must check IS_I_VERSION(inode)
 	 *  to find out if it is valid.
@@ -215,15 +216,12 @@ static inline bool fh_fsid_match(struct knfsd_fh *fh1, struct knfsd_fh *fh2)
  * returns a crc32 hash for the filehandle that is compatible with
  * the one displayed by "wireshark".
  */
-
-static inline u32
-knfsd_fh_hash(struct knfsd_fh *fh)
+static inline u32 knfsd_fh_hash(const struct knfsd_fh *fh)
 {
 	return ~crc32_le(0xFFFFFFFF, (unsigned char *)&fh->fh_base, fh->fh_size);
 }
 #else
-static inline u32
-knfsd_fh_hash(struct knfsd_fh *fh)
+static inline u32 knfsd_fh_hash(const struct knfsd_fh *fh)
 {
 	return 0;
 }
@@ -260,7 +258,7 @@ static inline u64 nfsd4_change_attribute(struct kstat *stat,
 	chattr =  stat->ctime.tv_sec;
 	chattr <<= 30;
 	chattr += stat->ctime.tv_nsec;
-	chattr += inode->i_version;
+	chattr += inode_query_iversion(inode);
 	return chattr;
 }
 

@@ -105,8 +105,8 @@
 
 #define IPV6_ADDR_ANY		0x0000U
 
-#define IPV6_ADDR_UNICAST      	0x0001U	
-#define IPV6_ADDR_MULTICAST    	0x0002U	
+#define IPV6_ADDR_UNICAST	0x0001U
+#define IPV6_ADDR_MULTICAST	0x0002U
 
 #define IPV6_ADDR_LOOPBACK	0x0010U
 #define IPV6_ADDR_LINKLOCAL	0x0020U
@@ -294,12 +294,32 @@ struct ipv6_fl_socklist {
 };
 
 struct ipcm6_cookie {
+	struct sockcm_cookie sockc;
 	__s16 hlimit;
 	__s16 tclass;
 	__s8  dontfrag;
 	struct ipv6_txoptions *opt;
 	__u16 gso_size;
 };
+
+static inline void ipcm6_init(struct ipcm6_cookie *ipc6)
+{
+	*ipc6 = (struct ipcm6_cookie) {
+		.hlimit = -1,
+		.tclass = -1,
+		.dontfrag = -1,
+	};
+}
+
+static inline void ipcm6_init_sk(struct ipcm6_cookie *ipc6,
+				 const struct ipv6_pinfo *np)
+{
+	*ipc6 = (struct ipcm6_cookie) {
+		.hlimit = -1,
+		.tclass = np->tclass,
+		.dontfrag = np->dontfrag,
+	};
+}
 
 static inline struct ipv6_txoptions *txopt_get(const struct ipv6_pinfo *np)
 {
@@ -343,8 +363,8 @@ static inline void fl6_sock_release(struct ip6_flowlabel *fl)
 
 void icmpv6_notify(struct sk_buff *skb, u8 type, u8 code, __be32 info);
 
-int icmpv6_push_pending_frames(struct sock *sk, struct flowi6 *fl6,
-			       struct icmp6hdr *thdr, int len);
+void icmpv6_push_pending_frames(struct sock *sk, struct flowi6 *fl6,
+				struct icmp6hdr *thdr, int len);
 
 int ip6_ra_control(struct sock *sk, int sel);
 
@@ -434,7 +454,7 @@ ipv6_masked_addr_cmp(const struct in6_addr *a1, const struct in6_addr *m,
 #endif
 }
 
-static inline void ipv6_addr_prefix(struct in6_addr *pfx, 
+static inline void ipv6_addr_prefix(struct in6_addr *pfx,
 				    const struct in6_addr *addr,
 				    int plen)
 {
@@ -483,7 +503,7 @@ static inline void __ipv6_addr_set_half(__be32 *addr,
 	addr[1] = wl;
 }
 
-static inline void ipv6_addr_set(struct in6_addr *addr, 
+static inline void ipv6_addr_set(struct in6_addr *addr,
 				     __be32 w1, __be32 w2,
 				     __be32 w3, __be32 w4)
 {
@@ -671,7 +691,7 @@ static inline int __ipv6_addr_diff32(const void *token1, const void *token2, int
 	}
 
 	/*
-	 *	we should *never* get to this point since that 
+	 *	we should *never* get to this point since that
 	 *	would mean the addrs are equal
 	 *
 	 *	However, we do get to it 8) And exacly, when
@@ -758,6 +778,13 @@ static inline void iph_to_flow_copy_v6addrs(struct flow_keys *flow,
 
 #if IS_ENABLED(CONFIG_IPV6)
 
+static inline bool ipv6_can_nonlocal_bind(struct net *net,
+					  struct inet_sock *inet)
+{
+	return net->ipv6.sysctl.ip_nonlocal_bind ||
+		inet->freebind || inet->transparent;
+}
+
 /* Sysctl settings for net ipv6.auto_flowlabels */
 #define IP6_AUTO_FLOW_LABEL_OFF		0
 #define IP6_AUTO_FLOW_LABEL_OPTOUT	1
@@ -827,6 +854,17 @@ static inline int ip6_default_np_autolabel(struct net *net)
 }
 #endif
 
+#if IS_ENABLED(CONFIG_IPV6)
+static inline int ip6_multipath_hash_policy(const struct net *net)
+{
+	return net->ipv6.sysctl.multipath_hash_policy;
+}
+#else
+static inline int ip6_multipath_hash_policy(const struct net *net)
+{
+	return 0;
+}
+#endif
 
 /*
  *	Header manipulation
@@ -872,6 +910,8 @@ static inline __be32 flowi6_get_flowlabel(const struct flowi6 *fl6)
 
 int ipv6_rcv(struct sk_buff *skb, struct net_device *dev,
 	     struct packet_type *pt, struct net_device *orig_dev);
+void ipv6_list_rcv(struct list_head *head, struct packet_type *pt,
+		   struct net_device *orig_dev);
 
 int ip6_rcv_finish(struct net *net, struct sock *sk, struct sk_buff *skb);
 
@@ -888,8 +928,7 @@ int ip6_append_data(struct sock *sk,
 				int odd, struct sk_buff *skb),
 		    void *from, int length, int transhdrlen,
 		    struct ipcm6_cookie *ipc6, struct flowi6 *fl6,
-		    struct rt6_info *rt, unsigned int flags,
-		    const struct sockcm_cookie *sockc);
+		    struct rt6_info *rt, unsigned int flags);
 
 int ip6_push_pending_frames(struct sock *sk);
 
@@ -906,8 +945,7 @@ struct sk_buff *ip6_make_skb(struct sock *sk,
 			     void *from, int length, int transhdrlen,
 			     struct ipcm6_cookie *ipc6, struct flowi6 *fl6,
 			     struct rt6_info *rt, unsigned int flags,
-			     struct inet_cork_full *cork,
-			     const struct sockcm_cookie *sockc);
+			     struct inet_cork_full *cork);
 
 static inline struct sk_buff *ip6_finish_skb(struct sock *sk)
 {
@@ -920,7 +958,8 @@ int ip6_dst_lookup(struct net *net, struct sock *sk, struct dst_entry **dst,
 struct dst_entry *ip6_dst_lookup_flow(struct net *net, const struct sock *sk, struct flowi6 *fl6,
 				      const struct in6_addr *final_dst);
 struct dst_entry *ip6_sk_dst_lookup_flow(struct sock *sk, struct flowi6 *fl6,
-					 const struct in6_addr *final_dst);
+					 const struct in6_addr *final_dst,
+					 bool connected);
 struct dst_entry *ip6_blackhole_route(struct net *net,
 				      struct dst_entry *orig_dst);
 
@@ -1003,7 +1042,7 @@ void inet6_cleanup_sock(struct sock *sk);
 void inet6_sock_destruct(struct sock *sk);
 int inet6_release(struct socket *sock);
 int inet6_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len);
-int inet6_getname(struct socket *sock, struct sockaddr *uaddr, int *uaddr_len,
+int inet6_getname(struct socket *sock, struct sockaddr *uaddr,
 		  int peer);
 int inet6_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg);
 
@@ -1050,8 +1089,6 @@ static inline int snmp6_unregister_dev(struct inet6_dev *idev) { return 0; }
 #endif
 
 #ifdef CONFIG_SYSCTL
-extern struct ctl_table ipv6_route_table_template[];
-
 struct ctl_table *ipv6_icmp_sysctl_init(struct net *net);
 struct ctl_table *ipv6_route_sysctl_init(struct net *net);
 int ipv6_sysctl_register(void);
@@ -1060,6 +1097,8 @@ void ipv6_sysctl_unregister(void);
 
 int ipv6_sock_mc_join(struct sock *sk, int ifindex,
 		      const struct in6_addr *addr);
+int ipv6_sock_mc_join_ssm(struct sock *sk, int ifindex,
+			  const struct in6_addr *addr, unsigned int mode);
 int ipv6_sock_mc_drop(struct sock *sk, int ifindex,
 		      const struct in6_addr *addr);
 #endif /* _NET_IPV6_H */

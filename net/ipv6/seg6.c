@@ -17,6 +17,7 @@
 #include <linux/net.h>
 #include <linux/in6.h>
 #include <linux/slab.h>
+#include <linux/rhashtable.h>
 
 #include <net/ipv6.h>
 #include <net/protocol.h>
@@ -34,6 +35,9 @@ bool seg6_validate_srh(struct ipv6_sr_hdr *srh, int len, bool reduced)
 	unsigned int tlv_offset;
 	int max_last_entry;
 	int trailing;
+
+	if (len < sizeof(*srh))
+		return false;
 
 	if (srh->type != IPV6_SRCRT_TYPE_4)
 		return false;
@@ -239,7 +243,6 @@ static int seg6_genl_get_tunsrc(struct sk_buff *skb, struct genl_info *info)
 
 nla_put_failure:
 	rcu_read_unlock();
-	genlmsg_cancel(msg, hdr);
 free_msg:
 	nlmsg_free(msg);
 	return -ENOMEM;
@@ -319,9 +322,7 @@ static int seg6_genl_dumphmac(struct sk_buff *skb, struct netlink_callback *cb)
 	struct seg6_hmac_info *hinfo;
 	int ret;
 
-	ret = rhashtable_walk_start(iter);
-	if (ret && ret != -EAGAIN)
-		goto done;
+	rhashtable_walk_start(iter);
 
 	for (;;) {
 		hinfo = rhashtable_walk_next(iter);

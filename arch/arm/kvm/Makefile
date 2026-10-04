@@ -3,12 +3,12 @@
 # Makefile for Kernel-based Virtual Machine module
 #
 
-plus_virt := $(call as-instr,.arch_extension virt,+virt)
+plus_virt := $(call as-instr,".cpu cortex-a7\n\n.arch_extension virt",+virt)
 ifeq ($(plus_virt),+virt)
 	plus_virt_def := -DREQUIRES_VIRT=1
 endif
 
-ccflags-y += -Iarch/arm/kvm -Ivirt/kvm/arm/vgic
+ccflags-y += -I $(srctree)/arch/arm/kvm -I $(srctree)/virt/kvm/arm/vgic
 CFLAGS_arm.o := -I. $(plus_virt_def)
 CFLAGS_mmu.o := -I.
 
@@ -32,6 +32,7 @@ obj-y += $(KVM)/arm/vgic/vgic-init.o
 obj-y += $(KVM)/arm/vgic/vgic-irqfd.o
 obj-y += $(KVM)/arm/vgic/vgic-v2.o
 obj-y += $(KVM)/arm/vgic/vgic-v3.o
+obj-y += $(KVM)/arm/vgic/vgic-v4.o
 obj-y += $(KVM)/arm/vgic/vgic-mmio.o
 obj-y += $(KVM)/arm/vgic/vgic-mmio-v2.o
 obj-y += $(KVM)/arm/vgic/vgic-mmio-v3.o

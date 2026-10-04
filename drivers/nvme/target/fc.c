@@ -31,7 +31,7 @@
 /* *************************** Data Structures/Defines ****************** */
 
 
-#define NVMET_LS_CTX_COUNT		4
+#define NVMET_LS_CTX_COUNT		256
 
 /* for this implementation, assume small single frame rqst/rsp */
 #define NVME_FC_MAX_LS_BUFFER_SIZE		2048
@@ -77,7 +77,6 @@ struct nvmet_fc_fcp_iod {
 	struct scatterlist		*next_sg;
 	struct scatterlist		*data_sg;
 	int				data_sg_cnt;
-	u32				total_length;
 	u32				offset;
 	enum nvmet_fcp_datadir		io_dir;
 	bool				active;
@@ -89,6 +88,7 @@ struct nvmet_fc_fcp_iod {
 	struct nvmet_req		req;
 	struct work_struct		work;
 	struct work_struct		done_work;
+	struct work_struct		defer_work;
 
 	struct nvmet_fc_tgtport		*tgtport;
 	struct nvmet_fc_tgt_queue	*queue;
@@ -151,21 +151,8 @@ struct nvmet_fc_tgt_assoc {
 	struct list_head		a_list;
 	struct nvmet_fc_tgt_queue	*queues[NVMET_NR_QUEUES + 1];
 	struct kref			ref;
+	struct work_struct		del_work;
 };
-
-
-static inline int
-nvmet_fc_iodnum(struct nvmet_fc_ls_iod *iodptr)
-{
-	return (iodptr - iodptr->tgtport->iod);
-}
-
-static inline int
-nvmet_fc_fodnum(struct nvmet_fc_fcp_iod *fodptr)
-{
-	return (fodptr - fodptr->queue->fod);
-}
-
 
 /*
  * Association and Connection IDs:
@@ -225,6 +212,7 @@ static DEFINE_IDA(nvmet_fc_tgtport_cnt);
 static void nvmet_fc_handle_ls_rqst_work(struct work_struct *work);
 static void nvmet_fc_handle_fcp_rqst_work(struct work_struct *work);
 static void nvmet_fc_fcp_rqst_op_done_work(struct work_struct *work);
+static void nvmet_fc_fcp_rqst_op_defer_work(struct work_struct *work);
 static void nvmet_fc_tgt_a_put(struct nvmet_fc_tgt_assoc *assoc);
 static int nvmet_fc_tgt_a_get(struct nvmet_fc_tgt_assoc *assoc);
 static void nvmet_fc_tgt_q_put(struct nvmet_fc_tgt_queue *queue);
@@ -233,6 +221,7 @@ static void nvmet_fc_tgtport_put(struct nvmet_fc_tgtport *tgtport);
 static int nvmet_fc_tgtport_get(struct nvmet_fc_tgtport *tgtport);
 static void nvmet_fc_handle_fcp_rqst(struct nvmet_fc_tgtport *tgtport,
 					struct nvmet_fc_fcp_iod *fod);
+static void nvmet_fc_delete_target_assoc(struct nvmet_fc_tgt_assoc *assoc);
 
 
 /* *********************** FC-NVME DMA Handling **************************** */
@@ -429,6 +418,7 @@ nvmet_fc_prep_fcp_iodlist(struct nvmet_fc_tgtport *tgtport,
 	for (i = 0; i < queue->sqsize; fod++, i++) {
 		INIT_WORK(&fod->work, nvmet_fc_handle_fcp_rqst_work);
 		INIT_WORK(&fod->done_work, nvmet_fc_fcp_rqst_op_done_work);
+		INIT_WORK(&fod->defer_work, nvmet_fc_fcp_rqst_op_defer_work);
 		fod->tgtport = tgtport;
 		fod->queue = queue;
 		fod->active = false;
@@ -512,6 +502,17 @@ nvmet_fc_queue_fcp_req(struct nvmet_fc_tgtport *tgtport,
 }
 
 static void
+nvmet_fc_fcp_rqst_op_defer_work(struct work_struct *work)
+{
+	struct nvmet_fc_fcp_iod *fod =
+		container_of(work, struct nvmet_fc_fcp_iod, defer_work);
+
+	/* Submit deferred IO for processing */
+	nvmet_fc_queue_fcp_req(fod->tgtport, fod->queue, fod->fcpreq);
+
+}
+
+static void
 nvmet_fc_free_fcp_iod(struct nvmet_fc_tgt_queue *queue,
 			struct nvmet_fc_fcp_iod *fod)
 {
@@ -568,13 +569,12 @@ nvmet_fc_free_fcp_iod(struct nvmet_fc_tgt_queue *queue,
 	/* inform LLDD IO is now being processed */
 	tgtport->ops->defer_rcv(&tgtport->fc_target_port, fcpreq);
 
-	/* Submit deferred IO for processing */
-	nvmet_fc_queue_fcp_req(tgtport, queue, fcpreq);
-
 	/*
 	 * Leave the queue lookup get reference taken when
 	 * fod was originally allocated.
 	 */
+
+	queue_work(queue->work_q, &fod->defer_work);
 }
 
 static int
@@ -806,6 +806,16 @@ nvmet_fc_find_target_queue(struct nvmet_fc_tgtport *tgtport,
 	return NULL;
 }
 
+static void
+nvmet_fc_delete_assoc(struct work_struct *work)
+{
+	struct nvmet_fc_tgt_assoc *assoc =
+		container_of(work, struct nvmet_fc_tgt_assoc, del_work);
+
+	nvmet_fc_delete_target_assoc(assoc);
+	nvmet_fc_tgt_a_put(assoc);
+}
+
 static struct nvmet_fc_tgt_assoc *
 nvmet_fc_alloc_target_assoc(struct nvmet_fc_tgtport *tgtport)
 {
@@ -830,6 +840,7 @@ nvmet_fc_alloc_target_assoc(struct nvmet_fc_tgtport *tgtport)
 	assoc->a_id = idx;
 	INIT_LIST_HEAD(&assoc->a_list);
 	kref_init(&assoc->ref);
+	INIT_WORK(&assoc->del_work, nvmet_fc_delete_assoc);
 
 	while (needrandom) {
 		get_random_bytes(&ran, sizeof(ran) - BYTES_FOR_QID);
@@ -1121,8 +1132,7 @@ nvmet_fc_delete_ctrl(struct nvmet_ctrl *ctrl)
 		nvmet_fc_tgtport_put(tgtport);
 
 		if (found_ctrl) {
-			nvmet_fc_delete_target_assoc(assoc);
-			nvmet_fc_tgt_a_put(assoc);
+			schedule_work(&assoc->del_work);
 			return;
 		}
 
@@ -1541,7 +1551,7 @@ nvmet_fc_ls_disconnect(struct nvmet_fc_tgtport *tgtport,
 
 static void nvmet_fc_fcp_nvme_cmd_done(struct nvmet_req *nvme_req);
 
-static struct nvmet_fabrics_ops nvmet_fc_tgt_fcp_ops;
+static const struct nvmet_fabrics_ops nvmet_fc_tgt_fcp_ops;
 
 static void
 nvmet_fc_xmt_ls_rsp_done(struct nvmefc_tgt_ls_req *lsreq)
@@ -1688,30 +1698,11 @@ static int
 nvmet_fc_alloc_tgt_pgs(struct nvmet_fc_fcp_iod *fod)
 {
 	struct scatterlist *sg;
-	struct page *page;
 	unsigned int nent;
-	u32 page_len, length;
-	int i = 0;
 
-	length = fod->total_length;
-	nent = DIV_ROUND_UP(length, PAGE_SIZE);
-	sg = kmalloc_array(nent, sizeof(struct scatterlist), GFP_KERNEL);
+	sg = sgl_alloc(fod->req.transfer_len, GFP_KERNEL, &nent);
 	if (!sg)
 		goto out;
-
-	sg_init_table(sg, nent);
-
-	while (length) {
-		page_len = min_t(u32, length, PAGE_SIZE);
-
-		page = alloc_page(GFP_KERNEL);
-		if (!page)
-			goto out_free_pages;
-
-		sg_set_page(&sg[i], page, page_len, 0);
-		length -= page_len;
-		i++;
-	}
 
 	fod->data_sg = sg;
 	fod->data_sg_cnt = nent;
@@ -1723,14 +1714,6 @@ nvmet_fc_alloc_tgt_pgs(struct nvmet_fc_fcp_iod *fod)
 
 	return 0;
 
-out_free_pages:
-	while (i > 0) {
-		i--;
-		__free_page(sg_page(&sg[i]));
-	}
-	kfree(sg);
-	fod->data_sg = NULL;
-	fod->data_sg_cnt = 0;
 out:
 	return NVME_SC_INTERNAL;
 }
@@ -1738,18 +1721,13 @@ out:
 static void
 nvmet_fc_free_tgt_pgs(struct nvmet_fc_fcp_iod *fod)
 {
-	struct scatterlist *sg;
-	int count;
-
 	if (!fod->data_sg || !fod->data_sg_cnt)
 		return;
 
 	fc_dma_unmap_sg(fod->tgtport->dev, fod->data_sg, fod->data_sg_cnt,
 				((fod->io_dir == NVMET_FCP_WRITE) ?
 					DMA_FROM_DEVICE : DMA_TO_DEVICE));
-	for_each_sg(fod->data_sg, sg, fod->data_sg_cnt, count)
-		__free_page(sg_page(sg));
-	kfree(fod->data_sg);
+	sgl_free(fod->data_sg);
 	fod->data_sg = NULL;
 	fod->data_sg_cnt = 0;
 }
@@ -1783,7 +1761,7 @@ nvmet_fc_prep_fcp_rsp(struct nvmet_fc_tgtport *tgtport,
 	u32 rsn, rspcnt, xfr_length;
 
 	if (fod->fcpreq->op == NVMET_FCOP_READDATA_RSP)
-		xfr_length = fod->total_length;
+		xfr_length = fod->req.transfer_len;
 	else
 		xfr_length = fod->offset;
 
@@ -1809,7 +1787,7 @@ nvmet_fc_prep_fcp_rsp(struct nvmet_fc_tgtport *tgtport,
 	rspcnt = atomic_inc_return(&fod->queue->zrspcnt);
 	if (!(rspcnt % fod->queue->ersp_ratio) ||
 	    sqe->opcode == nvme_fabrics_command ||
-	    xfr_length != fod->total_length ||
+	    xfr_length != fod->req.transfer_len ||
 	    (le16_to_cpu(cqe->status) & 0xFFFE) || cqewd[0] || cqewd[1] ||
 	    (sqe->flags & (NVME_CMD_FUSE_FIRST | NVME_CMD_FUSE_SECOND)) ||
 	    queue_90percent_full(fod->queue, le16_to_cpu(cqe->sq_head)))
@@ -1879,7 +1857,7 @@ nvmet_fc_transfer_fcp_data(struct nvmet_fc_tgtport *tgtport,
 	struct nvmefc_tgt_fcp_req *fcpreq = fod->fcpreq;
 	struct scatterlist *sg = fod->next_sg;
 	unsigned long flags;
-	u32 remaininglen = fod->total_length - fod->offset;
+	u32 remaininglen = fod->req.transfer_len - fod->offset;
 	u32 tlen = 0;
 	int ret;
 
@@ -1925,7 +1903,7 @@ nvmet_fc_transfer_fcp_data(struct nvmet_fc_tgtport *tgtport,
 	 * combined xfr with response.
 	 */
 	if ((op == NVMET_FCOP_READDATA) &&
-	    ((fod->offset + fcpreq->transfer_length) == fod->total_length) &&
+	    ((fod->offset + fcpreq->transfer_length) == fod->req.transfer_len) &&
 	    (tgtport->ops->target_features & NVMET_FCTGTFEAT_READDATA_RSP)) {
 		fcpreq->op = NVMET_FCOP_READDATA_RSP;
 		nvmet_fc_prep_fcp_rsp(tgtport, fod);
@@ -2005,7 +1983,7 @@ nvmet_fc_fod_op_done(struct nvmet_fc_fcp_iod *fod)
 		}
 
 		fod->offset += fcpreq->transferred_length;
-		if (fod->offset != fod->total_length) {
+		if (fod->offset != fod->req.transfer_len) {
 			spin_lock_irqsave(&fod->flock, flags);
 			fod->writedataactive = true;
 			spin_unlock_irqrestore(&fod->flock, flags);
@@ -2017,9 +1995,7 @@ nvmet_fc_fod_op_done(struct nvmet_fc_fcp_iod *fod)
 		}
 
 		/* data transfer complete, resume with nvmet layer */
-
-		fod->req.execute(&fod->req);
-
+		nvmet_req_execute(&fod->req);
 		break;
 
 	case NVMET_FCOP_READDATA:
@@ -2042,7 +2018,7 @@ nvmet_fc_fod_op_done(struct nvmet_fc_fcp_iod *fod)
 		}
 
 		fod->offset += fcpreq->transferred_length;
-		if (fod->offset != fod->total_length) {
+		if (fod->offset != fod->req.transfer_len) {
 			/* transfer the next chunk */
 			nvmet_fc_transfer_fcp_data(tgtport, fod,
 						NVMET_FCOP_READDATA);
@@ -2166,6 +2142,7 @@ nvmet_fc_handle_fcp_rqst(struct nvmet_fc_tgtport *tgtport,
 			struct nvmet_fc_fcp_iod *fod)
 {
 	struct nvme_fc_cmd_iu *cmdiu = &fod->cmdiubuf;
+	u32 xfrlen = be32_to_cpu(cmdiu->data_len);
 	int ret;
 
 	/*
@@ -2179,7 +2156,6 @@ nvmet_fc_handle_fcp_rqst(struct nvmet_fc_tgtport *tgtport,
 
 	fod->fcpreq->done = nvmet_fc_xmt_fcp_op_done;
 
-	fod->total_length = be32_to_cpu(cmdiu->data_len);
 	if (cmdiu->flags & FCNVME_CMD_FLAGS_WRITE) {
 		fod->io_dir = NVMET_FCP_WRITE;
 		if (!nvme_is_write(&cmdiu->sqe))
@@ -2190,16 +2166,13 @@ nvmet_fc_handle_fcp_rqst(struct nvmet_fc_tgtport *tgtport,
 			goto transport_error;
 	} else {
 		fod->io_dir = NVMET_FCP_NODATA;
-		if (fod->total_length)
+		if (xfrlen)
 			goto transport_error;
 	}
 
 	fod->req.cmd = &fod->cmdiubuf.sqe;
 	fod->req.rsp = &fod->rspiubuf.cqe;
 	fod->req.port = fod->queue->port;
-
-	/* ensure nvmet handlers will set cmd handler callback */
-	fod->req.execute = NULL;
 
 	/* clear any response payload */
 	memset(&fod->rspiubuf, 0, sizeof(fod->rspiubuf));
@@ -2217,10 +2190,12 @@ nvmet_fc_handle_fcp_rqst(struct nvmet_fc_tgtport *tgtport,
 		return;
 	}
 
+	fod->req.transfer_len = xfrlen;
+
 	/* keep a running counter of tail position */
 	atomic_inc(&fod->queue->sqtail);
 
-	if (fod->total_length) {
+	if (fod->req.transfer_len) {
 		ret = nvmet_fc_alloc_tgt_pgs(fod);
 		if (ret) {
 			nvmet_req_complete(&fod->req, ret);
@@ -2243,9 +2218,7 @@ nvmet_fc_handle_fcp_rqst(struct nvmet_fc_tgtport *tgtport,
 	 * can invoke the nvmet_layer now. If read data, cmd completion will
 	 * push the data
 	 */
-
-	fod->req.execute(&fod->req);
-
+	nvmet_req_execute(&fod->req);
 	return;
 
 transport_error:
@@ -2544,14 +2517,8 @@ nvmet_fc_add_port(struct nvmet_port *port)
 	list_for_each_entry(tgtport, &nvmet_fc_target_list, tgt_list) {
 		if ((tgtport->fc_target_port.node_name == traddr.nn) &&
 		    (tgtport->fc_target_port.port_name == traddr.pn)) {
-			/* a FC port can only be 1 nvmet port id */
-			if (!tgtport->port) {
-				tgtport->port = port;
-				port->priv = tgtport;
-				nvmet_fc_tgtport_get(tgtport);
-				ret = 0;
-			} else
-				ret = -EALREADY;
+			tgtport->port = port;
+			ret = 0;
 			break;
 		}
 	}
@@ -2562,22 +2529,10 @@ nvmet_fc_add_port(struct nvmet_port *port)
 static void
 nvmet_fc_remove_port(struct nvmet_port *port)
 {
-	struct nvmet_fc_tgtport *tgtport = port->priv;
-	unsigned long flags;
-	bool matched = false;
-
-	spin_lock_irqsave(&nvmet_fc_tgtlock, flags);
-	if (tgtport->port == port) {
-		matched = true;
-		tgtport->port = NULL;
-	}
-	spin_unlock_irqrestore(&nvmet_fc_tgtlock, flags);
-
-	if (matched)
-		nvmet_fc_tgtport_put(tgtport);
+	/* nothing to do */
 }
 
-static struct nvmet_fabrics_ops nvmet_fc_tgt_fcp_ops = {
+static const struct nvmet_fabrics_ops nvmet_fc_tgt_fcp_ops = {
 	.owner			= THIS_MODULE,
 	.type			= NVMF_TRTYPE_FC,
 	.msdbd			= 1,

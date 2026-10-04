@@ -11,12 +11,9 @@
 /**
  * struct genl_multicast_group - generic netlink multicast group
  * @name: name of the multicast group, names are per-family
- * @cap_sys_admin: whether %CAP_SYS_ADMIN is required for binding
  */
 struct genl_multicast_group {
 	char			name[GENL_NAMSIZ];
-	u8			flags;
-	u8			cap_sys_admin:1;
 };
 
 struct genl_ops;
@@ -149,17 +146,33 @@ void *genlmsg_put(struct sk_buff *skb, u32 portid, u32 seq,
 /**
  * genlmsg_nlhdr - Obtain netlink header from user specified header
  * @user_hdr: user header as returned from genlmsg_put()
- * @family: generic netlink family
  *
  * Returns pointer to netlink header.
  */
-static inline struct nlmsghdr *
-genlmsg_nlhdr(void *user_hdr, const struct genl_family *family)
+static inline struct nlmsghdr *genlmsg_nlhdr(void *user_hdr)
 {
 	return (struct nlmsghdr *)((char *)user_hdr -
-				   family->hdrsize -
 				   GENL_HDRLEN -
 				   NLMSG_HDRLEN);
+}
+
+/**
+ * genlmsg_parse_deprecated - parse attributes of a genetlink message
+ * @nlh: netlink message header
+ * @family: genetlink message family
+ * @tb: destination array with maxtype+1 elements
+ * @maxtype: maximum attribute type to be expected
+ * @policy: validation policy
+ * @extack: extended ACK report struct
+ */
+static inline int genlmsg_parse_deprecated(const struct nlmsghdr *nlh,
+					   const struct genl_family *family,
+					   struct nlattr *tb[], int maxtype,
+					   const struct nla_policy *policy,
+					   struct netlink_ext_ack *extack)
+{
+	return __nlmsg_parse(nlh, family->hdrsize + GENL_HDRLEN, tb, maxtype,
+			     policy, NL_VALIDATE_LIBERAL, extack);
 }
 
 /**
@@ -177,24 +190,22 @@ static inline int genlmsg_parse(const struct nlmsghdr *nlh,
 				const struct nla_policy *policy,
 				struct netlink_ext_ack *extack)
 {
-	return nlmsg_parse(nlh, family->hdrsize + GENL_HDRLEN, tb, maxtype,
-			   policy, extack);
+	return __nlmsg_parse(nlh, family->hdrsize + GENL_HDRLEN, tb, maxtype,
+			     policy, NL_VALIDATE_STRICT, extack);
 }
 
 /**
  * genl_dump_check_consistent - check if sequence is consistent and advertise if not
  * @cb: netlink callback structure that stores the sequence number
  * @user_hdr: user header as returned from genlmsg_put()
- * @family: generic netlink family
  *
  * Cf. nl_dump_check_consistent(), this just provides a wrapper to make it
  * simpler to use with generic netlink.
  */
 static inline void genl_dump_check_consistent(struct netlink_callback *cb,
-					      void *user_hdr,
-					      const struct genl_family *family)
+					      void *user_hdr)
 {
-	nl_dump_check_consistent(cb, genlmsg_nlhdr(user_hdr, family));
+	nl_dump_check_consistent(cb, genlmsg_nlhdr(user_hdr));
 }
 
 /**

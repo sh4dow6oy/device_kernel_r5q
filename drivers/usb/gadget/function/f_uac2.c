@@ -1,14 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * f_uac2.c -- USB Audio Class 2.0 Function
  *
  * Copyright (C) 2011
  *    Yadwinder Singh (yadi.brar01@gmail.com)
  *    Jaswinder Singh (jaswinder.singh@linaro.org)
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  */
 
 #include <linux/usb/audio.h>
@@ -181,7 +177,7 @@ static struct uac2_input_terminal_descriptor io_in_it_desc = {
 
 	.bDescriptorSubtype = UAC_INPUT_TERMINAL,
 	.bTerminalID = IO_IN_IT_ID,
-	.wTerminalType = cpu_to_le16(UAC_INPUT_TERMINAL_UNDEFINED),
+	.wTerminalType = cpu_to_le16(UAC_INPUT_TERMINAL_MICROPHONE),
 	.bAssocTerminal = 0,
 	.bCSourceID = USB_IN_CLK_ID,
 	.iChannelNames = 0,
@@ -209,7 +205,7 @@ static struct uac2_output_terminal_descriptor io_out_ot_desc = {
 
 	.bDescriptorSubtype = UAC_OUTPUT_TERMINAL,
 	.bTerminalID = IO_OUT_OT_ID,
-	.wTerminalType = cpu_to_le16(UAC_OUTPUT_TERMINAL_UNDEFINED),
+	.wTerminalType = cpu_to_le16(UAC_OUTPUT_TERMINAL_SPEAKER),
 	.bAssocTerminal = 0,
 	.bSourceID = USB_OUT_IT_ID,
 	.bCSourceID = USB_OUT_CLK_ID,
@@ -674,7 +670,7 @@ afunc_bind(struct usb_configuration *cfg, struct usb_function *fn)
 	hs_epin_desc.bEndpointAddress = fs_epin_desc.bEndpointAddress;
 
 	ret = usb_assign_descriptors(fn, fs_audio_desc, hs_audio_desc,
-					ss_audio_desc, NULL);
+					ss_audio_desc, ss_audio_desc);
 	if (ret)
 		return ret;
 
@@ -1014,7 +1010,7 @@ static struct configfs_attribute *f_uac2_attrs[] = {
 	NULL,
 };
 
-static struct config_item_type f_uac2_func_type = {
+static const struct config_item_type f_uac2_func_type = {
 	.ct_item_ops	= &f_uac2_item_ops,
 	.ct_attrs	= f_uac2_attrs,
 	.ct_owner	= THIS_MODULE,

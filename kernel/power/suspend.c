@@ -1,11 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * kernel/power/suspend.c - Suspend to RAM and standby functionality.
  *
  * Copyright (c) 2003 Patrick Mochel
  * Copyright (c) 2003 Open Source Development Lab
  * Copyright (c) 2009 Rafael J. Wysocki <rjw@sisk.pl>, Novell Inc.
- *
- * This file is released under the GPLv2.
  */
 
 #define pr_fmt(fmt) "PM: " fmt
@@ -27,14 +26,14 @@
 #include <linux/export.h>
 #include <linux/suspend.h>
 #include <linux/syscore_ops.h>
+#include <linux/swait.h>
 #include <linux/ftrace.h>
-#include <linux/rtc.h>
 #include <trace/events/power.h>
 #include <linux/compiler.h>
 #include <linux/moduleparam.h>
 #include <linux/wakeup_reason.h>
+
 #include "power.h"
-#include <soc/qcom/boot_stats.h>
 
 const char * const pm_labels[] = {
 	[PM_SUSPEND_TO_IDLE] = "freeze",
@@ -59,10 +58,16 @@ EXPORT_SYMBOL_GPL(pm_suspend_global_flags);
 
 static const struct platform_suspend_ops *suspend_ops;
 static const struct platform_s2idle_ops *s2idle_ops;
-static DECLARE_WAIT_QUEUE_HEAD(s2idle_wait_head);
+static DECLARE_SWAIT_QUEUE_HEAD(s2idle_wait_head);
 
 enum s2idle_states __read_mostly s2idle_state;
 static DEFINE_RAW_SPINLOCK(s2idle_lock);
+
+bool pm_suspend_via_s2idle(void)
+{
+	return mem_sleep_current == PM_SUSPEND_TO_IDLE;
+}
+EXPORT_SYMBOL_GPL(pm_suspend_via_s2idle);
 
 void s2idle_set_ops(const struct platform_s2idle_ops *ops)
 {
@@ -70,6 +75,7 @@ void s2idle_set_ops(const struct platform_s2idle_ops *ops)
 	s2idle_ops = ops;
 	unlock_system_sleep();
 }
+EXPORT_SYMBOL_GPL(s2idle_set_ops);
 
 static void s2idle_begin(void)
 {
@@ -93,8 +99,8 @@ static void s2idle_enter(void)
 	/* Push all the CPUs into the idle loop. */
 	wake_up_all_idle_cpus();
 	/* Make the current CPU wait so it can enter the idle loop too. */
-	wait_event(s2idle_wait_head,
-		   s2idle_state == S2IDLE_STATE_WAKE);
+	swait_event_exclusive(s2idle_wait_head,
+		    s2idle_state == S2IDLE_STATE_WAKE);
 
 	cpuidle_pause();
 	put_online_cpus();
@@ -162,7 +168,7 @@ void s2idle_wake(void)
 	raw_spin_lock_irqsave(&s2idle_lock, flags);
 	if (s2idle_state > S2IDLE_STATE_NONE) {
 		s2idle_state = S2IDLE_STATE_WAKE;
-		wake_up(&s2idle_wait_head);
+		swake_up_one(&s2idle_wait_head);
 	}
 	raw_spin_unlock_irqrestore(&s2idle_lock, flags);
 }
@@ -354,42 +360,9 @@ static int suspend_prepare(suspend_state_t state)
 
 	error = __pm_notifier_call_chain(PM_SUSPEND_PREPARE, -1, &nr_calls);
 	if (error) {
-#ifdef CONFIG_SEC_PM_DEBUG
-		void *callback;
-
-		callback = pm_notifier_call_chain_get_callback(nr_calls - 1);
-
-		if (IS_ERR(callback)) {
-			pr_info("PM_SUSPEND_PREPARE failed: %d\n",
-					nr_calls);
-			log_suspend_abort_reason("PM_SUSPEND_PREPARE failed: "
-					"%d", nr_calls);
-		} else {
-			pr_info("PM_SUSPEND_PREPARE failed: %d (%ps)\n",
-					nr_calls, callback);
-			log_suspend_abort_reason("PM_SUSPEND_PREPARE failed: "
-					"%ps (%d)", callback, nr_calls);
-		}
-#endif /* CONFIG_SEC_PM_DEBUG */
 		nr_calls--;
 		goto Finish;
 	}
-
-#ifndef CONFIG_SUSPEND_SKIP_SYNC
-	trace_suspend_resume(TPS("sync_filesystems"), 0, true);
-	pr_info("Syncing filesystems ... ");
-	if (intr_sync(NULL)) {
-		printk("canceled.\n");
-		trace_suspend_resume(TPS("sync_filesystems"), 0, false);
-		error = -EBUSY;
-#ifdef CONFIG_SEC_PM_DEBUG
-		log_suspend_abort_reason("intr_sync failed");
-#endif /* CONFIG_SEC_PM_DEBUG */
-		goto Finish;
-	}
-	pr_cont("done.\n");
-	trace_suspend_resume(TPS("sync_filesystems"), 0, false);
-#endif
 
 	trace_suspend_resume(TPS("freeze_processes"), 0, true);
 	error = suspend_freeze_processes();
@@ -400,9 +373,6 @@ static int suspend_prepare(suspend_state_t state)
 	log_suspend_abort_reason("One or more tasks refusing to freeze");
 	suspend_stats.failed_freeze++;
 	dpm_save_failed_step(SUSPEND_FREEZE);
-#ifdef CONFIG_SEC_PM_DEBUG
-	log_suspend_abort_reason("Freezing processes failed: %d", error);
-#endif /* CONFIG_SEC_PM_DEBUG */
  Finish:
 	__pm_notifier_call_chain(PM_POST_SUSPEND, nr_calls, NULL);
 	pm_restore_console();
@@ -479,6 +449,8 @@ static int suspend_enter(suspend_state_t state, bool *wakeup)
 	arch_suspend_disable_irqs();
 	BUG_ON(!irqs_disabled());
 
+	system_state = SYSTEM_SUSPEND;
+
 	error = syscore_suspend();
 	if (!error) {
 		*wakeup = pm_wakeup_pending();
@@ -486,7 +458,6 @@ static int suspend_enter(suspend_state_t state, bool *wakeup)
 			trace_suspend_resume(TPS("machine_suspend"),
 				state, true);
 			error = suspend_ops->enter(state);
-			update_marker("M - Start System Resume");
 			trace_suspend_resume(TPS("machine_suspend"),
 				state, false);
 		} else if (*wakeup) {
@@ -494,6 +465,8 @@ static int suspend_enter(suspend_state_t state, bool *wakeup)
 		}
 		syscore_resume();
 	}
+
+	system_state = SYSTEM_RUNNING;
 
 	arch_suspend_enable_irqs();
 	BUG_ON(irqs_disabled());
@@ -605,13 +578,21 @@ static int enter_state(suspend_state_t state)
 	} else if (!valid_state(state)) {
 		return -EINVAL;
 	}
-	if (!mutex_trylock(&pm_mutex))
+	if (!mutex_trylock(&system_transition_mutex))
 		return -EBUSY;
 
 	if (state == PM_SUSPEND_TO_IDLE)
 		s2idle_begin();
 
-	pr_info("Preparing system for sleep (%s)\n", mem_sleep_labels[state]);
+#ifndef CONFIG_SUSPEND_SKIP_SYNC
+	trace_suspend_resume(TPS("sync_filesystems"), 0, true);
+	pr_info("Syncing filesystems ... ");
+	ksys_sync();
+	pr_cont("done.\n");
+	trace_suspend_resume(TPS("sync_filesystems"), 0, false);
+#endif
+
+	pm_pr_dbg("Preparing system for sleep (%s)\n", mem_sleep_labels[state]);
 	pm_suspend_clear_flags();
 	error = suspend_prepare(state);
 	if (error)
@@ -621,30 +602,18 @@ static int enter_state(suspend_state_t state)
 		goto Finish;
 
 	trace_suspend_resume(TPS("suspend_enter"), state, false);
-	pr_info("Suspending system (%s)\n", mem_sleep_labels[state]);
+	pm_pr_dbg("Suspending system (%s)\n", mem_sleep_labels[state]);
 	pm_restrict_gfp_mask();
 	error = suspend_devices_and_enter(state);
 	pm_restore_gfp_mask();
 
  Finish:
 	events_check_enabled = false;
-	pr_info("Finishing wakeup.\n");
+	pm_pr_dbg("Finishing wakeup.\n");
 	suspend_finish();
  Unlock:
-	mutex_unlock(&pm_mutex);
+	mutex_unlock(&system_transition_mutex);
 	return error;
-}
-
-static void pm_suspend_marker(char *annotation)
-{
-	struct timespec ts;
-	struct rtc_time tm;
-
-	getnstimeofday(&ts);
-	rtc_time_to_tm(ts.tv_sec, &tm);
-	pr_info("suspend %s %d-%02d-%02d %02d:%02d:%02d.%09lu UTC\n",
-		annotation, tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-		tm.tm_hour, tm.tm_min, tm.tm_sec, ts.tv_nsec);
 }
 
 /**
@@ -661,7 +630,6 @@ int pm_suspend(suspend_state_t state)
 	if (state <= PM_SUSPEND_ON || state >= PM_SUSPEND_MAX)
 		return -EINVAL;
 
-	pm_suspend_marker("entry");
 	pr_info("suspend entry (%s)\n", mem_sleep_labels[state]);
 	error = enter_state(state);
 	if (error) {
@@ -670,9 +638,7 @@ int pm_suspend(suspend_state_t state)
 	} else {
 		suspend_stats.success++;
 	}
-	pm_suspend_marker("exit");
 	pr_info("suspend exit\n");
-	measure_wake_up_time();
 	return error;
 }
 EXPORT_SYMBOL(pm_suspend);

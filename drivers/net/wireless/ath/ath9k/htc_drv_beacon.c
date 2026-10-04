@@ -290,6 +290,9 @@ void ath9k_htc_swba(struct ath9k_htc_priv *priv,
 	struct ath_common *common = ath9k_hw_common(priv->ah);
 	int slot;
 
+	if (!priv->cur_beacon_conf.enable_beacon)
+		return;
+
 	if (swba->beacon_pending != 0) {
 		priv->beacon.bmisscnt++;
 		if (priv->beacon.bmisscnt > BSTUCK_THRESHOLD) {
@@ -384,7 +387,7 @@ void ath9k_htc_set_tsfadjust(struct ath9k_htc_priv *priv,
 
 static void ath9k_htc_beacon_iter(void *data, u8 *mac, struct ieee80211_vif *vif)
 {
-	bool *beacon_configured = (bool *)data;
+	bool *beacon_configured = data;
 	struct ath9k_htc_vif *avp = (struct ath9k_htc_vif *) vif->drv_priv;
 
 	if (vif->type == NL80211_IFTYPE_STATION &&

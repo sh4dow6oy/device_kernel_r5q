@@ -95,7 +95,6 @@ static void
 cifs_revalidate_cache(struct inode *inode, struct cifs_fattr *fattr)
 {
 	struct cifsInodeInfo *cifs_i = CIFS_I(inode);
-	struct timespec ts;
 
 	cifs_dbg(FYI, "%s: revalidating inode %llu\n",
 		 __func__, cifs_i->uniqueid);
@@ -114,8 +113,7 @@ cifs_revalidate_cache(struct inode *inode, struct cifs_fattr *fattr)
 	}
 
 	 /* revalidate if mtime or size have changed */
-	ts = timespec64_to_timespec(inode->i_mtime);
-	if (timespec_equal(&ts, &fattr->cf_mtime) &&
+	if (timespec64_equal(&inode->i_mtime, &fattr->cf_mtime) &&
 	    cifs_i->server_eof == fattr->cf_eof) {
 		cifs_dbg(FYI, "%s: inode %llu is unchanged\n",
 			 __func__, cifs_i->uniqueid);
@@ -164,9 +162,9 @@ cifs_fattr_to_inode(struct inode *inode, struct cifs_fattr *fattr)
 	cifs_revalidate_cache(inode, fattr);
 
 	spin_lock(&inode->i_lock);
-	inode->i_atime = timespec_to_timespec64(fattr->cf_atime);
-	inode->i_mtime = timespec_to_timespec64(fattr->cf_mtime);
-	inode->i_ctime = timespec_to_timespec64(fattr->cf_ctime);
+	inode->i_atime = fattr->cf_atime;
+	inode->i_mtime = fattr->cf_mtime;
+	inode->i_ctime = fattr->cf_ctime;
 	inode->i_rdev = fattr->cf_rdev;
 	cifs_nlink_fattr_to_inode(inode, fattr);
 	inode->i_uid = fattr->cf_uid;
@@ -327,8 +325,8 @@ cifs_create_dfs_fattr(struct cifs_fattr *fattr, struct super_block *sb)
 	fattr->cf_mode = S_IFDIR | S_IXUGO | S_IRWXU;
 	fattr->cf_uid = cifs_sb->mnt_uid;
 	fattr->cf_gid = cifs_sb->mnt_gid;
-	ktime_get_real_ts(&fattr->cf_mtime);
-	fattr->cf_mtime = timespec_trunc(fattr->cf_mtime, sb->s_time_gran);
+	ktime_get_real_ts64(&fattr->cf_mtime);
+	fattr->cf_mtime = timespec64_trunc(fattr->cf_mtime, sb->s_time_gran);
 	fattr->cf_atime = fattr->cf_ctime = fattr->cf_mtime;
 	fattr->cf_nlink = 2;
 	fattr->cf_flags |= CIFS_FATTR_DFS_REFERRAL;
@@ -418,8 +416,7 @@ int cifs_get_inode_info_unix(struct inode **pinode,
 		}
 
 		/* if filetype is different, return error */
-		if (unlikely(((*pinode)->i_mode & S_IFMT) !=
-		    (fattr.cf_mode & S_IFMT))) {
+		if (unlikely(inode_wrong_type(*pinode, fattr.cf_mode))) {
 			CIFS_I(*pinode)->time = 0; /* force reval */
 			rc = -ESTALE;
 			goto cgiiu_exit;
@@ -608,8 +605,8 @@ cifs_all_info_to_fattr(struct cifs_fattr *fattr, FILE_ALL_INFO *info,
 	if (info->LastAccessTime)
 		fattr->cf_atime = cifs_NTtimeToUnix(info->LastAccessTime);
 	else {
-		ktime_get_real_ts(&fattr->cf_atime);
-		fattr->cf_atime = timespec_trunc(fattr->cf_atime, sb->s_time_gran);
+		ktime_get_real_ts64(&fattr->cf_atime);
+		fattr->cf_atime = timespec64_trunc(fattr->cf_atime, sb->s_time_gran);
 	}
 
 	fattr->cf_ctime = cifs_NTtimeToUnix(info->ChangeTime);
@@ -752,7 +749,8 @@ cifs_get_inode_info(struct inode **inode, const char *full_path,
 	cifs_dbg(FYI, "Getting info on %s\n", full_path);
 
 	if ((data == NULL) && (*inode != NULL)) {
-		if (CIFS_CACHE_READ(CIFS_I(*inode))) {
+		if (CIFS_CACHE_READ(CIFS_I(*inode)) &&
+		    CIFS_I(*inode)->time != 0) {
 			cifs_dbg(FYI, "No need to revalidate cached inode sizes\n");
 			goto cgii_exit;
 		}
@@ -972,7 +970,7 @@ cifs_find_inode(struct inode *inode, void *opaque)
 		return 0;
 
 	/* don't match inode of different type */
-	if ((inode->i_mode & S_IFMT) != (fattr->cf_mode & S_IFMT))
+	if (inode_wrong_type(inode, fattr->cf_mode))
 		return 0;
 
 	/* if it's not a directory or has no dentries, then flag it */
@@ -1041,7 +1039,7 @@ retry_iget5_locked:
 		}
 
 		cifs_fattr_to_inode(inode, fattr);
-		if (sb->s_flags & MS_NOATIME)
+		if (sb->s_flags & SB_NOATIME)
 			inode->i_flags |= S_NOATIME | S_NOCMTIME;
 		if (inode->i_state & I_NEW) {
 			inode->i_ino = hash;
@@ -1105,7 +1103,7 @@ iget_no_retry:
 	tcon->resource_id = CIFS_I(inode)->uniqueid;
 #endif
 
-	if (rc && tcon->ipc) {
+	if (rc && tcon->pipe) {
 		cifs_dbg(FYI, "ipc connection - fake read inode\n");
 		spin_lock(&inode->i_lock);
 		inode->i_mode |= S_IFDIR;
@@ -1122,10 +1120,7 @@ iget_no_retry:
 
 out:
 	kfree(path);
-	/* can not call macro free_xid here since in a void func
-	 * TODO: This is no longer true
-	 */
-	_free_xid(xid);
+	free_xid(xid);
 	return inode;
 }
 
@@ -1150,14 +1145,14 @@ cifs_set_file_info(struct inode *inode, struct iattr *attrs, unsigned int xid,
 	if (attrs->ia_valid & ATTR_ATIME) {
 		set_time = true;
 		info_buf.LastAccessTime =
-			cpu_to_le64(cifs_UnixTimeToNT(timespec64_to_timespec(attrs->ia_atime)));
+			cpu_to_le64(cifs_UnixTimeToNT(attrs->ia_atime));
 	} else
 		info_buf.LastAccessTime = 0;
 
 	if (attrs->ia_valid & ATTR_MTIME) {
 		set_time = true;
 		info_buf.LastWriteTime =
-		    cpu_to_le64(cifs_UnixTimeToNT(timespec64_to_timespec(attrs->ia_mtime)));
+		    cpu_to_le64(cifs_UnixTimeToNT(attrs->ia_mtime));
 	} else
 		info_buf.LastWriteTime = 0;
 
@@ -1170,7 +1165,7 @@ cifs_set_file_info(struct inode *inode, struct iattr *attrs, unsigned int xid,
 	if (set_time && (attrs->ia_valid & ATTR_CTIME)) {
 		cifs_dbg(FYI, "CIFS - CTIME changed\n");
 		info_buf.ChangeTime =
-		    cpu_to_le64(cifs_UnixTimeToNT(timespec64_to_timespec(attrs->ia_ctime)));
+		    cpu_to_le64(cifs_UnixTimeToNT(attrs->ia_ctime));
 	} else
 		info_buf.ChangeTime = 0;
 
@@ -1600,6 +1595,15 @@ int cifs_mkdir(struct inode *inode, struct dentry *direntry, umode_t mode)
 		goto mkdir_out;
 	}
 
+	server = tcon->ses->server;
+
+	if ((server->ops->posix_mkdir) && (tcon->posix_extensions)) {
+		rc = server->ops->posix_mkdir(xid, inode, mode, tcon, full_path,
+					      cifs_sb);
+		d_drop(direntry); /* for time being always refresh inode info */
+		goto mkdir_out;
+	}
+
 	if (cap_unix(tcon->ses) && (CIFS_UNIX_POSIX_PATH_OPS_CAP &
 				le64_to_cpu(tcon->fsUnixInfo.Capability))) {
 		rc = cifs_posix_mkdir(inode, direntry, mode, full_path, cifs_sb,
@@ -1607,8 +1611,6 @@ int cifs_mkdir(struct inode *inode, struct dentry *direntry, umode_t mode)
 		if (rc != -EOPNOTSUPP)
 			goto mkdir_out;
 	}
-
-	server = tcon->ses->server;
 
 	if (!server->ops->mkdir) {
 		rc = -ENOSYS;
@@ -1823,7 +1825,7 @@ cifs_rename2(struct inode *source_dir, struct dentry *source_dentry,
 		 * with unix extensions enabled.
 		 */
 		info_buf_source =
-			kmalloc(2 * sizeof(FILE_UNIX_BASIC_INFO),
+			kmalloc_array(2, sizeof(FILE_UNIX_BASIC_INFO),
 					GFP_KERNEL);
 		if (info_buf_source == NULL) {
 			rc = -ENOMEM;
@@ -1889,13 +1891,13 @@ cifs_inode_needs_reval(struct inode *inode)
 	struct cifsInodeInfo *cifs_i = CIFS_I(inode);
 	struct cifs_sb_info *cifs_sb = CIFS_SB(inode->i_sb);
 
+	if (cifs_i->time == 0)
+		return true;
+
 	if (CIFS_CACHE_READ(cifs_i))
 		return false;
 
 	if (!lookupCacheEnabled)
-		return true;
-
-	if (cifs_i->time == 0)
 		return true;
 
 	if (!cifs_sb->actimeo)
@@ -2095,8 +2097,8 @@ int cifs_getattr(const struct path *path, struct kstat *stat,
 	/* old CIFS Unix Extensions doesn't return create time */
 	if (CIFS_I(inode)->createtime) {
 		stat->result_mask |= STATX_BTIME;
-		stat->btime = timespec_to_timespec64(
-		      cifs_NTtimeToUnix(cpu_to_le64(CIFS_I(inode)->createtime)));
+		stat->btime =
+		      cifs_NTtimeToUnix(cpu_to_le64(CIFS_I(inode)->createtime));
 	}
 
 	stat->attributes_mask |= (STATX_ATTR_COMPRESSED | STATX_ATTR_ENCRYPTED);
@@ -2140,10 +2142,14 @@ static int cifs_truncate_page(struct address_space *mapping, loff_t from)
 
 static void cifs_setsize(struct inode *inode, loff_t offset)
 {
+	struct cifsInodeInfo *cifs_i = CIFS_I(inode);
+
 	spin_lock(&inode->i_lock);
 	i_size_write(inode, offset);
 	spin_unlock(&inode->i_lock);
 
+	/* Cached inode must be refreshed on truncate */
+	cifs_i->time = 0;
 	truncate_pagecache(inode, offset);
 }
 
@@ -2271,6 +2277,11 @@ cifs_setattr_unix(struct dentry *direntry, struct iattr *attrs)
 	 * the flush returns error?
 	 */
 	rc = filemap_write_and_wait(inode->i_mapping);
+	if (is_interrupt_error(rc)) {
+		rc = -ERESTARTSYS;
+		goto out;
+	}
+
 	mapping_set_error(inode->i_mapping, rc);
 	rc = 0;
 
@@ -2307,17 +2318,17 @@ cifs_setattr_unix(struct dentry *direntry, struct iattr *attrs)
 		args->gid = INVALID_GID; /* no change */
 
 	if (attrs->ia_valid & ATTR_ATIME)
-		args->atime = cifs_UnixTimeToNT(timespec64_to_timespec(attrs->ia_atime));
+		args->atime = cifs_UnixTimeToNT(attrs->ia_atime);
 	else
 		args->atime = NO_CHANGE_64;
 
 	if (attrs->ia_valid & ATTR_MTIME)
-		args->mtime = cifs_UnixTimeToNT(timespec64_to_timespec(attrs->ia_mtime));
+		args->mtime = cifs_UnixTimeToNT(attrs->ia_mtime);
 	else
 		args->mtime = NO_CHANGE_64;
 
 	if (attrs->ia_valid & ATTR_CTIME)
-		args->ctime = cifs_UnixTimeToNT(timespec64_to_timespec(attrs->ia_ctime));
+		args->ctime = cifs_UnixTimeToNT(attrs->ia_ctime);
 	else
 		args->ctime = NO_CHANGE_64;
 
@@ -2414,6 +2425,11 @@ cifs_setattr_nounix(struct dentry *direntry, struct iattr *attrs)
 	 * the flush returns error?
 	 */
 	rc = filemap_write_and_wait(inode->i_mapping);
+	if (is_interrupt_error(rc)) {
+		rc = -ERESTARTSYS;
+		goto cifs_setattr_exit;
+	}
+
 	mapping_set_error(inode->i_mapping, rc);
 	rc = 0;
 
@@ -2533,13 +2549,18 @@ cifs_setattr(struct dentry *direntry, struct iattr *attrs)
 {
 	struct cifs_sb_info *cifs_sb = CIFS_SB(direntry->d_sb);
 	struct cifs_tcon *pTcon = cifs_sb_master_tcon(cifs_sb);
+	int rc, retries = 0;
 
-	if (pTcon->unix_ext)
-		return cifs_setattr_unix(direntry, attrs);
-
-	return cifs_setattr_nounix(direntry, attrs);
+	do {
+		if (pTcon->unix_ext)
+			rc = cifs_setattr_unix(direntry, attrs);
+		else
+			rc = cifs_setattr_nounix(direntry, attrs);
+		retries++;
+	} while (is_retryable_error(rc) && retries < 2);
 
 	/* BB: add cifs_setattr_legacy for really old servers */
+	return rc;
 }
 
 #if 0

@@ -208,7 +208,7 @@ struct audit_context {
 	struct audit_proctitle proctitle;
 };
 
-extern u32 audit_ever_enabled;
+extern bool audit_ever_enabled;
 
 extern void audit_copy_inode(struct audit_names *name,
 			     const struct dentry *dentry,
@@ -232,7 +232,7 @@ static inline int audit_hash_ino(u32 ino)
 /* Indicates that audit should log the full pathname. */
 #define AUDIT_NAME_FULL -1
 
-extern int audit_match_class(int class, unsigned syscall);
+extern int audit_match_class(int class, unsigned int syscall);
 extern int audit_comparator(const u32 left, const u32 op, const u32 right);
 extern int audit_uid_comparator(kuid_t left, u32 op, kuid_t right);
 extern int audit_gid_comparator(kgid_t left, u32 op, kgid_t right);
@@ -341,4 +341,5 @@ extern struct list_head *audit_killed_trees(void);
 #define audit_filter_inodes(t,c) AUDIT_DISABLED
 #endif
 
-extern struct mutex audit_cmd_mutex;
+extern void audit_ctl_lock(void);
+extern void audit_ctl_unlock(void);

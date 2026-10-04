@@ -51,10 +51,8 @@ enum pid_type
  */
 
 struct upid {
-	/* Try to keep pid_chain in the same cacheline as nr for find_vpid */
 	int nr;
 	struct pid_namespace *ns;
-	struct hlist_node pid_chain;
 };
 
 struct pid
@@ -72,6 +70,10 @@ struct pid
 extern struct pid init_struct_pid;
 
 extern const struct file_operations pidfd_fops;
+
+struct file;
+
+extern struct pid *pidfd_pid(const struct file *file);
 struct pid *pidfd_get_pid(unsigned int fd, unsigned int *flags);
 
 static inline struct pid *get_pid(struct pid *pid)

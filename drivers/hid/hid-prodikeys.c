@@ -239,9 +239,9 @@ drop_note:
 	return;
 }
 
-static void pcmidi_sustained_note_release(unsigned long data)
+static void pcmidi_sustained_note_release(struct timer_list *t)
 {
-	struct pcmidi_sustain *pms = (struct pcmidi_sustain *)data;
+	struct pcmidi_sustain *pms = from_timer(pms, t, timer);
 
 	pcmidi_send_note(pms->pm, pms->status, pms->note, pms->velocity);
 	pms->in_use = 0;
@@ -256,8 +256,7 @@ static void init_sustain_timers(struct pcmidi_snd *pm)
 		pms = &pm->sustained_notes[i];
 		pms->in_use = 0;
 		pms->pm = pm;
-		setup_timer(&pms->timer, pcmidi_sustained_note_release,
-			(unsigned long)pms);
+		timer_setup(&pms->timer, pcmidi_sustained_note_release, 0);
 	}
 }
 
@@ -392,6 +391,10 @@ static int pcmidi_handle_report4(struct pcmidi_snd *pm, u8 *data)
 	bit_mask = data[1];
 	bit_mask = (bit_mask << 8) | data[2];
 	bit_mask = (bit_mask << 8) | data[3];
+
+	/* robustness in case input_mapping hook does not get called */
+	if (!pm->input_ep82)
+		return 0;
 
 	/* break keys */
 	for (bit_index = 0; bit_index < 24; bit_index++) {

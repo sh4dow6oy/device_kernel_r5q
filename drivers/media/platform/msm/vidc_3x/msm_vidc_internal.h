@@ -1,5 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Copyright (c) 2012-2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -37,7 +38,7 @@
 #include "vidc_hfi_api.h"
 
 #define MSM_VIDC_DRV_NAME "msm_vidc_driver"
-#define MSM_VIDC_VERSION KERNEL_VERSION(0, 0, 1)
+//#define MSM_VIDC_VERSION KERNEL_VERSION(0, 0, 1)
 #define MAX_DEBUGFS_NAME 50
 #define DEFAULT_TIMEOUT 3
 #define DEFAULT_HEIGHT 1088
@@ -125,6 +126,7 @@ static inline void DEINIT_MSM_VIDC_LIST(struct msm_vidc_list *mlist)
 {
 	mutex_destroy(&mlist->lock);
 }
+
 enum buffer_owner {
 	DRIVER,
 	FIRMWARE,
@@ -260,7 +262,6 @@ struct msm_vidc_core {
 	u32 dec_codec_supported;
 	u32 codec_count;
 	struct msm_vidc_capability *capabilities;
-	struct delayed_work fw_unload_work;
 	bool smmu_fault_handled;
 };
 
@@ -339,6 +340,15 @@ int msm_vidc_check_session_supported(struct msm_vidc_inst *inst);
 int msm_vidc_check_scaling_supported(struct msm_vidc_inst *inst);
 void msm_vidc_queue_v4l2_event(struct msm_vidc_inst *inst, int event_type);
 
+struct msm_vidc_format_constraint {
+	u32 fourcc;
+	u32 num_planes;
+	u32 y_max_stride;
+	u32 y_buffer_alignment;
+	u32 uv_max_stride;
+	u32 uv_buffer_alignment;
+};
+
 struct crop_info {
 	u32 nLeft;
 	u32 nTop;
@@ -403,7 +413,6 @@ struct msm_smem *msm_smem_user_to_kernel(struct msm_vidc_inst *inst,
 		int fd, u32 offset,
 		u32 size, enum hal_buffer buffer_type);
 
-void msm_vidc_fw_unload_handler(struct work_struct *work);
 /* XXX: normally should be in msm_vidc.h, but that's meant for public APIs,
  * whereas this is private
  */

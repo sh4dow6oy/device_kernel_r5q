@@ -1,13 +1,6 @@
-/* Copyright (c) 2012-2018, 2020, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2012-2018, 2020, The Linux Foundation. All rights reserved.
  */
 
 #include "ipa_i.h"
@@ -559,14 +552,12 @@ static int ipa_generate_flt_hw_tbl_v1_1(enum ipa_ip_type ip,
 		IPAERR("flt tbl empty ip=%d\n", ip);
 		goto error;
 	}
-	mem->base = dma_alloc_coherent(ipa_ctx->pdev, mem->size,
+	mem->base = dma_zalloc_coherent(ipa_ctx->pdev, mem->size,
 			&mem->phys_base, GFP_KERNEL);
 	if (!mem->base) {
 		IPAERR("fail to alloc DMA buff of size %d\n", mem->size);
 		goto error;
 	}
-
-	memset(mem->base, 0, mem->size);
 
 	/* build the flt tbl in the DMA buffer to submit to IPA HW */
 	base = hdr = (u8 *)mem->base;
@@ -788,14 +779,13 @@ static int ipa_generate_flt_hw_tbl_v2(enum ipa_ip_type ip,
 	mem->size = IPA_HW_TABLE_ALIGNMENT(mem->size);
 
 	if (mem->size) {
-		mem->base = dma_alloc_coherent(ipa_ctx->pdev, mem->size,
+		mem->base = dma_zalloc_coherent(ipa_ctx->pdev, mem->size,
 				&mem->phys_base, GFP_KERNEL);
 		if (!mem->base) {
 			IPAERR("fail to alloc DMA buff of size %d\n",
 					mem->size);
 			goto body_err;
 		}
-		memset(mem->base, 0, mem->size);
 	}
 
 	if (ipa_generate_flt_hw_tbl_common(ip, mem->base, head1->base,

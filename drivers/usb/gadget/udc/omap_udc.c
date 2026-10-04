@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * omap_udc.c -- for OMAP full speed udc; most chips support OTG.
  *
@@ -5,11 +6,6 @@
  * Copyright (C) 2004-2005 David Brownell
  *
  * OMAP2 & DMA support by Kyungmin Park <kyungmin.park@samsung.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  */
 
 #undef	DEBUG
@@ -735,8 +731,6 @@ static void dma_channel_claim(struct omap_ep *ep, unsigned channel)
 		if (status == 0) {
 			omap_writew(reg, UDC_TXDMA_CFG);
 			/* EMIFF or SDRC */
-			omap_set_dma_src_burst_mode(ep->lch,
-						OMAP_DMA_DATA_BURST_4);
 			omap_set_dma_src_data_pack(ep->lch, 1);
 			/* TIPB */
 			omap_set_dma_dest_params(ep->lch,
@@ -758,8 +752,6 @@ static void dma_channel_claim(struct omap_ep *ep, unsigned channel)
 				UDC_DATA_DMA,
 				0, 0);
 			/* EMIFF or SDRC */
-			omap_set_dma_dest_burst_mode(ep->lch,
-						OMAP_DMA_DATA_BURST_4);
 			omap_set_dma_dest_data_pack(ep->lch, 1);
 		}
 	}
@@ -1858,9 +1850,9 @@ static irqreturn_t omap_udc_irq(int irq, void *_udc)
 #define PIO_OUT_TIMEOUT	(jiffies + HZ/3)
 #define HALF_FULL(f)	(!((f)&(UDC_NON_ISO_FIFO_FULL|UDC_NON_ISO_FIFO_EMPTY)))
 
-static void pio_out_timer(unsigned long _ep)
+static void pio_out_timer(struct timer_list *t)
 {
-	struct omap_ep	*ep = (void *) _ep;
+	struct omap_ep	*ep = from_timer(ep, t, timer);
 	unsigned long	flags;
 	u16		stat_flg;
 
@@ -2438,22 +2430,9 @@ static int proc_udc_show(struct seq_file *s, void *_)
 	return 0;
 }
 
-static int proc_udc_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, proc_udc_show, NULL);
-}
-
-static const struct file_operations proc_ops = {
-	.owner		= THIS_MODULE,
-	.open		= proc_udc_open,
-	.read		= seq_read,
-	.llseek		= seq_lseek,
-	.release	= single_release,
-};
-
 static void create_proc_file(void)
 {
-	proc_create(proc_filename, 0, NULL, &proc_ops);
+	proc_create_single(proc_filename, 0, NULL, proc_udc_show);
 }
 
 static void remove_proc_file(void)
@@ -2548,9 +2527,7 @@ omap_ep_setup(char *name, u8 addr, u8 type,
 		}
 		if (dbuf && addr)
 			epn_rxtx |= UDC_EPN_RX_DB;
-		init_timer(&ep->timer);
-		ep->timer.function = pio_out_timer;
-		ep->timer.data = (unsigned long) ep;
+		timer_setup(&ep->timer, pio_out_timer, 0);
 	}
 	if (addr)
 		epn_rxtx |= UDC_EPN_RX_VALID;

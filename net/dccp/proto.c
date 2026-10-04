@@ -38,6 +38,9 @@
 #include "dccp.h"
 #include "feat.h"
 
+#define CREATE_TRACE_POINTS
+#include "trace.h"
+
 DEFINE_SNMP_STAT(struct dccp_mib, dccp_statistics) __read_mostly;
 
 EXPORT_SYMBOL_GPL(dccp_statistics);
@@ -110,7 +113,7 @@ void dccp_set_state(struct sock *sk, const int state)
 	/* Change state AFTER socket is unhashed to avoid closed
 	 * socket sitting in hash tables.
 	 */
-	sk->sk_state = state;
+	inet_sk_set_state(sk, state);
 }
 
 EXPORT_SYMBOL_GPL(dccp_set_state);
@@ -322,14 +325,18 @@ EXPORT_SYMBOL_GPL(dccp_disconnect);
  *	take care of normal races (between the test and the event) and we don't
  *	go look at any of the socket buffers directly.
  */
-unsigned int dccp_poll(struct file *file, struct socket *sock,
+__poll_t dccp_poll(struct file *file, struct socket *sock,
 		       poll_table *wait)
 {
-	unsigned int mask;
 	struct sock *sk = sock->sk;
+	__poll_t mask;
+	u8 shutdown;
+	int state;
 
-	sock_poll_wait(file, sk_sleep(sk), wait);
-	if (sk->sk_state == DCCP_LISTEN)
+	sock_poll_wait(file, sock, wait);
+
+	state = inet_sk_state_load(sk);
+	if (state == DCCP_LISTEN)
 		return inet_csk_listen_poll(sk);
 
 	/* Socket is not locked. We are protected from async events
@@ -338,22 +345,23 @@ unsigned int dccp_poll(struct file *file, struct socket *sock,
 	 */
 
 	mask = 0;
-	if (sk->sk_err)
-		mask = POLLERR;
+	if (READ_ONCE(sk->sk_err))
+		mask = EPOLLERR;
+	shutdown = READ_ONCE(sk->sk_shutdown);
 
-	if (sk->sk_shutdown == SHUTDOWN_MASK || sk->sk_state == DCCP_CLOSED)
-		mask |= POLLHUP;
-	if (sk->sk_shutdown & RCV_SHUTDOWN)
-		mask |= POLLIN | POLLRDNORM | POLLRDHUP;
+	if (shutdown == SHUTDOWN_MASK || state == DCCP_CLOSED)
+		mask |= EPOLLHUP;
+	if (shutdown & RCV_SHUTDOWN)
+		mask |= EPOLLIN | EPOLLRDNORM | EPOLLRDHUP;
 
 	/* Connected? */
-	if ((1 << sk->sk_state) & ~(DCCPF_REQUESTING | DCCPF_RESPOND)) {
+	if ((1 << state) & ~(DCCPF_REQUESTING | DCCPF_RESPOND)) {
 		if (atomic_read(&sk->sk_rmem_alloc) > 0)
-			mask |= POLLIN | POLLRDNORM;
+			mask |= EPOLLIN | EPOLLRDNORM;
 
-		if (!(sk->sk_shutdown & SEND_SHUTDOWN)) {
+		if (!(shutdown & SEND_SHUTDOWN)) {
 			if (sk_stream_is_writeable(sk)) {
-				mask |= POLLOUT | POLLWRNORM;
+				mask |= EPOLLOUT | EPOLLWRNORM;
 			} else {  /* send SIGIO later */
 				sk_set_bit(SOCKWQ_ASYNC_NOSPACE, sk);
 				set_bit(SOCK_NOSPACE, &sk->sk_socket->flags);
@@ -363,13 +371,12 @@ unsigned int dccp_poll(struct file *file, struct socket *sock,
 				 * IO signal will be lost.
 				 */
 				if (sk_stream_is_writeable(sk))
-					mask |= POLLOUT | POLLWRNORM;
+					mask |= EPOLLOUT | EPOLLWRNORM;
 			}
 		}
 	}
 	return mask;
 }
-
 EXPORT_SYMBOL_GPL(dccp_poll);
 
 int dccp_ioctl(struct sock *sk, int cmd, unsigned long arg)
@@ -765,6 +772,8 @@ int dccp_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 	int rc, size;
 	long timeo;
 
+	trace_dccp_probe(sk, len);
+
 	if (len > READ_ONCE(dp->dccps_mss_cache))
 		return -EMSGSIZE;
 
@@ -1142,7 +1151,7 @@ static int __init dccp_init(void)
 	int rc;
 
 	BUILD_BUG_ON(sizeof(struct dccp_skb_cb) >
-		     FIELD_SIZEOF(struct sk_buff, cb));
+		     sizeof_field(struct sk_buff, cb));
 	rc = percpu_counter_init(&dccp_orphan_count, 0, GFP_KERNEL);
 	if (rc)
 		goto out_fail;

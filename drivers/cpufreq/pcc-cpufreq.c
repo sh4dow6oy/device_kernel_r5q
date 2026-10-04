@@ -351,6 +351,8 @@ static int __init pcc_cpufreq_do_osc(acpi_handle *handle)
 	}
 
 	kfree(output.pointer);
+	output.pointer = NULL;
+	output.length = ACPI_ALLOCATE_BUFFER;
 	capabilities[0] = 0x0;
 	capabilities[1] = 0x1;
 
@@ -591,6 +593,15 @@ static int __init pcc_cpufreq_init(void)
 	if (ret) {
 		pr_debug("pcc_cpufreq_init: PCCH evaluation failed\n");
 		return ret;
+	}
+
+	if (num_present_cpus() > 4) {
+		pcc_cpufreq_driver.flags |= CPUFREQ_NO_AUTO_DYNAMIC_SWITCHING;
+		pr_err("%s: Too many CPUs, dynamic performance scaling disabled\n",
+		       __func__);
+		pr_err("%s: Try to enable another scaling driver through BIOS settings\n",
+		       __func__);
+		pr_err("%s: and complain to the system vendor\n", __func__);
 	}
 
 	ret = cpufreq_register_driver(&pcc_cpufreq_driver);

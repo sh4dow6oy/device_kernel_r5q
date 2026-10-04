@@ -96,6 +96,8 @@ static int itg3200_read_raw(struct iio_dev *indio_dev,
 	case IIO_CHAN_INFO_RAW:
 		reg = (u8)chan->address;
 		ret = itg3200_read_reg_s16(indio_dev, reg, val);
+		if (ret)
+			return ret;
 		return IIO_VAL_INT;
 	case IIO_CHAN_INFO_SCALE:
 		*val = 0;
@@ -278,7 +280,6 @@ static const struct iio_chan_spec itg3200_channels[] = {
 static const struct iio_info itg3200_info = {
 	.read_raw = &itg3200_read_raw,
 	.write_raw = &itg3200_write_raw,
-	.driver_module = THIS_MODULE,
 };
 
 static const unsigned long itg3200_available_scan_masks[] = { 0xffffffff, 0x0 };

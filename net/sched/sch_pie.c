@@ -74,6 +74,7 @@ struct pie_sched_data {
 	struct pie_vars vars;
 	struct pie_stats stats;
 	struct timer_list adapt_timer;
+	struct Qdisc *sch;
 };
 
 static void pie_params_init(struct pie_params *params)
@@ -180,7 +181,8 @@ static const struct nla_policy pie_policy[TCA_PIE_MAX + 1] = {
 	[TCA_PIE_BYTEMODE] = {.type = NLA_U32},
 };
 
-static int pie_change(struct Qdisc *sch, struct nlattr *opt)
+static int pie_change(struct Qdisc *sch, struct nlattr *opt,
+		      struct netlink_ext_ack *extack)
 {
 	struct pie_sched_data *q = qdisc_priv(sch);
 	struct nlattr *tb[TCA_PIE_MAX + 1];
@@ -190,7 +192,8 @@ static int pie_change(struct Qdisc *sch, struct nlattr *opt)
 	if (!opt)
 		return -EINVAL;
 
-	err = nla_parse_nested(tb, TCA_PIE_MAX, opt, pie_policy, NULL);
+	err = nla_parse_nested_deprecated(tb, TCA_PIE_MAX, opt, pie_policy,
+					  NULL);
 	if (err < 0)
 		return err;
 
@@ -422,10 +425,10 @@ static void calculate_probability(struct Qdisc *sch)
 		pie_vars_init(&q->vars);
 }
 
-static void pie_timer(unsigned long arg)
+static void pie_timer(struct timer_list *t)
 {
-	struct Qdisc *sch = (struct Qdisc *)arg;
-	struct pie_sched_data *q = qdisc_priv(sch);
+	struct pie_sched_data *q = from_timer(q, t, adapt_timer);
+	struct Qdisc *sch = q->sch;
 	spinlock_t *root_lock = qdisc_lock(qdisc_root_sleeping(sch));
 
 	spin_lock(root_lock);
@@ -438,7 +441,8 @@ static void pie_timer(unsigned long arg)
 
 }
 
-static int pie_init(struct Qdisc *sch, struct nlattr *opt)
+static int pie_init(struct Qdisc *sch, struct nlattr *opt,
+		    struct netlink_ext_ack *extack)
 {
 	struct pie_sched_data *q = qdisc_priv(sch);
 
@@ -446,10 +450,11 @@ static int pie_init(struct Qdisc *sch, struct nlattr *opt)
 	pie_vars_init(&q->vars);
 	sch->limit = q->params.limit;
 
-	setup_timer(&q->adapt_timer, pie_timer, (unsigned long)sch);
+	q->sch = sch;
+	timer_setup(&q->adapt_timer, pie_timer, 0);
 
 	if (opt) {
-		int err = pie_change(sch, opt);
+		int err = pie_change(sch, opt, extack);
 
 		if (err)
 			return err;
@@ -464,7 +469,7 @@ static int pie_dump(struct Qdisc *sch, struct sk_buff *skb)
 	struct pie_sched_data *q = qdisc_priv(sch);
 	struct nlattr *opts;
 
-	opts = nla_nest_start(skb, TCA_OPTIONS);
+	opts = nla_nest_start_noflag(skb, TCA_OPTIONS);
 	if (opts == NULL)
 		goto nla_put_failure;
 

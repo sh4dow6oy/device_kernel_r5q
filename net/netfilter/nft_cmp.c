@@ -44,6 +44,7 @@ static void nft_cmp_eval(const struct nft_expr *expr,
 	case NFT_CMP_LT:
 		if (d == 0)
 			goto mismatch;
+		/* fall through */
 	case NFT_CMP_LTE:
 		if (d > 0)
 			goto mismatch;
@@ -51,6 +52,7 @@ static void nft_cmp_eval(const struct nft_expr *expr,
 	case NFT_CMP_GT:
 		if (d == 0)
 			goto mismatch;
+		/* fall through */
 	case NFT_CMP_GTE:
 		if (d < 0)
 			goto mismatch;
@@ -77,7 +79,14 @@ static int nft_cmp_init(const struct nft_ctx *ctx, const struct nft_expr *expr,
 
 	err = nft_data_init(NULL, &priv->data, sizeof(priv->data), &desc,
 			    tb[NFTA_CMP_DATA]);
-	BUG_ON(err < 0);
+	if (err < 0)
+		return err;
+
+	if (desc.type != NFT_DATA_VALUE) {
+		err = -EINVAL;
+		nft_data_release(&priv->data, desc.type);
+		return err;
+	}
 
 	err = nft_parse_register_load(tb[NFTA_CMP_SREG], &priv->sreg, desc.len);
 	if (err < 0)
@@ -126,7 +135,8 @@ static int nft_cmp_fast_init(const struct nft_ctx *ctx,
 
 	err = nft_data_init(NULL, &data, sizeof(data), &desc,
 			    tb[NFTA_CMP_DATA]);
-	BUG_ON(err < 0);
+	if (err < 0)
+		return err;
 
 	err = nft_parse_register_load(tb[NFTA_CMP_SREG], &priv->sreg, desc.len);
 	if (err < 0)

@@ -1,13 +1,7 @@
-/* Copyright (c) 2012-2020, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/bitops.h>
@@ -69,9 +63,7 @@ static int ipa_generate_rt_hw_rule(enum ipa_ip_type ip,
 	gen_params.dst_pipe_idx = ipa3_get_ep_mapping(entry->rule.dst);
 	if (gen_params.dst_pipe_idx == -1) {
 		IPAERR_RL("Wrong destination pipe specified in RT rule\n");
-		/***  SSI-25733 : Disable stack trace ****
 		WARN_ON_RATELIMIT_IPA(1);
-		****  SSI-25733 : Disable stack trace ***/
 		return -EPERM;
 	}
 	if (!IPA_CLIENT_IS_CONS(entry->rule.dst)) {
@@ -1060,9 +1052,7 @@ static int __ipa_create_rt_entry(struct ipa3_rt_entry **entry,
 		id = ipa3_alloc_rule_id(tbl->rule_ids);
 		if (id < 0) {
 			IPAERR_RL("failed to allocate rule id\n");
-			/***  SSI-25733 : Disable stack trace ****
 			WARN_ON_RATELIMIT_IPA(1);
-			****  SSI-25733 : Disable stack trace ***/
 			goto alloc_rule_id_fail;
 		}
 	}
@@ -1089,12 +1079,14 @@ error:
 static int __ipa_finish_rt_rule_add(struct ipa3_rt_entry *entry, u32 *rule_hdl,
 		struct ipa3_rt_tbl *tbl)
 {
-	int id;
+	int id, res = 0;
 
 	if (tbl->rule_cnt < IPA_RULE_CNT_MAX)
 		tbl->rule_cnt++;
-	else
-		return -EINVAL;
+	else {
+		res = -EINVAL;
+		goto failed;
+	}
 	if (entry->hdr)
 		entry->hdr->ref_cnt++;
 	else if (entry->proc_ctx)
@@ -1103,6 +1095,7 @@ static int __ipa_finish_rt_rule_add(struct ipa3_rt_entry *entry, u32 *rule_hdl,
 	if (id < 0) {
 		IPAERR_RL("failed to add to tree\n");
 		WARN_ON_RATELIMIT_IPA(1);
+		res = -EPERM;
 		goto ipa_insert_failed;
 	}
 	IPADBG("add rt rule tbl_idx=%d rule_cnt=%d rule_id=%d\n",
@@ -1117,10 +1110,11 @@ ipa_insert_failed:
 		entry->hdr->ref_cnt--;
 	else if (entry->proc_ctx)
 		entry->proc_ctx->ref_cnt--;
+failed:
 	idr_remove(tbl->rule_ids, entry->rule_id);
 	list_del(&entry->link);
 	kmem_cache_free(ipa3_ctx->rt_rule_cache, entry);
-	return -EPERM;
+	return res;
 }
 
 static int __ipa_add_rt_rule(enum ipa_ip_type ip, const char *name,
@@ -1211,7 +1205,7 @@ static void __ipa_convert_rt_rule_in(struct ipa_rt_rule rule_in,
 {
 	if (unlikely(sizeof(struct ipa_rt_rule) >
 			sizeof(struct ipa_rt_rule_i))) {
-		IPAERR_RL("invalid size in: %lu size out: %lu\n",
+		IPAERR_RL("invalid size in: %d size out: %d\n",
 			sizeof(struct ipa_rt_rule),
 			sizeof(struct ipa_rt_rule_i));
 		return;
@@ -1225,7 +1219,7 @@ static void __ipa_convert_rt_rule_out(struct ipa_rt_rule_i rule_in,
 {
 	if (unlikely(sizeof(struct ipa_rt_rule) >
 			sizeof(struct ipa_rt_rule_i))) {
-		IPAERR_RL("invalid size in:%lu size out:%lu\n",
+		IPAERR_RL("invalid size in:%d size out:%d\n",
 			sizeof(struct ipa_rt_rule),
 			sizeof(struct ipa_rt_rule_i));
 		return;
@@ -1239,7 +1233,7 @@ static void __ipa_convert_rt_mdfy_in(struct ipa_rt_rule_mdfy rule_in,
 {
 	if (unlikely(sizeof(struct ipa_rt_rule_mdfy) >
 			sizeof(struct ipa_rt_rule_mdfy_i))) {
-		IPAERR_RL("invalid size in:%lu size out:%lu\n",
+		IPAERR_RL("invalid size in:%d size out:%d\n",
 			sizeof(struct ipa_rt_rule_mdfy),
 			sizeof(struct ipa_rt_rule_mdfy_i));
 		return;
@@ -1256,7 +1250,7 @@ static void __ipa_convert_rt_mdfy_out(struct ipa_rt_rule_mdfy_i rule_in,
 {
 	if (unlikely(sizeof(struct ipa_rt_rule_mdfy) >
 			sizeof(struct ipa_rt_rule_mdfy_i))) {
-		IPAERR_RL("invalid size in:%lu size out:%lu\n",
+		IPAERR_RL("invalid size in:%d size out:%d\n",
 			sizeof(struct ipa_rt_rule_mdfy),
 			sizeof(struct ipa_rt_rule_mdfy_i));
 		return;
@@ -1429,7 +1423,7 @@ int ipa3_add_rt_rule_ext(struct ipa_ioc_add_rt_rule_ext *rules)
 	struct ipa_rt_rule_i rule;
 
 	if (rules == NULL || rules->num_rules == 0 || rules->ip >= IPA_IP_MAX) {
-		IPAERR_RL("bad parm\n");
+		IPAERR_RL("bad param\n");
 		return -EINVAL;
 	}
 
@@ -1480,7 +1474,7 @@ int ipa3_add_rt_rule_ext_v2(struct ipa_ioc_add_rt_rule_ext_v2 *rules)
 	int ret;
 
 	if (rules == NULL || rules->num_rules == 0 || rules->ip >= IPA_IP_MAX) {
-		IPAERR_RL("bad parm\n");
+		IPAERR_RL("bad param\n");
 		return -EINVAL;
 	}
 
@@ -1760,7 +1754,8 @@ int __ipa3_del_rt_rule(u32 rule_hdl)
 		return -EINVAL;
 	}
 
-	if (!strcmp(entry->tbl->name, IPA_DFLT_RT_TBL_NAME)) {
+	if (!ipa3_check_idr_if_freed(entry) &&
+		!strcmp(entry->tbl->name, IPA_DFLT_RT_TBL_NAME)) {
 		IPADBG("Deleting rule from default rt table idx=%u\n",
 			entry->tbl->idx);
 		if (entry->tbl->rule_cnt == 1) {
@@ -2181,7 +2176,8 @@ static int __ipa_mdfy_rt_rule(struct ipa_rt_rule_mdfy_i *rtrule)
 		goto error;
 	}
 
-	if (!strcmp(entry->tbl->name, IPA_DFLT_RT_TBL_NAME)) {
+	if (!ipa3_check_idr_if_freed(entry) &&
+		!strcmp(entry->tbl->name, IPA_DFLT_RT_TBL_NAME)) {
 		IPAERR_RL("Default tbl rule cannot be modified\n");
 		return -EINVAL;
 	}

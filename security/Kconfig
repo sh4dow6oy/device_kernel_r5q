@@ -18,15 +18,6 @@ config SECURITY_DMESG_RESTRICT
 
 	  If you are unsure how to answer this question, answer N.
 
-config SECURITY_PERF_EVENTS_RESTRICT
-	bool "Restrict unprivileged use of performance events"
-	depends on PERF_EVENTS
-	help
-	  If you say Y here, the kernel.perf_event_paranoid sysctl
-	  will be set to 3 by default, and no unprivileged use of the
-	  perf_event_open syscall will be permitted unless it is
-	  changed.
-
 config SECURITY
 	bool "Enable different security models"
 	depends on SYSFS
@@ -64,8 +55,8 @@ config SECURITY_NETWORK
 
 config PAGE_TABLE_ISOLATION
 	bool "Remove the kernel mapping in user mode"
-	depends on X86_64 && !UML
 	default y
+	depends on (X86_64 || X86_PAE) && !UML
 	help
 	  This feature reduces the number of hardware side channels by
 	  ensuring that the majority of kernel addresses are not mapped
@@ -161,7 +152,6 @@ config HAVE_HARDENED_USERCOPY_ALLOCATOR
 config HARDENED_USERCOPY
 	bool "Harden memory copies between kernel and userspace"
 	depends on HAVE_HARDENED_USERCOPY_ALLOCATOR
-	select BUG
 	imply STRICT_DEVMEM
 	help
 	  This option checks for obviously wrong memory regions when
@@ -171,6 +161,20 @@ config HARDENED_USERCOPY
 	  separately allocated pages, are not on the process stack,
 	  or are part of the kernel text. This kills entire classes
 	  of heap overflow exploits and similar kernel memory exposures.
+
+config HARDENED_USERCOPY_FALLBACK
+	bool "Allow usercopy whitelist violations to fallback to object size"
+	depends on HARDENED_USERCOPY
+	default y
+	help
+	  This is a temporary option that allows missing usercopy whitelists
+	  to be discovered via a WARN() to the kernel log, instead of
+	  rejecting the copy, falling back to non-whitelisted hardened
+	  usercopy that checks the slab allocation size instead of the
+	  whitelist size. This option will be removed once it seems like
+	  all missing usercopy whitelists have been identified and fixed.
+	  Booting with "slab_common.usercopy_fallback=Y/N" can change
+	  this setting.
 
 config HARDENED_USERCOPY_PAGESPAN
 	bool "Refuse to copy allocations that span multiple pages"
@@ -218,7 +222,7 @@ config STATIC_USERMODEHELPER
 config STATIC_USERMODEHELPER_PATH
 	string "Path to the static usermode helper binary"
 	depends on STATIC_USERMODEHELPER
-	default "/system/bin/umh/usermode-helper-replica"
+	default "/sbin/usermode-helper"
 	help
 	  The binary called by the kernel when any usermode helper
 	  program is wish to be run.  The "real" application's name will
@@ -236,10 +240,8 @@ source security/loadpin/Kconfig
 source security/yama/Kconfig
 source security/safesetid/Kconfig
 source security/lockdown/Kconfig
-source security/mstdrv/Kconfig
 
 source security/integrity/Kconfig
-source security/qrng/s2q000/Kconfig
 
 choice
 	prompt "First legacy 'major LSM' to be initialized"
@@ -288,18 +290,6 @@ config LSM
 	  controlled at boot with the "lsm=" parameter.
 
 	  If unsure, leave this as the default.
-
-config SDP
-    bool "Enables SDP"
-    default n
-    help
-    Sensitive Data Protection
-
-config DDAR
-    bool "Enables dual encryption"
-    default n
-    help
-    Knox Dual-DAR (Data-At-Rest) protection
 
 source "security/Kconfig.hardening"
 

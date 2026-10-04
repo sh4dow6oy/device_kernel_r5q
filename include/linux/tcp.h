@@ -58,11 +58,7 @@ static inline unsigned int tcp_optlen(const struct sk_buff *skb)
 /* TCP Fast Open */
 #define TCP_FASTOPEN_COOKIE_MIN	4	/* Min Fast Open Cookie size in bytes */
 #define TCP_FASTOPEN_COOKIE_MAX	16	/* Max Fast Open Cookie size in bytes */
-#ifdef CONFIG_MPTCP
-	#define TCP_FASTOPEN_COOKIE_SIZE 4	/* the size employed by this impl for MPTCP. */
-#else
-	#define TCP_FASTOPEN_COOKIE_SIZE 8	/* the size employed by this impl. */
-#endif
+#define TCP_FASTOPEN_COOKIE_SIZE 8	/* the size employed by this impl. */
 
 /* TCP Fast Open Cookie as stored in memory */
 struct tcp_fastopen_cookie {
@@ -87,64 +83,13 @@ struct tcp_sack_block {
 	u32	end_seq;
 };
 
-#ifdef CONFIG_MPTCP
-struct tcp_out_options {
-	u16	options;	/* bit field of OPTION_* */
-	u8	ws;		/* window scale, 0 to disable */
-	u8	num_sack_blocks;/* number of SACK blocks to include */
-	u8	hash_size;	/* bytes in hash_location */
-	u16	mss;		/* 0 to disable */
-	__u8	*hash_location;	/* temporary pointer, overloaded */
-	__u32	tsval, tsecr;	/* need to include OPTION_TS */
-	struct tcp_fastopen_cookie *fastopen_cookie;	/* Fast open cookie */
-	u16	mptcp_options;	/* bit field of MPTCP related OPTION_* */
-	u8	dss_csum:1,	/* dss-checksum required? */
-		add_addr_v4:1,
-		add_addr_v6:1,
-		mptcp_ver:4;
-
-	union {
-		struct {
-			__u64	sender_key;	/* sender's key for mptcp */
-			__u64	receiver_key;	/* receiver's key for mptcp */
-		} mp_capable;
-
-		struct {
-			__u64	sender_truncated_mac;
-			__u32	sender_nonce;
-					/* random number of the sender */
-			__u32	token;	/* token for mptcp */
-			u8	low_prio:1;
-		} mp_join_syns;
-	};
-
-	struct {
-		__u64 trunc_mac;
-		struct in_addr addr;
-		u16 port;
-		u8 addr_id;
-	} add_addr4;
-
-	struct {
-		__u64 trunc_mac;
-		struct in6_addr addr;
-		u16 port;
-		u8 addr_id;
-	} add_addr6;
-
-	u16	remove_addrs;	/* list of address id */
-	u8	addr_id;	/* address id (mp_join or add_address) */
-};
-#endif
-
 /*These are used to set the sack_ok field in struct tcp_options_received */
 #define TCP_SACK_SEEN     (1 << 0)   /*1 = peer is SACK capable, */
-#define TCP_FACK_ENABLED  (1 << 1)   /*1 = FACK is enabled locally*/
 #define TCP_DSACK_SEEN    (1 << 2)   /*1 = DSACK was received from peer*/
 
 struct tcp_options_received {
 /*	PAWS/RTTM data	*/
-	long	ts_recent_stamp;/* Time we stored ts_recent (for aging) */
+	int	ts_recent_stamp;/* Time we stored ts_recent (for aging) */
 	u32	ts_recent;	/* Time stamp to echo next		*/
 	u32	rcv_tsval;	/* Time stamp value             	*/
 	u32	rcv_tsecr;	/* Time stamp echo reply        	*/
@@ -162,11 +107,6 @@ struct tcp_options_received {
 	u16	user_mss;	/* mss requested by user in ioctl	*/
 	u16	mss_clamp;	/* Maximal mss, negotiated at connection setup */
 };
-
-#ifdef CONFIG_MPTCP
-	struct mptcp_cb;
-	struct mptcp_tcp_sock;
-#endif
 
 static inline void tcp_clear_options(struct tcp_options_received *rx_opt)
 {
@@ -205,10 +145,6 @@ static inline struct tcp_request_sock *tcp_rsk(const struct request_sock *req)
 {
 	return (struct tcp_request_sock *)req;
 }
-
-#ifdef CONFIG_MPTCP
-	struct tcp_md5sig_key;
-#endif
 
 struct tcp_sock {
 	/* inet_connection_sock has to be the first member of tcp_sock */
@@ -262,10 +198,12 @@ struct tcp_sock {
 	u32	rcv_tstamp;	/* timestamp of last received ACK (for keepalives) */
 	u32	lsndtime;	/* timestamp of last sent data packet (for restart window) */
 	u32	last_oow_ack_time;  /* timestamp of last out-of-window ACK */
+	u32	compressed_ack_rcv_nxt;
 
 	u32	tsoffset;	/* timestamp offset */
 
 	struct list_head tsq_node; /* anchor in tsq_tasklet.head list */
+	struct list_head tsorted_sent_queue; /* time-sorted sent but un-SACKed skbs */
 
 	u32	snd_wl1;	/* Sequence for window update		*/
 	u32	snd_wnd;	/* The window we expect to receive	*/
@@ -285,10 +223,10 @@ struct tcp_sock {
 #define TCP_RACK_RECOVERY_THRESH 16
 		u8 reo_wnd_persist:5, /* No. of recovery since last adj */
 		   dsack_seen:1, /* Whether DSACK seen after last adj */
-		   advanced:1,	 /* mstamp advanced since last lost marking */
-		   reord:1;	 /* reordering detected */
+		   advanced:1;	 /* mstamp advanced since last lost marking */
 	} rack;
 	u16	advmss;		/* Advertised MSS			*/
+	u8	compressed_ack;
 	u8	tlp_retrans:1,	/* TLP is a retransmission */
 		unused_1:7;
 	u32	chrono_start;	/* Start time in jiffies of a TCP chrono */
@@ -296,11 +234,13 @@ struct tcp_sock {
 	u8	chrono_type:2,	/* current chronograph type */
 		rate_app_limited:1,  /* rate_{delivered,interval_us} limited? */
 		fastopen_connect:1, /* FASTOPEN_CONNECT sockopt */
+		fastopen_no_cookie:1, /* Allow send/recv SYN+data without a cookie */
 		is_sack_reneg:1,    /* in recovery from loss with SACK reneg? */
-		unused:3;
+		unused:1,
+		wqp_called:1;
 	u8	nonagle     : 4,/* Disable Nagle algorithm?             */
 		thin_lto    : 1,/* Use linear timeouts for thin streams */
-		unused1	    : 1,
+		recvmsg_inq : 1,/* Indicate # of bytes in queue upon recvmsg */
 		repair      : 1,
 		frto        : 1;/* F-RTO (RFC5682) activated in CA_Loss */
 	u8	repair_queue;
@@ -314,6 +254,7 @@ struct tcp_sock {
 	u32	tlp_high_seq;	/* snd_nxt at the time of TLP */
 
 	u64	tcp_wstamp_ns;	/* departure time for next sent data packet */
+	u64	tcp_clock_cache; /* cache last tcp_clock_ns() (see tcp_mstamp_refresh()) */
 
 /* RTT measurement */
 	u64	tcp_mstamp;	/* most recent packet received/sent */
@@ -333,6 +274,7 @@ struct tcp_sock {
 	u8	ecn_flags;	/* ECN status bits.			*/
 	u8	keepalive_probes; /* num of allowed keep alive probes	*/
 	u32	reordering;	/* Packet reordering metric.		*/
+	u32	reord_seen;	/* number of data packet reordering events */
 	u32	snd_up;		/* Urgent pointer		*/
 
 /*
@@ -368,9 +310,9 @@ struct tcp_sock {
 	u32	pushed_seq;	/* Last pushed seq, required to talk to windows */
 	u32	lost_out;	/* Lost packets			*/
 	u32	sacked_out;	/* SACK'd packets			*/
-	u32	fackets_out;	/* FACK'd packets			*/
 
 	struct hrtimer	pacing_timer;
+	struct hrtimer	compressed_ack_timer;
 
 	/* from STCP, retrans queue hinting */
 	struct sk_buff* lost_skb_hint;
@@ -425,6 +367,7 @@ struct tcp_sock {
 #endif
 
 /* Receiver side RTT estimation */
+	u32 rcv_rtt_last_tsecr;
 	struct {
 		u32	rtt_us;
 		u32	seq;
@@ -476,10 +419,6 @@ enum tsq_enum {
 	TCP_MTU_REDUCED_DEFERRED,  /* tcp_v{4|6}_err() could not call
 				    * tcp_v{4|6}_mtu_reduced()
 				    */
-#ifdef CONFIG_MPTCP
-	MPTCP_PATH_MANAGER_DEFERRED, /* MPTCP deferred creation of new subflows */
-	MPTCP_SUB_DEFERRED, /* A subflow got deferred - process them */
-#endif
 };
 
 enum tsq_flags {
@@ -489,10 +428,6 @@ enum tsq_flags {
 	TCPF_WRITE_TIMER_DEFERRED	= (1UL << TCP_WRITE_TIMER_DEFERRED),
 	TCPF_DELACK_TIMER_DEFERRED	= (1UL << TCP_DELACK_TIMER_DEFERRED),
 	TCPF_MTU_REDUCED_DEFERRED	= (1UL << TCP_MTU_REDUCED_DEFERRED),
-#ifdef CONFIG_MPTCP
-	TCPF_PATH_MANAGER_DEFERRED	= (1UL << MPTCP_PATH_MANAGER_DEFERRED),
-	TCPF_SUB_DEFERRED		= (1UL << MPTCP_SUB_DEFERRED),
-#endif
 };
 
 static inline struct tcp_sock *tcp_sk(const struct sock *sk)
@@ -511,12 +446,9 @@ struct tcp_timewait_sock {
 	/* The time we sent the last out-of-window ACK: */
 	u32			  tw_last_oow_ack_time;
 
-	long			  tw_ts_recent_stamp;
+	int			  tw_ts_recent_stamp;
 #ifdef CONFIG_TCP_MD5SIG
 	struct tcp_md5sig_key	  *tw_md5_key;
-#endif
-#ifdef CONFIG_MPTCP
-	struct mptcp_tw		  *mptcp_tw;
 #endif
 };
 

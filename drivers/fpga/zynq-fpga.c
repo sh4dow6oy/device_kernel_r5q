@@ -413,12 +413,12 @@ static int zynq_fpga_ops_write(struct fpga_manager *mgr, struct sg_table *sgt)
 		}
 	}
 
-	priv->dma_nelms =
-	    dma_map_sg(mgr->dev.parent, sgt->sgl, sgt->nents, DMA_TO_DEVICE);
-	if (priv->dma_nelms == 0) {
+	err = dma_map_sgtable(mgr->dev.parent, sgt, DMA_TO_DEVICE, 0);
+	if (err) {
 		dev_err(&mgr->dev, "Unable to DMA map (TO_DEVICE)\n");
-		return -ENOMEM;
+		return err;
 	}
+	priv->dma_nelms = sgt->nents;
 
 	/* enable clock */
 	err = clk_enable(priv->clk);
@@ -486,7 +486,7 @@ out_clk:
 	clk_disable(priv->clk);
 
 out_free:
-	dma_unmap_sg(mgr->dev.parent, sgt->sgl, sgt->nents, DMA_TO_DEVICE);
+	dma_unmap_sgtable(mgr->dev.parent, sgt, DMA_TO_DEVICE, 0);
 	return err;
 }
 
@@ -558,6 +558,7 @@ static int zynq_fpga_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct zynq_fpga_priv *priv;
+	struct fpga_manager *mgr;
 	struct resource *res;
 	int err;
 
@@ -613,10 +614,17 @@ static int zynq_fpga_probe(struct platform_device *pdev)
 
 	clk_disable(priv->clk);
 
-	err = fpga_mgr_register(dev, "Xilinx Zynq FPGA Manager",
-				&zynq_fpga_ops, priv);
+	mgr = fpga_mgr_create(dev, "Xilinx Zynq FPGA Manager",
+			      &zynq_fpga_ops, priv);
+	if (!mgr)
+		return -ENOMEM;
+
+	platform_set_drvdata(pdev, mgr);
+
+	err = fpga_mgr_register(mgr);
 	if (err) {
 		dev_err(dev, "unable to register FPGA manager\n");
+		fpga_mgr_free(mgr);
 		clk_unprepare(priv->clk);
 		return err;
 	}
@@ -632,7 +640,7 @@ static int zynq_fpga_remove(struct platform_device *pdev)
 	mgr = platform_get_drvdata(pdev);
 	priv = mgr->priv;
 
-	fpga_mgr_unregister(&pdev->dev);
+	fpga_mgr_unregister(mgr);
 
 	clk_unprepare(priv->clk);
 

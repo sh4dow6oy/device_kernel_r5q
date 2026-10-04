@@ -37,9 +37,10 @@ void ieee80211s_stop(void)
 	kmem_cache_destroy(rm_cache);
 }
 
-static void ieee80211_mesh_housekeeping_timer(unsigned long data)
+static void ieee80211_mesh_housekeeping_timer(struct timer_list *t)
 {
-	struct ieee80211_sub_if_data *sdata = (void *) data;
+	struct ieee80211_sub_if_data *sdata =
+		from_timer(sdata, t, u.mesh.housekeeping_timer);
 	struct ieee80211_local *local = sdata->local;
 	struct ieee80211_if_mesh *ifmsh = &sdata->u.mesh;
 
@@ -75,6 +76,9 @@ bool mesh_matches_local(struct ieee80211_sub_if_data *sdata,
 	 *   - MDA enabled
 	 * - Power management control on fc
 	 */
+	if (!ie->mesh_config)
+		return false;
+
 	if (!(ifmsh->mesh_id_len == ie->mesh_id_len &&
 	     memcmp(ifmsh->mesh_id, ie->mesh_id, ie->mesh_id_len) == 0 &&
 	     (ifmsh->mesh_pp_id == ie->mesh_config->meshconf_psel) &&
@@ -528,18 +532,18 @@ int mesh_add_vht_oper_ie(struct ieee80211_sub_if_data *sdata,
 	return 0;
 }
 
-static void ieee80211_mesh_path_timer(unsigned long data)
+static void ieee80211_mesh_path_timer(struct timer_list *t)
 {
 	struct ieee80211_sub_if_data *sdata =
-		(struct ieee80211_sub_if_data *) data;
+		from_timer(sdata, t, u.mesh.mesh_path_timer);
 
 	ieee80211_queue_work(&sdata->local->hw, &sdata->work);
 }
 
-static void ieee80211_mesh_path_root_timer(unsigned long data)
+static void ieee80211_mesh_path_root_timer(struct timer_list *t)
 {
 	struct ieee80211_sub_if_data *sdata =
-		(struct ieee80211_sub_if_data *) data;
+		from_timer(sdata, t, u.mesh.mesh_path_root_timer);
 	struct ieee80211_if_mesh *ifmsh = &sdata->u.mesh;
 
 	set_bit(MESH_WORK_ROOT, &ifmsh->wrkq_flags);
@@ -675,8 +679,7 @@ ieee80211_mesh_build_beacon(struct ieee80211_if_mesh *ifmsh)
 	enum nl80211_band band;
 	u8 *pos;
 	struct ieee80211_sub_if_data *sdata;
-	int hdr_len = offsetof(struct ieee80211_mgmt, u.beacon) +
-		      sizeof(mgmt->u.beacon);
+	int hdr_len = offsetofend(struct ieee80211_mgmt, u.beacon);
 
 	sdata = container_of(ifmsh, struct ieee80211_sub_if_data, u.mesh);
 	rcu_read_lock();
@@ -880,7 +883,8 @@ int ieee80211_start_mesh(struct ieee80211_sub_if_data *sdata)
 		      BSS_CHANGED_BEACON_ENABLED |
 		      BSS_CHANGED_HT |
 		      BSS_CHANGED_BASIC_RATES |
-		      BSS_CHANGED_BEACON_INT;
+		      BSS_CHANGED_BEACON_INT |
+		      BSS_CHANGED_MCAST_RATE;
 
 	local->fif_other_bss++;
 	/* mesh ifaces must set allmulti to forward mcast traffic */
@@ -990,8 +994,10 @@ ieee80211_mesh_process_chnswitch(struct ieee80211_sub_if_data *sdata,
 	switch (sdata->vif.bss_conf.chandef.width) {
 	case NL80211_CHAN_WIDTH_20_NOHT:
 		sta_flags |= IEEE80211_STA_DISABLE_HT;
+		/* fall through */
 	case NL80211_CHAN_WIDTH_20:
 		sta_flags |= IEEE80211_STA_DISABLE_40MHZ;
+		/* fall through */
 	case NL80211_CHAN_WIDTH_40:
 		sta_flags |= IEEE80211_STA_DISABLE_VHT;
 		break;
@@ -1302,6 +1308,9 @@ static void mesh_rx_csa_frame(struct ieee80211_sub_if_data *sdata,
 			   u.action.u.chan_switch.variable);
 	ieee802_11_parse_elems(pos, len - baselen, true, &elems);
 
+	if (!elems.mesh_chansw_params_ie)
+		return;
+
 	ifmsh->chsw_ttl = elems.mesh_chansw_params_ie->mesh_ttl;
 	if (!--ifmsh->chsw_ttl)
 		fwd_csa = false;
@@ -1442,9 +1451,8 @@ void ieee80211_mesh_init_sdata(struct ieee80211_sub_if_data *sdata)
 	struct ieee80211_if_mesh *ifmsh = &sdata->u.mesh;
 	static u8 zero_addr[ETH_ALEN] = {};
 
-	setup_timer(&ifmsh->housekeeping_timer,
-		    ieee80211_mesh_housekeeping_timer,
-		    (unsigned long) sdata);
+	timer_setup(&ifmsh->housekeeping_timer,
+		    ieee80211_mesh_housekeeping_timer, 0);
 
 	ifmsh->accepting_plinks = true;
 	atomic_set(&ifmsh->mpaths, 0);
@@ -1459,12 +1467,9 @@ void ieee80211_mesh_init_sdata(struct ieee80211_sub_if_data *sdata)
 
 	mesh_pathtbl_init(sdata);
 
-	setup_timer(&ifmsh->mesh_path_timer,
-		    ieee80211_mesh_path_timer,
-		    (unsigned long) sdata);
-	setup_timer(&ifmsh->mesh_path_root_timer,
-		    ieee80211_mesh_path_root_timer,
-		    (unsigned long) sdata);
+	timer_setup(&ifmsh->mesh_path_timer, ieee80211_mesh_path_timer, 0);
+	timer_setup(&ifmsh->mesh_path_root_timer,
+		    ieee80211_mesh_path_root_timer, 0);
 	INIT_LIST_HEAD(&ifmsh->preq_queue.list);
 	skb_queue_head_init(&ifmsh->ps.bc_buf);
 	spin_lock_init(&ifmsh->mesh_preq_queue_lock);

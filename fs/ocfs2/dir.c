@@ -42,6 +42,7 @@
 #include <linux/highmem.h>
 #include <linux/quotaops.h>
 #include <linux/sort.h>
+#include <linux/iversion.h>
 
 #include <cluster/masklog.h>
 
@@ -1084,26 +1085,39 @@ int ocfs2_find_entry(const char *name, int namelen,
 {
 	struct buffer_head *bh;
 	struct ocfs2_dir_entry *res_dir = NULL;
+	int ret = 0;
 
 	if (ocfs2_dir_indexed(dir))
 		return ocfs2_find_entry_dx(name, namelen, dir, lookup);
 
+	if (unlikely(i_size_read(dir) <= 0)) {
+		ret = -EFSCORRUPTED;
+		mlog_errno(ret);
+		goto out;
+	}
 	/*
 	 * The unindexed dir code only uses part of the lookup
 	 * structure, so there's no reason to push it down further
 	 * than this.
 	 */
-	if (OCFS2_I(dir)->ip_dyn_features & OCFS2_INLINE_DATA_FL)
+	if (OCFS2_I(dir)->ip_dyn_features & OCFS2_INLINE_DATA_FL) {
+		if (unlikely(i_size_read(dir) > dir->i_sb->s_blocksize)) {
+			ret = -EFSCORRUPTED;
+			mlog_errno(ret);
+			goto out;
+		}
 		bh = ocfs2_find_entry_id(name, namelen, dir, &res_dir);
-	else
+	} else {
 		bh = ocfs2_find_entry_el(name, namelen, dir, &res_dir);
+	}
 
 	if (bh == NULL)
 		return -ENOENT;
 
 	lookup->dl_leaf_bh = bh;
 	lookup->dl_entry = res_dir;
-	return 0;
+out:
+	return ret;
 }
 
 /*
@@ -1180,7 +1194,7 @@ static int __ocfs2_delete_entry(handle_t *handle, struct inode *dir,
 				le16_add_cpu(&pde->rec_len,
 						le16_to_cpu(de->rec_len));
 			de->inode = 0;
-			dir->i_version++;
+			inode_inc_iversion(dir);
 			ocfs2_journal_dirty(handle, bh);
 			goto bail;
 		}
@@ -1736,7 +1750,7 @@ int __ocfs2_add_entry(handle_t *handle,
 			if (ocfs2_dir_indexed(dir))
 				ocfs2_recalc_free_list(dir, handle, lookup);
 
-			dir->i_version++;
+			inode_inc_iversion(dir);
 			ocfs2_journal_dirty(handle, insert_bh);
 			retval = 0;
 			goto bail;
@@ -1782,7 +1796,7 @@ static int ocfs2_dir_foreach_blk_id(struct inode *inode,
 		 * readdir(2), then we might be pointing to an invalid
 		 * dirent right now.  Scan from the start of the block
 		 * to make sure. */
-		if (*f_version != inode->i_version) {
+		if (!inode_eq_iversion(inode, *f_version)) {
 			for (i = 0; i < i_size_read(inode) && i < offset; ) {
 				de = (struct ocfs2_dir_entry *)
 					(data->id_data + i);
@@ -1798,7 +1812,7 @@ static int ocfs2_dir_foreach_blk_id(struct inode *inode,
 				i += le16_to_cpu(de->rec_len);
 			}
 			ctx->pos = offset = i;
-			*f_version = inode->i_version;
+			*f_version = inode_query_iversion(inode);
 		}
 
 		de = (struct ocfs2_dir_entry *) (data->id_data + ctx->pos);
@@ -1877,7 +1891,7 @@ static int ocfs2_dir_foreach_blk_el(struct inode *inode,
 		 * readdir(2), then we might be pointing to an invalid
 		 * dirent right now.  Scan from the start of the block
 		 * to make sure. */
-		if (*f_version != inode->i_version) {
+		if (!inode_eq_iversion(inode, *f_version)) {
 			for (i = 0; i < sb->s_blocksize && i < offset; ) {
 				de = (struct ocfs2_dir_entry *) (bh->b_data + i);
 				/* It's too expensive to do a full
@@ -1894,7 +1908,7 @@ static int ocfs2_dir_foreach_blk_el(struct inode *inode,
 			offset = i;
 			ctx->pos = (ctx->pos & ~(sb->s_blocksize - 1))
 				| offset;
-			*f_version = inode->i_version;
+			*f_version = inode_query_iversion(inode);
 		}
 
 		while (ctx->pos < i_size_read(inode)
@@ -1948,7 +1962,7 @@ static int ocfs2_dir_foreach_blk(struct inode *inode, u64 *f_version,
  */
 int ocfs2_dir_foreach(struct inode *inode, struct dir_context *ctx)
 {
-	u64 version = inode->i_version;
+	u64 version = inode_query_iversion(inode);
 	ocfs2_dir_foreach_blk(inode, &version, ctx, true);
 	return 0;
 }
@@ -1965,7 +1979,7 @@ int ocfs2_readdir(struct file *file, struct dir_context *ctx)
 
 	trace_ocfs2_readdir((unsigned long long)OCFS2_I(inode)->ip_blkno);
 
-	error = ocfs2_inode_lock_atime(inode, file->f_path.mnt, &lock_level);
+	error = ocfs2_inode_lock_atime(inode, file->f_path.mnt, &lock_level, 1);
 	if (lock_level && error >= 0) {
 		/* We release EX lock which used to update atime
 		 * and get PR lock again to reduce contention
@@ -1993,7 +2007,7 @@ bail_nolock:
 }
 
 /*
- * NOTE: this should always be called with parent dir i_mutex taken.
+ * NOTE: this should always be called with parent dir i_rwsem taken.
  */
 int ocfs2_find_files_on_disk(const char *name,
 			     int namelen,
@@ -2038,8 +2052,9 @@ int ocfs2_lookup_ino_from_name(struct inode *dir, const char *name,
  *
  * Return 0 if the name does not exist
  * Return -EEXIST if the directory contains the name
+ * Return -EFSCORRUPTED if found corruption
  *
- * Callers should have i_mutex + a cluster lock on dir
+ * Callers should have i_rwsem + a cluster lock on dir
  */
 int ocfs2_check_dir_for_entry(struct inode *dir,
 			      const char *name,
@@ -2051,9 +2066,12 @@ int ocfs2_check_dir_for_entry(struct inode *dir,
 	trace_ocfs2_check_dir_for_entry(
 		(unsigned long long)OCFS2_I(dir)->ip_blkno, namelen, name);
 
-	if (ocfs2_find_entry(name, namelen, dir, &lookup) == 0) {
+	ret = ocfs2_find_entry(name, namelen, dir, &lookup);
+	if (ret == 0) {
 		ret = -EEXIST;
 		mlog_errno(ret);
+	} else if (ret == -ENOENT) {
+		ret = 0;
 	}
 
 	ocfs2_free_dir_lookup_result(&lookup);
@@ -3079,7 +3097,7 @@ static int ocfs2_expand_inline_dir(struct inode *dir, struct buffer_head *di_bh,
 			 * We need to return the correct block within the
 			 * cluster which should hold our entry.
 			 */
-			off = ocfs2_dx_dir_hash_idx(OCFS2_SB(dir->i_sb),
+			off = ocfs2_dx_dir_hash_idx(osb,
 						    &lookup->dl_hinfo);
 			get_bh(dx_leaves[off]);
 			lookup->dl_dx_leaf_bh = dx_leaves[off];

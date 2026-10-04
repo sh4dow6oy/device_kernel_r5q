@@ -1,23 +1,14 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /* Copyright (c) 2013-2020, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
+ * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
  */
+
 #include <linux/err.h>
 #include <linux/slab.h>
 #include <linux/module.h>
 #include <linux/dma-mapping.h>
 #include <linux/mutex.h>
 #include <linux/of_device.h>
-#include <linux/of_reserved_mem.h>
 #include <linux/platform_device.h>
 #include <linux/notifier.h>
 #include <linux/soc/qcom/qmi.h>
@@ -26,13 +17,6 @@
 #include <soc/qcom/scm.h>
 #include "msm_memshare.h"
 #include "heap_mem_ext_v01.h"
-#ifdef CONFIG_SEC_BSP
-#include <soc/qcom/socinfo.h>
-#include <linux/uaccess.h>
-#include <linux/miscdevice.h>
-#include <linux/fs.h>
-#include <soc/qcom/secure_buffer.h>
-#endif
 
 #include <soc/qcom/secure_buffer.h>
 #include <soc/qcom/ramdump.h>
@@ -49,21 +33,12 @@ static bool ramdump_event;
 static void *memshare_ramdump_dev[MAX_CLIENTS];
 static struct device *memshare_dev[MAX_CLIENTS];
 
-#ifdef CONFIG_CP_DYNAMIC_MEM_RESERVE
-extern unsigned int sec_reserved_mem(void);
-#define RESERVE_MEM_LEVEL1_MASK (1u << 2)
-#define RESERVE_MEM_LEVEL2_MASK (1u << 3)
-#endif
-
 /* Memshare Driver Structure */
 struct memshare_driver {
 	struct device *dev;
 	struct mutex mem_share;
 	struct mutex mem_free;
 	struct work_struct memshare_init_work;
-#ifdef CONFIG_SEC_BSP
-	struct memshare_rd_device *memshare_rd_dev;
-#endif
 };
 
 struct memshare_child {
@@ -123,187 +98,6 @@ static int mem_share_configure_ramdump(int client)
 
 	return 0;
 }
-
-#ifdef CONFIG_SEC_BSP
-struct memshare_rd_device {
-	char name[256];
-	struct miscdevice device;
-	unsigned long address;
-	//void *v_address;
-	unsigned long size;
-	unsigned int data_ready;
-	//struct dma_attrs attrs;
-};
-
-static void memshare_unset_nhlos_permission(phys_addr_t addr, u32 size)
-{
-	int ret;
-	u32 source_vmlist[2] = {VMID_MSS_MSA, VMID_HLOS};
-	int dest_vmids[1] = {VMID_HLOS};
-	int dest_perms[1] = {PERM_READ|PERM_WRITE|PERM_EXEC};
-
-	if (!size || !addr) {
-		dev_err(memsh_child->dev, "%s: Unable to handle addr(0x%llx), size(%d)",
-			__func__, addr, size);
-		return;
-	}
-
-	ret = hyp_assign_phys(addr, size, source_vmlist, 2, dest_vmids,
-				dest_perms, 1);
-
-	dev_info(memsh_child->dev, "%s: hyp_assign_phys called addr(0x%llx) size(%d)  ret:%d\n",
-					__func__, addr, size, ret);
-
-	if (ret != 0) {
-		if (ret == -ENOSYS)
-			dev_warn(memsh_child->dev, "hyp_assign_phys is not supported!");
-		else
-			dev_err(memsh_child->dev, "hyp_assign_phys failed IPA=0x016%pa size=%u err=%d\n",
-				&addr, size, ret);
-	}
-}
-
-static int memshare_rd_open(struct inode *inode, struct file *filep)
-{
-	return 0;
-}
-
-static int memshare_rd_release(struct inode *inode, struct file *filep)
-{
-	return 0;
-}
-
-static ssize_t memshare_rd_read(struct file *filep, char __user *buf,
-				size_t count, loff_t *pos)
-{
-	struct memshare_rd_device *rd_dev = container_of(filep->private_data,
-				struct memshare_rd_device, device);
-	void *device_mem = NULL;
-	unsigned long data_left = 0;
-	unsigned long addr = 0;
-	int copy_size = 0;
-	int ret = 0;
-
-	if ((filep->f_flags & O_NONBLOCK) && !rd_dev->data_ready)
-		return -EAGAIN;
-
-	data_left = rd_dev->size - *pos;
-	addr = rd_dev->address + *pos;
-
-	/* EOF check */
-	if (data_left == 0) {
-		dev_info(memsh_child->dev, "%s(%s): Ramdump complete. %lld bytes read.", __func__,
-			rd_dev->name, *pos);
-		ret = 0;
-		goto ramdump_done;
-	}
-
-	copy_size = min(count, (size_t)SZ_1M);
-	copy_size = min((unsigned long)copy_size, data_left);
-	device_mem = ioremap_nocache(addr, copy_size);
-
-	if (device_mem == NULL) {
-		dev_err(memsh_child->dev, "%s(%s): Unable to ioremap: addr %lx, size %d\n", __func__,
-			rd_dev->name, addr, copy_size);
-		ret = -ENOMEM;
-		goto ramdump_done;
-	}
-
-	dev_dbg(memsh_child->dev, "%s:copy_to_user(buf:%llx, p_addr:%llx, device_mem :%llx, copy_size :%d\n",
-			__func__, (unsigned long long)buf, (unsigned long long) addr,
-			(unsigned long long)device_mem, copy_size);
-
-	if (copy_to_user(buf, device_mem, copy_size)) {
-		dev_err(memsh_child->dev, "%s(%s): Couldn't copy all data to user.", __func__,
-			rd_dev->name);
-		iounmap(device_mem);
-		ret = -EFAULT;
-		goto ramdump_done;
-	}
-
-	iounmap(device_mem);
-	*pos += copy_size;
-
-	dev_dbg(memsh_child->dev, "%s(%s): Read %d bytes from address %lx.", __func__,
-			rd_dev->name, copy_size, addr);
-
-	return copy_size;
-
-ramdump_done:
-	*pos = 0;
-	return ret;
-}
-
-static const struct file_operations memshare_rd_file_ops = {
-	.open = memshare_rd_open,
-	.release = memshare_rd_release,
-	.read = memshare_rd_read
-};
-
-static void *create_memshare_rd_device(const char *dev_name, struct device *parent)
-{
-	int ret;
-	struct memshare_rd_device *rd_dev;
-
-	if (!dev_name) {
-		dev_err(memsh_child->dev, "%s: Invalid device name.\n", __func__);
-		return NULL;
-	}
-
-	rd_dev = kzalloc(sizeof(struct memshare_rd_device), GFP_KERNEL);
-
-	if (!rd_dev) {
-		dev_err(memsh_child->dev, "%s: Couldn't alloc space for ramdump device!",
-			__func__);
-		return NULL;
-	}
-
-	snprintf(rd_dev->name, ARRAY_SIZE(rd_dev->name), "ramdump_%s",
-		 dev_name);
-
-	rd_dev->device.minor = MISC_DYNAMIC_MINOR;
-	rd_dev->device.name = rd_dev->name;
-	rd_dev->device.fops = &memshare_rd_file_ops;
-	rd_dev->device.parent = parent;
-
-	ret = misc_register(&rd_dev->device);
-
-	if (ret) {
-		dev_err(memsh_child->dev, "%s: misc_register failed for %s (%d)", __func__,
-				dev_name, ret);
-		kfree(rd_dev);
-		return NULL;
-	}
-
-	return (void *)rd_dev;
-}
-
-static void destroy_memshare_rd_device(void *dev)
-{
-	struct memshare_rd_device *rd_dev = dev;
-
-	if (IS_ERR_OR_NULL(rd_dev))
-		return ;
-
-	misc_deregister(&rd_dev->device);
-	kfree(rd_dev);
-}
-
-static int memshare_rd_set(struct memshare_rd_device *rd_dev,
-phys_addr_t p_addr, u32 size, void *v_addr)
-{
-	int rc = 0;
-
-	rd_dev->address = p_addr;
-	//rd_dev->v_address = v_addr;
-	rd_dev->size = size;
-	rd_dev->data_ready = 1;
-
-	dev_dbg(memsh_child->dev, "%s: p_addr(%llx), size(%d)\n", __func__, p_addr, size);
-
-	return rc;
-}
-#endif
 
 static int check_client(int client_id, int proc, int request)
 {
@@ -396,9 +190,7 @@ static void initialize_client(void)
 		memblock[i].hyp_mapping = 0;
 		memblock[i].file_created = 0;
 	}
-//#ifndef CONFIG_SEC_BSP
-	attrs |= DMA_ATTR_NO_KERNEL_MAPPING | DMA_ATTR_SKIP_ZEROING;
-//#endif
+	attrs |= DMA_ATTR_NO_KERNEL_MAPPING;
 }
 
 /*
@@ -469,31 +261,34 @@ static int mem_share_do_ramdump(void)
 				dev_err(memsh_child->dev,
 					"memshare: %s: failed to map the memory region to APPS\n",
 					client_name);
+				continue;
 			} else {
 				memblock[i].hyp_mapping = 0;
 			}
 		}
 
-		ramdump_segments_tmp = kcalloc(1,
-			sizeof(struct ramdump_segment),
-			GFP_KERNEL);
-		if (!ramdump_segments_tmp)
-			return -ENOMEM;
+		if (!memblock[i].hyp_mapping) {
+			ramdump_segments_tmp = kcalloc(1,
+				sizeof(struct ramdump_segment),
+				GFP_KERNEL);
+			if (!ramdump_segments_tmp)
+				return -ENOMEM;
 
-		ramdump_segments_tmp[0].size = memblock[i].size;
-		ramdump_segments_tmp[0].address = memblock[i].phy_addr;
+			ramdump_segments_tmp[0].size = memblock[i].size;
+			ramdump_segments_tmp[0].address = memblock[i].phy_addr;
 
-		dev_dbg(memsh_child->dev, "memshare: %s: Begin elf dump for size = %d\n",
-			client_name, memblock[i].size);
+			dev_dbg(memsh_child->dev, "memshare: %s: Begin elf dump for size = %d\n",
+				client_name, memblock[i].size);
 
-		ret = do_elf_ramdump(memshare_ramdump_dev[i],
-					ramdump_segments_tmp, 1);
-		kfree(ramdump_segments_tmp);
-		if (ret < 0) {
-			dev_err(memsh_child->dev,
-				"memshare: %s: Unable to elf dump with failure: %d\n",
-				client_name, ret);
-			return ret;
+			ret = do_elf_ramdump(memshare_ramdump_dev[i],
+						ramdump_segments_tmp, 1);
+			kfree(ramdump_segments_tmp);
+			if (ret < 0) {
+				dev_err(memsh_child->dev,
+					"memshare: %s: Unable to elf dump with failure: %d\n",
+					client_name, ret);
+				return ret;
+			}
 		}
 	}
 	return 0;
@@ -514,33 +309,44 @@ static int modem_notifier_cb(struct notifier_block *this, unsigned long code,
 
 	case SUBSYS_BEFORE_SHUTDOWN:
 		bootup_request++;
+		dev_info(memsh_drv->dev,
+		"memshare: SUBSYS_BEFORE_SHUTDOWN: bootup_request:%d\n",
+		bootup_request);
 		for (i = 0; i < MAX_CLIENTS; i++)
 			memblock[i].alloc_request = 0;
 		break;
 
 	case SUBSYS_RAMDUMP_NOTIFICATION:
-		ramdump_event = 1;
+		ramdump_event = true;
+		dev_info(memsh_drv->dev,
+		"memshare: SUBSYS_RAMDUMP_NOTIFICATION: ramdump_event:%d\n",
+		ramdump_event);
 		break;
 
 	case SUBSYS_BEFORE_POWERUP:
 		if (_cmd) {
 			notifdata = (struct notif_data *) _cmd;
+			dev_info(memsh_drv->dev,
+			"memshare: SUBSYS_BEFORE_POWERUP: enable_ramdump: %d, ramdump_event: %d\n",
+			notifdata->enable_ramdump, ramdump_event);
 		} else {
-			ramdump_event = 0;
+			ramdump_event = false;
+			dev_info(memsh_drv->dev,
+			"memshare: SUBSYS_BEFORE_POWERUP: ramdump_event: %d\n",
+			ramdump_event);
 			break;
 		}
 
 		if (notifdata->enable_ramdump && ramdump_event) {
-			dev_info(memsh_child->dev, "memshare: Ramdump collection is enabled\n");
 			ret = mem_share_do_ramdump();
 			if (ret)
 				dev_err(memsh_child->dev, "memshare: Ramdump collection failed\n");
-			ramdump_event = 0;
+			ramdump_event = false;
 		}
 		break;
 
 	case SUBSYS_AFTER_POWERUP:
-		dev_dbg(memsh_child->dev, "memshare: Modem has booted up\n");
+		dev_info(memsh_drv->dev, "memshare: SUBSYS_AFTER_POWERUP: Modem has booted up\n");
 		for (i = 0; i < MAX_CLIENTS; i++) {
 			size = memblock[i].size;
 			if (memblock[i].free_memory > 0 &&
@@ -601,20 +407,12 @@ static int modem_notifier_cb(struct notifier_block *this, unsigned long code,
 		bootup_request++;
 		break;
 
-#ifdef CONFIG_SEC_BSP
-	case SUBSYS_AFTER_SHUTDOWN:
-		dev_err(memsh_child->dev, "memshare: Modem shutdown has happened\n");
-//		memshare_unset_nhlos_permission(memsh_drv->memshare_rd_dev->address,
-//				memsh_drv->memshare_rd_dev->size);
-		memsh_drv->memshare_rd_dev->data_ready = 0;
-		break;
-#endif
-
 	default:
 		break;
 	}
-
 	mutex_unlock(&memsh_drv->mem_share);
+	dev_info(memsh_drv->dev,
+	"memshare: notifier_cb processed for code: %d\n", code);
 	return NOTIFY_DONE;
 }
 
@@ -626,9 +424,8 @@ static void shared_hyp_mapping(int client_id)
 {
 	int ret;
 	u32 source_vmlist[1] = {VMID_HLOS};
-	int dest_vmids[2] = {VMID_HLOS, VMID_MSS_MSA};
-	int dest_perms[2] = {PERM_READ|PERM_WRITE,
-				PERM_READ|PERM_WRITE};
+	int dest_vmids[1] = {VMID_MSS_MSA};
+	int dest_perms[1] = {PERM_READ|PERM_WRITE};
 
 	if (client_id == DHMS_MEM_CLIENT_INVALID) {
 		dev_err(memsh_child->dev,
@@ -639,7 +436,7 @@ static void shared_hyp_mapping(int client_id)
 	ret = hyp_assign_phys(memblock[client_id].phy_addr,
 			memblock[client_id].size,
 			source_vmlist, 1, dest_vmids,
-			dest_perms, 2);
+			dest_perms, 1);
 
 	if (ret != 0) {
 		dev_err(memsh_child->dev, "memshare: hyp_assign_phys failed size=%u err=%d\n",
@@ -685,7 +482,6 @@ static void handle_alloc_generic_req(struct qmi_handle *handle,
 	}
 
 	if (!memblock[client_id].allotted && alloc_req->num_bytes > 0) {
-
 		if (alloc_req->num_bytes > memblock[client_id].init_size)
 			alloc_req->num_bytes = memblock[client_id].init_size;
 
@@ -701,22 +497,12 @@ static void handle_alloc_generic_req(struct qmi_handle *handle,
 				size);
 			resp = 1;
 		}
-	} else {
-		if (memblock[client_id].size < alloc_req->num_bytes) {
-			dev_err(memsh_child->dev, "In %s,guarantee memory size is smaller than alloc request\n",
-			__func__);
-			resp = 1;
+		if (!resp) {
+			memblock[client_id].free_memory += 1;
+			memblock[client_id].allotted = 1;
+			memblock[client_id].size = alloc_req->num_bytes;
+			memblock[client_id].peripheral = alloc_req->proc_id;
 		}
-	}
-	if (!resp) {
-		memblock[client_id].free_memory += 1;
-		memblock[client_id].allotted = 1;
-		memblock[client_id].size = alloc_req->num_bytes;
-		memblock[client_id].peripheral = alloc_req->proc_id;
-#ifdef CONFIG_SEC_BSP
-		memshare_rd_set(memsh_drv->memshare_rd_dev, memblock[client_id].phy_addr,
-				alloc_req->num_bytes, memblock[client_id].virtual_addr);
-#endif
 	}
 	dev_dbg(memsh_child->dev,
 		"memshare_alloc: free memory count for client id: %d = %d\n",
@@ -738,7 +524,7 @@ static void handle_alloc_generic_req(struct qmi_handle *handle,
 		"memshare_alloc: client_id: %d, alloc_resp.num_bytes: %d, alloc_resp.resp.result: %lx\n",
 		alloc_req->client_id,
 		alloc_resp->dhms_mem_alloc_addr_info[0].num_bytes,
-		(unsigned long int)alloc_resp->resp.result);
+		(unsigned long)alloc_resp->resp.result);
 
 	rc = qmi_send_response(mem_share_svc_handle, sq, txn,
 			  MEM_ALLOC_GENERIC_RESP_MSG_V01,
@@ -751,7 +537,6 @@ static void handle_alloc_generic_req(struct qmi_handle *handle,
 
 	kfree(alloc_resp);
 	alloc_resp = NULL;
-	return;
 }
 
 static void handle_free_generic_req(struct qmi_handle *handle,
@@ -774,7 +559,7 @@ static void handle_free_generic_req(struct qmi_handle *handle,
 		"memshare_free: handling memory free request with client id: %d, proc_id: %d\n",
 		free_req->client_id, free_req->proc_id);
 	client_id = check_client(free_req->client_id, free_req->proc_id, FREE);
-	if (client_id >= MAX_CLIENTS) {
+	if (client_id == DHMS_MEM_CLIENT_INVALID) {
 		dev_err(memsh_child->dev, "memshare_free: invalid client request to free memory\n");
 		flag = 1;
 	} else if (!memblock[client_id].guarantee &&
@@ -821,12 +606,6 @@ static void handle_free_generic_req(struct qmi_handle *handle,
 	} else {
 		free_resp.resp.result = QMI_RESULT_SUCCESS_V01;
 		free_resp.resp.error = QMI_ERR_NONE_V01;
-#ifdef CONFIG_SEC_BSP
-		memshare_unset_nhlos_permission(memblock[client_id].phy_addr,
-				memsh_drv->memshare_rd_dev->size);
-		memblock[client_id].hyp_mapping = 0;
-		memsh_drv->memshare_rd_dev->data_ready = 0;
-#endif
 	}
 
 	mutex_unlock(&memsh_drv->mem_free);
@@ -838,7 +617,6 @@ static void handle_free_generic_req(struct qmi_handle *handle,
 		dev_err(memsh_child->dev,
 		"memshare_free: error sending the free response: %d\n", rc);
 
-	return;
 }
 
 static void handle_query_size_req(struct qmi_handle *handle,
@@ -886,7 +664,7 @@ static void handle_query_size_req(struct qmi_handle *handle,
 	dev_info(memsh_child->dev,
 		"memshare_query: client_id : %d, query_resp.size :%d, query_resp.resp.result :%lx\n",
 		query_req->client_id, query_resp->size,
-		(unsigned long int)query_resp->resp.result);
+		(unsigned long)query_resp->resp.result);
 	rc = qmi_send_response(mem_share_svc_handle, sq, txn,
 			  MEM_QUERY_SIZE_RESP_MSG_V01,
 			  MEM_QUERY_MAX_MSG_LEN_V01,
@@ -897,13 +675,11 @@ static void handle_query_size_req(struct qmi_handle *handle,
 
 	kfree(query_resp);
 	query_resp = NULL;
-	return;
 }
 
 static void mem_share_svc_disconnect_cb(struct qmi_handle *qmi,
 				  unsigned int node, unsigned int port)
 {
-	return;
 }
 
 static struct qmi_ops server_ops = {
@@ -1004,10 +780,6 @@ static int memshare_child_probe(struct platform_device *pdev)
 	int rc;
 	uint32_t size, client_id;
 	const char *name;
-#ifdef CONFIG_CP_DYNAMIC_MEM_RESERVE
-	uint32_t reserve_mem_region, reserved_size;
-#endif
-
 	struct memshare_child *drv;
 
 	drv = devm_kzalloc(&pdev->dev, sizeof(struct memshare_child),
@@ -1056,28 +828,9 @@ static int memshare_child_probe(struct platform_device *pdev)
 		return rc;
 	}
 
-	if (strcmp(name, "modem") == 0) {
+	if (strcmp(name, "modem") == 0)
 		memblock[num_clients].peripheral = DHMS_MEM_PROC_MPSS_V01;
-#ifdef CONFIG_CP_DYNAMIC_MEM_RESERVE
-		if (client_id == DHMS_MEM_CLIENT_MODEM_V01) {
-			reserve_mem_region = sec_reserved_mem();
-			if (reserve_mem_region & RESERVE_MEM_LEVEL1_MASK) {
-				rc = of_property_read_u32(pdev->dev.of_node, "qcom,reserved-size",
-								&reserved_size);
-				if (rc) {
-					dev_err(memsh_child->dev, "memshare: %s, Error reading reserved size of clients, rc: %d\n",
-							__func__, rc);
-					return rc;
-				}
-
-				size += reserved_size;
-			} else if (!(reserve_mem_region & RESERVE_MEM_LEVEL2_MASK)) {
-				size = 0;
-			}
-			dev_err(memsh_child->dev, "memshare: client_id %d / size %x\n", client_id, size);
-		}
-#endif
-	} else if (strcmp(name, "adsp") == 0)
+	else if (strcmp(name, "adsp") == 0)
 		memblock[num_clients].peripheral = DHMS_MEM_PROC_ADSP_V01;
 	else if (strcmp(name, "wcnss") == 0)
 		memblock[num_clients].peripheral = DHMS_MEM_PROC_WCNSS_V01;
@@ -1163,17 +916,6 @@ static int memshare_probe(struct platform_device *pdev)
 	subsys_notif_register_notifier("modem", &nb);
 	dev_dbg(memsh_child->dev, "memshare: Memshare inited\n");
 
-#ifdef CONFIG_SEC_BSP
-	drv->memshare_rd_dev = create_memshare_rd_device(MEMSHARE_DEV_NAME,
-								&pdev->dev);
-	if (!drv->memshare_rd_dev) {
-		dev_err(memsh_child->dev, "%s : Unable to create a memshare ramdump device.\n",
-				__func__);
-		rc = -ENOMEM;
-		return rc;
-	}
-#endif
-
 	return 0;
 }
 
@@ -1189,11 +931,6 @@ static int memshare_remove(struct platform_device *pdev)
 		mem_share_svc_handle = NULL;
 	}
 	destroy_workqueue(mem_share_svc_workqueue);
-
-#ifdef CONFIG_SEC_BSP
-	destroy_memshare_rd_device(memsh_drv->memshare_rd_dev);
-#endif
-
 	return 0;
 }
 
@@ -1222,7 +959,6 @@ static struct platform_driver memshare_pdriver = {
 	.remove         = memshare_remove,
 	.driver = {
 		.name   = MEMSHARE_DEV_NAME,
-		.owner  = THIS_MODULE,
 		.of_match_table = memshare_match_table,
 	},
 };
@@ -1232,7 +968,6 @@ static struct platform_driver memshare_pchild = {
 	.remove         = memshare_child_remove,
 	.driver = {
 		.name   = MEMSHARE_CHILD_DEV_NAME,
-		.owner  = THIS_MODULE,
 		.of_match_table = memshare_match_table1,
 	},
 };

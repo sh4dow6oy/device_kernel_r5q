@@ -1,13 +1,5 @@
-/* Copyright (c) 2011-2016,2019, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+// SPDX-License-Identifier: GPL-2.0-only
+/* Copyright (c) 2011-2016, 2019, 2021, The Linux Foundation. All rights reserved.
  *
  */
 
@@ -34,23 +26,67 @@
 
 /* Debug message support */
 static int msm_rmnet_bam_debug_mask;
-module_param_named(debug_enable, msm_rmnet_bam_debug_mask, int, 0664);
+static ssize_t debug_enable_show(struct device *dev, struct device_attribute
+					*attr, char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "%d\n", msm_rmnet_bam_debug_mask);
+}
 
-static unsigned long int msm_rmnet_bam_headroom_check_failure;
-module_param(msm_rmnet_bam_headroom_check_failure, ulong, 0444);
-MODULE_PARM_DESC(msm_rmnet_bam_headroom_check_failure,
-		 "Number of packets with insufficient headroom");
+static ssize_t debug_enable_store(struct device *dev,
+				  struct device_attribute *attr,
+				  const char *buf, size_t count)
+{
+	int val;
+
+	if (kstrtos32(buf, 0, &val))
+		return -EINVAL;
+
+	msm_rmnet_bam_debug_mask = val;
+
+	return count;
+}
+static DEVICE_ATTR_RW(debug_enable);
+
+static unsigned long msm_rmnet_bam_headroom_check_failure;
+static ssize_t
+msm_rmnet_bam_headroom_check_failure_show(struct device *dev,
+					  struct device_attribute *attr,
+					  char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "%d\n",
+			msm_rmnet_bam_headroom_check_failure);
+}
+static DEVICE_ATTR_RO(msm_rmnet_bam_headroom_check_failure);
 
 /* Packet threshold. */
 static unsigned int pkt_threshold = 1;
-module_param(pkt_threshold, uint, 0664);
+static ssize_t pkt_threshold_show(struct device *dev, struct device_attribute
+				*attr, char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "%d\n", pkt_threshold);
+}
+
+static ssize_t pkt_threshold_store(struct device *dev,
+				   struct device_attribute *attr,
+				   const char *buf, size_t count)
+{
+	int val;
+
+	if (kstrtos32(buf, 0, &val))
+		return -EINVAL;
+
+	pkt_threshold = val;
+
+	return count;
+}
+static DEVICE_ATTR_RW(pkt_threshold);
 
 #define DEBUG_MASK_LVL0	BIT(0)
 #define DEBUG_MASK_LVL1	BIT(1)
 #define DEBUG_MASK_LVL2	BIT(2)
 
 #define DBG(m, x...) do {			   \
-		if (msm_rmnet_bam_debug_mask & m) \
+		if (msm_rmnet_bam_debug_mask & (m)) \
 			pr_info(x);		   \
 } while (0)
 #define DBG0(x...) DBG(DEBUG_MASK_LVL0, x)
@@ -129,20 +165,20 @@ static ssize_t wakeups_xmit_show(struct device *d,
 {
 	struct rmnet_private *p = netdev_priv(to_net_dev(d));
 
-	return snprintf(buf, PAGE_SIZE, "%lu\n", p->wakeups_xmit);
+	return scnprintf(buf, PAGE_SIZE, "%lu\n", p->wakeups_xmit);
 }
 
-DEVICE_ATTR(wakeups_xmit, 0444, wakeups_xmit_show, NULL);
+DEVICE_ATTR_RO(wakeups_xmit);
 
 static ssize_t wakeups_rcv_show(struct device *d, struct device_attribute *attr,
 				char *buf)
 {
 	struct rmnet_private *p = netdev_priv(to_net_dev(d));
 
-	return snprintf(buf, PAGE_SIZE, "%lu\n", p->wakeups_rcv);
+	return scnprintf(buf, PAGE_SIZE, "%lu\n", p->wakeups_rcv);
 }
 
-DEVICE_ATTR(wakeups_rcv, 0444, wakeups_rcv_show, NULL);
+DEVICE_ATTR_RO(wakeups_rcv);
 
 /* Set timeout in us. */
 static ssize_t timeout_store(struct device *d, struct device_attribute *attr,
@@ -165,10 +201,10 @@ static ssize_t timeout_show(struct device *d, struct device_attribute *attr,
 	struct rmnet_private *p = netdev_priv(to_net_dev(d));
 
 	p = netdev_priv(to_net_dev(d));
-	return snprintf(buf, PAGE_SIZE, "%lu\n", timeout_us);
+	return scnprintf(buf, PAGE_SIZE, "%lu\n", timeout_us);
 }
 
-DEVICE_ATTR(timeout, 0664, timeout_show, timeout_store);
+DEVICE_ATTR_RW(timeout);
 #endif
 
 /* Forward declaration */
@@ -251,7 +287,7 @@ static void bam_recv_notify(void *dev, struct sk_buff *skb)
 				netif_rx(skb);
 		}
 	} else {
-		pr_err("[%s] %s: No skb received",
+		pr_err("[%s] %s: No skb received\n",
 		       ((struct net_device *)dev)->name, __func__);
 	}
 }
@@ -302,7 +338,7 @@ static int _rmnet_xmit(struct sk_buff *skb, struct net_device *dev)
 	bam_ret = msm_bam_dmux_write(p->ch_id, skb);
 
 	if (bam_ret != 0 && bam_ret != -EAGAIN && bam_ret != -EFAULT) {
-		pr_err("[%s] %s: write returned error %d",
+		pr_err("[%s] %s: write returned error %d\n",
 		       dev->name, __func__, bam_ret);
 		if (RMNET_IS_MODE_QOS(opmode))
 			skb_pull(skb, sizeof(struct QMI_QOS_HDR_S));
@@ -459,7 +495,7 @@ static int rmnet_xmit(struct sk_buff *skb, struct net_device *dev)
 	int ret = 0;
 
 	if (netif_queue_stopped(dev)) {
-		pr_err("[%s]fatal: %s called when netif_queue is stopped",
+		pr_err("[%s]fatal: %s called when netif_queue is stopped\n",
 		       dev->name, __func__);
 		return NETDEV_TX_BUSY;
 	}
@@ -582,7 +618,7 @@ static int rmnet_ioctl_extended(struct net_device *dev, struct ifreq *ifr)
 			    sizeof(ext_cmd));
 
 	if (rc) {
-		pr_err("%s: copy_from_user failed ,error %d", __func__, rc);
+		pr_err("%s: copy_from_user failed ,error %d\n", __func__, rc);
 		return rc;
 	}
 
@@ -617,7 +653,7 @@ static int rmnet_ioctl_extended(struct net_device *dev, struct ifreq *ifr)
 	rc = copy_to_user(ifr->ifr_ifru.ifru_data, &ext_cmd, sizeof(ext_cmd));
 
 	if (rc)
-		pr_err("%s: copy_to_user failed, error %d", __func__, rc);
+		pr_err("%s: copy_to_user failed, error %d\n", __func__, rc);
 
 	return rc;
 }
@@ -751,7 +787,7 @@ static int rmnet_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 		break;
 
 	default:
-		pr_err("[%s] error: %s called for unsupported cmd[%d]",
+		pr_err("[%s] error: %s called for unsupported cmd[%d]\n",
 		       dev->name, __func__, cmd);
 		return -EINVAL;
 	}
@@ -803,6 +839,28 @@ static int rmnet_debug_init(struct net_device *dev)
 	return 0;
 }
 #endif
+
+static int rmnet_sysnode_init(struct device *dev)
+{
+	int ret = 0;
+
+	if (!dev)
+		return -EINVAL;
+
+	device_create_file(dev, &dev_attr_debug_enable);
+	device_create_file(dev,
+			   &dev_attr_msm_rmnet_bam_headroom_check_failure);
+	device_create_file(dev, &dev_attr_pkt_threshold);
+
+	return ret;
+}
+
+static void rmnet_remove_files(struct device *dev)
+{
+	device_remove_file(dev, &dev_attr_debug_enable);
+	device_remove_file(dev, &dev_attr_msm_rmnet_bam_headroom_check_failure);
+	device_remove_file(dev, &dev_attr_pkt_threshold);
+}
 
 static int bam_rmnet_probe(struct platform_device *pdev)
 {
@@ -857,6 +915,7 @@ static int bam_rmnet_probe(struct platform_device *pdev)
 	}
 
 	rmnet_debug_init(dev);
+	rmnet_sysnode_init(d);
 
 	return 0;
 }
@@ -890,6 +949,7 @@ static int bam_rmnet_remove(struct platform_device *pdev)
 
 	unregister_netdev(netdevs[i]);
 	free_netdev(netdevs[i]);
+	rmnet_remove_files(&pdev->dev);
 
 	return 0;
 }

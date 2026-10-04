@@ -209,11 +209,7 @@ static int fill_stats_for_pid(pid_t pid, struct taskstats *stats)
 {
 	struct task_struct *tsk;
 
-	rcu_read_lock();
-	tsk = find_task_by_vpid(pid);
-	if (tsk)
-		get_task_struct(tsk);
-	rcu_read_unlock();
+	tsk = find_get_task_by_vpid(pid);
 	if (!tsk)
 		return -ESRCH;
 	fill_stats(current_user_ns(), task_active_pid_ns(current), tsk, stats);
@@ -221,13 +217,39 @@ static int fill_stats_for_pid(pid_t pid, struct taskstats *stats)
 	return 0;
 }
 
+static void tgid_stats_add_task(struct taskstats *stats,
+				struct task_struct *tsk, u64 now_ns)
+{
+	u64 delta, utime, stime;
+
+	/*
+	 * Each accounting subsystem calls its functions here to
+	 * accumulate its per-task stats for tsk, into the per-tgid structure
+	 *
+	 *	per-task-foo(stats, tsk);
+	 */
+	delayacct_add_tsk(stats, tsk);
+
+	/* calculate task elapsed time in nsec */
+	delta = now_ns - tsk->start_time;
+	/* Convert to micro seconds */
+	do_div(delta, NSEC_PER_USEC);
+	stats->ac_etime += delta;
+
+	task_cputime(tsk, &utime, &stime);
+	stats->ac_utime += div_u64(utime, NSEC_PER_USEC);
+	stats->ac_stime += div_u64(stime, NSEC_PER_USEC);
+
+	stats->nvcsw += tsk->nvcsw;
+	stats->nivcsw += tsk->nivcsw;
+}
+
 static int fill_stats_for_tgid(pid_t tgid, struct taskstats *stats)
 {
 	struct task_struct *tsk, *first;
 	unsigned long flags;
 	int rc = -ESRCH;
-	u64 delta, utime, stime;
-	u64 start_time;
+	u64 now_ns;
 
 	/*
 	 * Add additional stats from live tasks except zombie thread group
@@ -244,32 +266,13 @@ static int fill_stats_for_tgid(pid_t tgid, struct taskstats *stats)
 	else
 		memset(stats, 0, sizeof(*stats));
 
-	tsk = first;
-	start_time = ktime_get_ns();
-	do {
+	now_ns = ktime_get_ns();
+	for_each_thread(first, tsk) {
 		if (tsk->exit_state)
 			continue;
-		/*
-		 * Accounting subsystem can call its functions here to
-		 * fill in relevant parts of struct taskstsats as follows
-		 *
-		 *	per-task-foo(stats, tsk);
-		 */
-		delayacct_add_tsk(stats, tsk);
 
-		/* calculate task elapsed time in nsec */
-		delta = start_time - tsk->start_time;
-		/* Convert to micro seconds */
-		do_div(delta, NSEC_PER_USEC);
-		stats->ac_etime += delta;
-
-		task_cputime(tsk, &utime, &stime);
-		stats->ac_utime += div_u64(utime, NSEC_PER_USEC);
-		stats->ac_stime += div_u64(stime, NSEC_PER_USEC);
-
-		stats->nvcsw += tsk->nvcsw;
-		stats->nivcsw += tsk->nivcsw;
-	} while_each_thread(first, tsk);
+		tgid_stats_add_task(stats, tsk, now_ns);
+	}
 
 	unlock_task_sighand(first, &flags);
 	rc = 0;
@@ -287,18 +290,14 @@ out:
 static void fill_tgid_exit(struct task_struct *tsk)
 {
 	unsigned long flags;
+	u64 now_ns;
 
 	spin_lock_irqsave(&tsk->sighand->siglock, flags);
 	if (!tsk->signal->stats)
 		goto ret;
 
-	/*
-	 * Each accounting subsystem calls its functions here to
-	 * accumalate its per-task stats for tsk, into the per-tgid structure
-	 *
-	 *	per-task-foo(tsk->signal->stats, tsk);
-	 */
-	delayacct_add_tsk(tsk->signal->stats, tsk);
+	now_ns = ktime_get_ns();
+	tgid_stats_add_task(tsk->signal->stats, tsk, now_ns);
 ret:
 	spin_unlock_irqrestore(&tsk->sighand->siglock, flags);
 	return;
@@ -394,7 +393,7 @@ static struct taskstats *mk_reply(struct sk_buff *skb, int type, u32 pid)
 			? TASKSTATS_TYPE_AGGR_PID
 			: TASKSTATS_TYPE_AGGR_TGID;
 
-	na = nla_nest_start(skb, aggr);
+	na = nla_nest_start_noflag(skb, aggr);
 	if (!na)
 		goto err;
 
@@ -496,7 +495,7 @@ static void sysstats_build(struct sys_memstats *stats)
 	stats->version = SYSSTATS_VERSION;
 	stats->memtotal = K(i.totalram);
 	stats->reclaimable =
-		global_node_page_state(NR_KERNEL_MISC_RECLAIMABLE) << 2;
+		K(global_node_page_state(NR_KERNEL_MISC_RECLAIMABLE));
 	stats->swap_used = K(i.totalswap - i.freeswap);
 	stats->swap_total = K(i.totalswap);
 	stats->vmalloc_total = K(vmalloc_nr_pages());
@@ -656,9 +655,7 @@ static int taskstats2_cmd_attr_pid(struct genl_info *info)
 	int rc;
 	u64 utime, stime;
 	const struct cred *tcred;
-#ifdef CONFIG_CPUSETS
 	struct cgroup_subsys_state *css;
-#endif //CONFIG_CPUSETS
 	unsigned long flags;
 	struct signal_struct *sig;
 
@@ -725,12 +722,10 @@ static int taskstats2_cmd_attr_pid(struct genl_info *info)
 
 	strlcpy(stats->name, tsk->comm, sizeof(stats->name));
 
-#ifdef CONFIG_CPUSETS
 	css = task_get_css(tsk, cpuset_cgrp_id);
 	cgroup_path_ns(css->cgroup, stats->state, sizeof(stats->state),
 				current->nsproxy->cgroup_ns);
 	css_put(css);
-#endif //CONFIG_CPUSETS
 	/* version 2 fields end here */
 
 	put_task_struct(tsk);
@@ -840,6 +835,10 @@ static int taskstats2_foreach(struct sk_buff *skb, struct netlink_callback *cb)
 	nla = nla_find(nlmsg_attrdata(cb->nlh, GENL_HDRLEN),
 			nlmsg_attrlen(cb->nlh, GENL_HDRLEN),
 			TASKSTATS_TYPE_FOREACH);
+
+	if (!nla)
+		goto out;
+
 	buf  = nla_get_u32(nla);
 	oom_score_min = (short) (buf & 0xFFFF);
 	oom_score_max = (short) ((buf >> 16) & 0xFFFF);
@@ -896,6 +895,7 @@ static int taskstats2_foreach(struct sk_buff *skb, struct netlink_callback *cb)
 	}
 
 	cb->args[0] = iter.tgid;
+out:
 	return skb->len;
 }
 
@@ -1006,6 +1006,7 @@ void taskstats_exit(struct task_struct *tsk, int group_dead)
 		goto err;
 
 	memcpy(stats, tsk->signal->stats, sizeof(*stats));
+	stats->version = TASKSTATS_VERSION;
 
 send:
 	send_cpu_listeners(rep_skb, listeners);

@@ -34,17 +34,18 @@
 #include <linux/poll.h>
 #include <linux/reservation.h>
 #include <linux/mm.h>
-#include <linux/mount.h>
 #include <linux/sched/signal.h>
 #include <linux/fdtable.h>
 #include <linux/list_sort.h>
 #include <linux/hashtable.h>
+#include <linux/mount.h>
 #include <linux/dcache.h>
+#include <linux/pseudo_fs.h>
 
 #include <uapi/linux/dma-buf.h>
 #include <uapi/linux/magic.h>
 
-static inline int is_dma_buf_file(struct file *);
+#include "dma-buf-sysfs-stats.h"
 
 struct dma_buf_list {
 	struct list_head head;
@@ -98,34 +99,14 @@ out:
 			     dentry->d_name.name, ret > 0 ? name : "");
 }
 
-static const struct dentry_operations dma_buf_dentry_ops = {
-	.d_dname = dmabuffs_dname,
-};
-
-static struct vfsmount *dma_buf_mnt;
-
-static struct dentry *dma_buf_fs_mount(struct file_system_type *fs_type,
-		int flags, const char *name, void *data)
-{
-	return mount_pseudo(fs_type, "dmabuf:", NULL, &dma_buf_dentry_ops,
-			DMA_BUF_MAGIC);
-}
-
-static struct file_system_type dma_buf_fs_type = {
-	.name = "dmabuf",
-	.mount = dma_buf_fs_mount,
-	.kill_sb = kill_anon_super,
-};
-
-static int dma_buf_release(struct inode *inode, struct file *file)
+static void dma_buf_release(struct dentry *dentry)
 {
 	struct dma_buf *dmabuf;
-	struct dentry *dentry = file->f_path.dentry;
+	int dtor_ret = 0;
 
-	if (!is_dma_buf_file(file))
-		return -EINVAL;
-
-	dmabuf = file->private_data;
+	dmabuf = dentry->d_fsdata;
+	if (unlikely(!dmabuf))
+		return;
 
 	spin_lock(&dentry->d_lock);
 	dentry->d_fsdata = NULL;
@@ -142,21 +123,66 @@ static int dma_buf_release(struct inode *inode, struct file *file)
 	 */
 	BUG_ON(dmabuf->cb_shared.active || dmabuf->cb_excl.active);
 
-	mutex_lock(&db_list.lock);
-	list_del(&dmabuf->list_node);
-	mutex_unlock(&db_list.lock);
+	if (dmabuf->dtor)
+		dtor_ret = dmabuf->dtor(dmabuf, dmabuf->dtor_data);
 
-	dmabuf->ops->release(dmabuf);
+	if (!dtor_ret)
+		dmabuf->ops->release(dmabuf);
+	else
+		pr_warn_ratelimited("Leaking dmabuf %s because destructor failed error:%d\n",
+				    dmabuf->name, dtor_ret);
 
 	dma_buf_ref_destroy(dmabuf);
 
 	if (dmabuf->resv == (struct reservation_object *)&dmabuf[1])
 		reservation_object_fini(dmabuf->resv);
 
+	dma_buf_stats_teardown(dmabuf);
+
+	WARN_ON(!list_empty(&dmabuf->attachments));
 	module_put(dmabuf->owner);
 	dmabuf_dent_put(dmabuf);
+}
+
+static int dma_buf_file_release(struct inode *inode, struct file *file)
+{
+	struct dma_buf *dmabuf;
+
+	if (!is_dma_buf_file(file))
+		return -EINVAL;
+
+	dmabuf = file->private_data;
+
+	mutex_lock(&db_list.lock);
+	list_del(&dmabuf->list_node);
+	mutex_unlock(&db_list.lock);
+
 	return 0;
 }
+
+static const struct dentry_operations dma_buf_dentry_ops = {
+	.d_dname = dmabuffs_dname,
+	.d_release = dma_buf_release,
+};
+
+static struct vfsmount *dma_buf_mnt;
+
+static int dma_buf_fs_init_context(struct fs_context *fc)
+{
+	struct pseudo_fs_context *ctx;
+
+	ctx = init_pseudo(fc, DMA_BUF_MAGIC);
+	if (!ctx)
+		return -ENOMEM;
+	ctx->dops = &dma_buf_dentry_ops;
+	return 0;
+}
+
+static struct file_system_type dma_buf_fs_type = {
+	.name = "dmabuf",
+	.init_fs_context = dma_buf_fs_init_context,
+	.kill_sb = kill_anon_super,
+};
 
 static int dma_buf_mmap_internal(struct file *file, struct vm_area_struct *vma)
 {
@@ -166,6 +192,10 @@ static int dma_buf_mmap_internal(struct file *file, struct vm_area_struct *vma)
 		return -EINVAL;
 
 	dmabuf = file->private_data;
+
+	/* check if buffer supports mmap */
+	if (!dmabuf->ops->mmap)
+		return -EINVAL;
 
 	/* check for overflowing the buffer's size */
 	if (vma->vm_pgoff + vma_pages(vma) >
@@ -212,10 +242,10 @@ static loff_t dma_buf_llseek(struct file *file, loff_t offset, int whence)
  * Userspace can query the state of these implicitly tracked fences using poll()
  * and related system calls:
  *
- * - Checking for POLLIN, i.e. read access, can be use to query the state of the
+ * - Checking for EPOLLIN, i.e. read access, can be use to query the state of the
  *   most recent write or exclusive fence.
  *
- * - Checking for POLLOUT, i.e. write access, can be used to query the state of
+ * - Checking for EPOLLOUT, i.e. write access, can be used to query the state of
  *   all attached fences, shared and exclusive ones.
  *
  * Note that this only signals the completion of the respective fences, i.e. the
@@ -234,24 +264,24 @@ static void dma_buf_poll_cb(struct dma_fence *fence, struct dma_fence_cb *cb)
 	spin_unlock_irqrestore(&dcb->poll->lock, flags);
 }
 
-static unsigned int dma_buf_poll(struct file *file, poll_table *poll)
+static __poll_t dma_buf_poll(struct file *file, poll_table *poll)
 {
 	struct dma_buf *dmabuf;
 	struct reservation_object *resv;
 	struct reservation_object_list *fobj;
 	struct dma_fence *fence_excl;
-	unsigned long events;
+	__poll_t events;
 	unsigned shared_count, seq;
 
 	dmabuf = file->private_data;
 	if (!dmabuf || !dmabuf->resv)
-		return POLLERR;
+		return EPOLLERR;
 
 	resv = dmabuf->resv;
 
 	poll_wait(file, &dmabuf->poll, poll);
 
-	events = poll_requested_events(poll) & (POLLIN | POLLOUT);
+	events = poll_requested_events(poll) & (EPOLLIN | EPOLLOUT);
 	if (!events)
 		return 0;
 
@@ -270,12 +300,12 @@ retry:
 		goto retry;
 	}
 
-	if (fence_excl && (!(events & POLLOUT) || shared_count == 0)) {
+	if (fence_excl && (!(events & EPOLLOUT) || shared_count == 0)) {
 		struct dma_buf_poll_cb_t *dcb = &dmabuf->cb_excl;
-		unsigned long pevents = POLLIN;
+		__poll_t pevents = EPOLLIN;
 
 		if (shared_count == 0)
-			pevents |= POLLOUT;
+			pevents |= EPOLLOUT;
 
 		spin_lock_irq(&dmabuf->poll.lock);
 		if (dcb->active) {
@@ -305,19 +335,19 @@ retry:
 		}
 	}
 
-	if ((events & POLLOUT) && shared_count > 0) {
+	if ((events & EPOLLOUT) && shared_count > 0) {
 		struct dma_buf_poll_cb_t *dcb = &dmabuf->cb_shared;
 		int i;
 
 		/* Only queue a new callback if no event has fired yet */
 		spin_lock_irq(&dmabuf->poll.lock);
 		if (dcb->active)
-			events &= ~POLLOUT;
+			events &= ~EPOLLOUT;
 		else
-			dcb->active = POLLOUT;
+			dcb->active = EPOLLOUT;
 		spin_unlock_irq(&dmabuf->poll.lock);
 
-		if (!(events & POLLOUT))
+		if (!(events & EPOLLOUT))
 			goto out;
 
 		for (i = 0; i < shared_count; ++i) {
@@ -330,14 +360,14 @@ retry:
 				 *
 				 * call dma_buf_poll_cb and force a recheck!
 				 */
-				events &= ~POLLOUT;
+				events &= ~EPOLLOUT;
 				dma_buf_poll_cb(NULL, &dcb->cb);
 				break;
 			}
 			if (!dma_fence_add_callback(fence, &dcb->cb,
 						    dma_buf_poll_cb)) {
 				dma_fence_put(fence);
-				events &= ~POLLOUT;
+				events &= ~EPOLLOUT;
 				break;
 			}
 			dma_fence_put(fence);
@@ -353,12 +383,6 @@ out:
 	return events;
 }
 
-static int dma_buf_begin_cpu_access_umapped(struct dma_buf *dmabuf,
-					    enum dma_data_direction direction);
-
-
-static int dma_buf_end_cpu_access_umapped(struct dma_buf *dmabuf,
-					  enum dma_data_direction direction);
 /**
  * dma_buf_set_name - Set a name to a specific dma_buf to track the usage.
  * The name of the dma-buf buffer can only be set when the dma-buf is not
@@ -383,6 +407,7 @@ static long dma_buf_set_name(struct dma_buf *dmabuf, const char __user *buf)
 		return PTR_ERR(name);
 
 	mutex_lock(&dmabuf->lock);
+	spin_lock(&dmabuf->name_lock);
 	if (!list_empty(&dmabuf->attachments)) {
 		ret = -EBUSY;
 		kfree(name);
@@ -394,24 +419,17 @@ static long dma_buf_set_name(struct dma_buf *dmabuf, const char __user *buf)
 	spin_unlock(&dmabuf->name_lock);
 
 out_unlock:
+	spin_unlock(&dmabuf->name_lock);
 	mutex_unlock(&dmabuf->lock);
 	return ret;
 }
 
-static long dma_buf_get_name(struct dma_buf *dmabuf, char __user *buf)
-{
-	const char *name = "";
-	long ret = 0;
+static int dma_buf_begin_cpu_access_umapped(struct dma_buf *dmabuf,
+					    enum dma_data_direction direction);
 
-	mutex_lock(&dmabuf->lock);
-	if (dmabuf->name)
-		name = dmabuf->name;
-	if (copy_to_user(buf, name, strlen(name) + 1))
-		ret = -EFAULT;
-	mutex_unlock(&dmabuf->lock);
 
-	return ret;
-}
+static int dma_buf_end_cpu_access_umapped(struct dma_buf *dmabuf,
+					  enum dma_data_direction direction);
 
 static long dma_buf_ioctl(struct file *file,
 			  unsigned int cmd, unsigned long arg)
@@ -464,9 +482,6 @@ static long dma_buf_ioctl(struct file *file,
 	case DMA_BUF_SET_NAME_B:
 		return dma_buf_set_name(dmabuf, (const char __user *)arg);
 
-	case DMA_BUF_GET_NAME:
-		return dma_buf_get_name(dmabuf, (char __user *)arg);
-
 	default:
 		return -ENOTTY;
 	}
@@ -487,29 +502,26 @@ static void dma_buf_show_fdinfo(struct seq_file *m, struct file *file)
 }
 
 static const struct file_operations dma_buf_fops = {
-	.release	= dma_buf_release,
-	.mmap		= dma_buf_mmap_internal,
-	.llseek		= dma_buf_llseek,
-	.poll		= dma_buf_poll,
-	.unlocked_ioctl	= dma_buf_ioctl,
-#ifdef CONFIG_COMPAT
-	.compat_ioctl	= dma_buf_ioctl,
-#endif
-	.show_fdinfo	= dma_buf_show_fdinfo,
+	.release = dma_buf_file_release,
+	.mmap = dma_buf_mmap_internal,
+	.llseek = dma_buf_llseek,
+	.poll = dma_buf_poll,
+	.unlocked_ioctl = dma_buf_ioctl,
+	.compat_ioctl	= compat_ptr_ioctl,
+	.show_fdinfo = dma_buf_show_fdinfo,
 };
 
 /*
  * is_dma_buf_file - Check if struct file* is associated with dma_buf
  */
-static inline int is_dma_buf_file(struct file *file)
+int is_dma_buf_file(struct file *file)
 {
 	return file->f_op == &dma_buf_fops;
 }
+EXPORT_SYMBOL_GPL(is_dma_buf_file);
 
 static struct file *dma_buf_getfile(struct dma_buf *dmabuf, int flags)
 {
-	static const struct qstr this = QSTR_INIT("dmabuf", 6);
-	struct path path;
 	struct file *file;
 	struct inode *inode = alloc_anon_inode(dma_buf_mnt->mnt_sb);
 
@@ -519,16 +531,8 @@ static struct file *dma_buf_getfile(struct dma_buf *dmabuf, int flags)
 	inode->i_size = dmabuf->size;
 	inode_set_bytes(inode, dmabuf->size);
 
-	path.dentry = d_alloc_pseudo(dma_buf_mnt->mnt_sb, &this);
-	if (!path.dentry) {
-		file = ERR_PTR(-ENOMEM);
-		goto err_d_alloc;
-	}
-	path.mnt = mntget(dma_buf_mnt);
-
-	d_instantiate(path.dentry, inode);
-	file = alloc_file(&path, OPEN_FMODE(flags) | FMODE_LSEEK,
-			&dma_buf_fops);
+	file = alloc_file_pseudo(inode, dma_buf_mnt, "dmabuf",
+				 flags, &dma_buf_fops);
 	if (IS_ERR(file))
 		goto err_alloc_file;
 	file->f_flags = flags & (O_ACCMODE | O_NONBLOCK);
@@ -538,8 +542,6 @@ static struct file *dma_buf_getfile(struct dma_buf *dmabuf, int flags)
 	return file;
 
 err_alloc_file:
-	path_put(&path);
-err_d_alloc:
 	iput(inode);
 	return file;
 }
@@ -557,13 +559,13 @@ err_d_alloc:
  *
  * 2. Userspace passes this file-descriptors to all drivers it wants this buffer
  *    to share with: First the filedescriptor is converted to a &dma_buf using
- *    dma_buf_get(). The the buffer is attached to the device using
+ *    dma_buf_get(). Then the buffer is attached to the device using
  *    dma_buf_attach().
  *
  *    Up to this stage the exporter is still free to migrate or reallocate the
  *    backing storage.
  *
- * 3. Once the buffer is attached to all devices userspace can inniate DMA
+ * 3. Once the buffer is attached to all devices userspace can initiate DMA
  *    access to the shared buffer. In the kernel this is done by calling
  *    dma_buf_map_attachment() and dma_buf_unmap_attachment().
  *
@@ -610,21 +612,14 @@ struct dma_buf *dma_buf_export(const struct dma_buf_export_info *exp_info)
 			  || !exp_info->ops
 			  || !exp_info->ops->map_dma_buf
 			  || !exp_info->ops->unmap_dma_buf
-			  || !exp_info->ops->release
-			  || !exp_info->ops->map_atomic
-			  || !exp_info->ops->map
-			  || !exp_info->ops->mmap)) {
+			  || !exp_info->ops->release)) {
 		return ERR_PTR(-EINVAL);
 	}
 
 	if (!try_module_get(exp_info->owner))
 		return ERR_PTR(-ENOENT);
 
-	/*
-	 * dma_buf struct must be allocated with kzalloc to zero out all the
-	 * fields. Otherwise dmabuf->name field may leak kernel data when the
-	 * name is unspecified.
-	 */
+
 	dmabuf = kzalloc(alloc_size, GFP_KERNEL);
 	if (!dmabuf) {
 		ret = -ENOMEM;
@@ -640,7 +635,9 @@ struct dma_buf *dma_buf_export(const struct dma_buf_export_info *exp_info)
 	init_waitqueue_head(&dmabuf->poll);
 	dmabuf->cb_excl.poll = dmabuf->cb_shared.poll = &dmabuf->poll;
 	dmabuf->cb_excl.active = dmabuf->cb_shared.active = 0;
+#if defined(CONFIG_DEBUG_FS)
 	dmabuf->ktime = ktime_get();
+#endif
 	atomic_set(&dmabuf->dent_count, 1);
 
 	if (!resv) {
@@ -654,9 +651,12 @@ struct dma_buf *dma_buf_export(const struct dma_buf_export_info *exp_info)
 		ret = PTR_ERR(file);
 		goto err_dmabuf;
 	}
+
+	file->f_mode |= FMODE_LSEEK;
 	dmabuf->file = file;
 
 	mutex_init(&dmabuf->lock);
+	spin_lock_init(&dmabuf->name_lock);
 	INIT_LIST_HEAD(&dmabuf->attachments);
 
 	dma_buf_ref_init(dmabuf);
@@ -666,8 +666,19 @@ struct dma_buf *dma_buf_export(const struct dma_buf_export_info *exp_info)
 	list_add(&dmabuf->list_node, &db_list.head);
 	mutex_unlock(&db_list.lock);
 
+	ret = dma_buf_stats_setup(dmabuf);
+	if (ret)
+		goto err_sysfs;
+
 	return dmabuf;
 
+err_sysfs:
+	/*
+	 * Set file->f_path.dentry->d_fsdata to NULL so that when
+	 * dma_buf_release() gets invoked by dentry_ops, it exits
+	 * early before calling the release() dma_buf op.
+	 */
+	file->f_path.dentry->d_fsdata = NULL;
 err_dmabuf:
 	kfree(dmabuf);
 err_module:
@@ -784,18 +795,22 @@ struct dma_buf_attachment *dma_buf_attach(struct dma_buf *dmabuf,
 	mutex_lock(&dmabuf->lock);
 
 	if (dmabuf->ops->attach) {
-		ret = dmabuf->ops->attach(dmabuf, dev, attach);
+		ret = dmabuf->ops->attach(dmabuf, attach);
 		if (ret)
 			goto err_attach;
 	}
 	list_add(&attach->node, &dmabuf->attachments);
 
 	mutex_unlock(&dmabuf->lock);
+
 	return attach;
 
 err_attach:
 	kfree(attach);
 	mutex_unlock(&dmabuf->lock);
+	return ERR_PTR(ret);
+
+	dma_buf_detach(dmabuf, attach);
 	return ERR_PTR(ret);
 }
 EXPORT_SYMBOL_GPL(dma_buf_attach);
@@ -812,6 +827,10 @@ void dma_buf_detach(struct dma_buf *dmabuf, struct dma_buf_attachment *attach)
 {
 	if (WARN_ON(!dmabuf || !attach))
 		return;
+
+	if (attach->sgt) {
+		dmabuf->ops->unmap_dma_buf(attach, attach->sgt, attach->dir);
+	}
 
 	mutex_lock(&dmabuf->lock);
 	list_del(&attach->node);
@@ -833,7 +852,7 @@ EXPORT_SYMBOL_GPL(dma_buf_detach);
  * Returns sg_table containing the scatterlist to be returned; returns ERR_PTR
  * on error. May return -EINTR if it is interrupted by a signal.
  *
- * A mapping must be unmapped again using dma_buf_map_attachment(). Note that
+ * A mapping must be unmapped by using dma_buf_unmap_attachment(). Note that
  * the underlying backing storage is pinned for as long as a mapping exists,
  * therefore users/importers should not hold onto a mapping for undue amounts of
  * time.
@@ -848,9 +867,26 @@ struct sg_table *dma_buf_map_attachment(struct dma_buf_attachment *attach,
 	if (WARN_ON(!attach || !attach->dmabuf))
 		return ERR_PTR(-EINVAL);
 
+	if (attach->sgt) {
+		/*
+		 * Two mappings with different directions for the same
+		 * attachment are not allowed.
+		 */
+		if (attach->dir != direction &&
+		    attach->dir != DMA_BIDIRECTIONAL)
+			return ERR_PTR(-EBUSY);
+
+		return attach->sgt;
+	}
+
 	sg_table = attach->dmabuf->ops->map_dma_buf(attach, direction);
 	if (!sg_table)
 		sg_table = ERR_PTR(-ENOMEM);
+
+	if (!IS_ERR(sg_table) && attach->dmabuf->ops->cache_sgt_mapping) {
+		attach->sgt = sg_table;
+		attach->dir = direction;
+	}
 
 	return sg_table;
 }
@@ -875,8 +911,10 @@ void dma_buf_unmap_attachment(struct dma_buf_attachment *attach,
 	if (WARN_ON(!attach || !attach->dmabuf || !sg_table))
 		return;
 
-	attach->dmabuf->ops->unmap_dma_buf(attach, sg_table,
-						direction);
+	if (attach->sgt == sg_table)
+		return;
+
+	attach->dmabuf->ops->unmap_dma_buf(attach, sg_table, direction);
 }
 EXPORT_SYMBOL_GPL(dma_buf_unmap_attachment);
 
@@ -903,25 +941,13 @@ EXPORT_SYMBOL_GPL(dma_buf_unmap_attachment);
  *      void \*dma_buf_kmap(struct dma_buf \*, unsigned long);
  *      void dma_buf_kunmap(struct dma_buf \*, unsigned long, void \*);
  *
- *   There are also atomic variants of these interfaces. Like for kmap they
- *   facilitate non-blocking fast-paths. Neither the importer nor the exporter
- *   (in the callback) is allowed to block when using these.
- *
- *   Interfaces::
- *      void \*dma_buf_kmap_atomic(struct dma_buf \*, unsigned long);
- *      void dma_buf_kunmap_atomic(struct dma_buf \*, unsigned long, void \*);
- *
- *   For importers all the restrictions of using kmap apply, like the limited
- *   supply of kmap_atomic slots. Hence an importer shall only hold onto at
- *   max 2 atomic dma_buf kmaps at the same time (in any given process context).
+ *   Implementing the functions is optional for exporters and for importers all
+ *   the restrictions of using kmap apply.
  *
  *   dma_buf kmap calls outside of the range specified in begin_cpu_access are
  *   undefined. If the range is not PAGE_SIZE aligned, kmap needs to succeed on
  *   the partial chunks at the beginning and end but may return stale or bogus
  *   data outside of the range (in these partial chunks).
- *
- *   Note that these calls need to always succeed. The exporter needs to
- *   complete any preparations that might fail in begin_cpu_access.
  *
  *   For some cases the overhead of kmap can be too high, a vmap interface
  *   is introduced. This interface should be used very carefully, as vmalloc
@@ -1070,6 +1096,7 @@ static int dma_buf_begin_cpu_access_umapped(struct dma_buf *dmabuf,
 
 	return ret;
 }
+
 int dma_buf_begin_cpu_access_partial(struct dma_buf *dmabuf,
 				     enum dma_data_direction direction,
 				     unsigned int offset, unsigned int len)
@@ -1092,7 +1119,7 @@ int dma_buf_begin_cpu_access_partial(struct dma_buf *dmabuf,
 
 	return ret;
 }
-EXPORT_SYMBOL(dma_buf_begin_cpu_access_partial);
+EXPORT_SYMBOL_GPL(dma_buf_begin_cpu_access_partial);
 
 /**
  * dma_buf_end_cpu_access - Must be called after accessing a dma_buf from the
@@ -1120,7 +1147,7 @@ int dma_buf_end_cpu_access(struct dma_buf *dmabuf,
 }
 EXPORT_SYMBOL_GPL(dma_buf_end_cpu_access);
 
-int dma_buf_end_cpu_access_umapped(struct dma_buf *dmabuf,
+static int dma_buf_end_cpu_access_umapped(struct dma_buf *dmabuf,
 			   enum dma_data_direction direction)
 {
 	int ret = 0;
@@ -1147,42 +1174,7 @@ int dma_buf_end_cpu_access_partial(struct dma_buf *dmabuf,
 
 	return ret;
 }
-EXPORT_SYMBOL(dma_buf_end_cpu_access_partial);
-
-/**
- * dma_buf_kmap_atomic - Map a page of the buffer object into kernel address
- * space. The same restrictions as for kmap_atomic and friends apply.
- * @dmabuf:	[in]	buffer to map page from.
- * @page_num:	[in]	page in PAGE_SIZE units to map.
- *
- * This call must always succeed, any necessary preparations that might fail
- * need to be done in begin_cpu_access.
- */
-void *dma_buf_kmap_atomic(struct dma_buf *dmabuf, unsigned long page_num)
-{
-	WARN_ON(!dmabuf);
-
-	return dmabuf->ops->map_atomic(dmabuf, page_num);
-}
-EXPORT_SYMBOL_GPL(dma_buf_kmap_atomic);
-
-/**
- * dma_buf_kunmap_atomic - Unmap a page obtained by dma_buf_kmap_atomic.
- * @dmabuf:	[in]	buffer to unmap page from.
- * @page_num:	[in]	page in PAGE_SIZE units to unmap.
- * @vaddr:	[in]	kernel space pointer obtained from dma_buf_kmap_atomic.
- *
- * This call must always succeed.
- */
-void dma_buf_kunmap_atomic(struct dma_buf *dmabuf, unsigned long page_num,
-			   void *vaddr)
-{
-	WARN_ON(!dmabuf);
-
-	if (dmabuf->ops->unmap_atomic)
-		dmabuf->ops->unmap_atomic(dmabuf, page_num, vaddr);
-}
-EXPORT_SYMBOL_GPL(dma_buf_kunmap_atomic);
+EXPORT_SYMBOL_GPL(dma_buf_end_cpu_access_partial);
 
 /**
  * dma_buf_kmap - Map a page of the buffer object into kernel address space. The
@@ -1197,6 +1189,8 @@ void *dma_buf_kmap(struct dma_buf *dmabuf, unsigned long page_num)
 {
 	WARN_ON(!dmabuf);
 
+	if (!dmabuf->ops->map)
+		return NULL;
 	return dmabuf->ops->map(dmabuf, page_num);
 }
 EXPORT_SYMBOL_GPL(dma_buf_kmap);
@@ -1241,6 +1235,10 @@ int dma_buf_mmap(struct dma_buf *dmabuf, struct vm_area_struct *vma,
 	int ret;
 
 	if (WARN_ON(!dmabuf || !vma))
+		return -EINVAL;
+
+	/* check if buffer supports mmap */
+	if (!dmabuf->ops->mmap)
 		return -EINVAL;
 
 	/* check for offset overflow */
@@ -1347,7 +1345,7 @@ int dma_buf_get_flags(struct dma_buf *dmabuf, unsigned long *flags)
 {
 	int ret = 0;
 
-	if (WARN_ON(!dmabuf))
+	if (WARN_ON(!dmabuf) || !flags)
 		return -EINVAL;
 
 	if (dmabuf->ops->get_flags)
@@ -1355,7 +1353,19 @@ int dma_buf_get_flags(struct dma_buf *dmabuf, unsigned long *flags)
 
 	return ret;
 }
-EXPORT_SYMBOL(dma_buf_get_flags);
+EXPORT_SYMBOL_GPL(dma_buf_get_flags);
+
+int dma_buf_get_uuid(struct dma_buf *dmabuf, uuid_t *uuid)
+{
+	if (WARN_ON(!dmabuf) || !uuid)
+		return -EINVAL;
+
+	if (!dmabuf->ops->get_uuid)
+		return -ENODEV;
+
+	return dmabuf->ops->get_uuid(dmabuf, uuid);
+}
+EXPORT_SYMBOL_GPL(dma_buf_get_uuid);
 
 #ifdef CONFIG_DEBUG_FS
 static int dma_buf_debug_show(struct seq_file *s, void *unused)
@@ -1449,17 +1459,7 @@ static int dma_buf_debug_show(struct seq_file *s, void *unused)
 	return 0;
 }
 
-static int dma_buf_debug_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, dma_buf_debug_show, NULL);
-}
-
-static const struct file_operations dma_buf_debug_fops = {
-	.open           = dma_buf_debug_open,
-	.read           = seq_read,
-	.llseek         = seq_lseek,
-	.release        = single_release,
-};
+DEFINE_SHOW_ATTRIBUTE(dma_buf_debug);
 
 static int get_dma_info(const void *data, struct file *file, unsigned int n)
 {
@@ -1635,8 +1635,7 @@ static int dma_buf_init_debugfs(void)
 
 static void dma_buf_uninit_debugfs(void)
 {
-	if (dma_buf_debugfs_dir)
-		debugfs_remove_recursive(dma_buf_debugfs_dir);
+	debugfs_remove_recursive(dma_buf_debugfs_dir);
 }
 #else
 static inline int dma_buf_init_debugfs(void)
@@ -1650,6 +1649,12 @@ static inline void dma_buf_uninit_debugfs(void)
 
 static int __init dma_buf_init(void)
 {
+	int ret;
+
+	ret = dma_buf_init_sysfs_statistics();
+	if (ret)
+		return ret;
+
 	dma_buf_mnt = kern_mount(&dma_buf_fs_type);
 	if (IS_ERR(dma_buf_mnt))
 		return PTR_ERR(dma_buf_mnt);
@@ -1665,5 +1670,6 @@ static void __exit dma_buf_deinit(void)
 {
 	dma_buf_uninit_debugfs();
 	kern_unmount(dma_buf_mnt);
+	dma_buf_uninit_sysfs_statistics();
 }
 __exitcall(dma_buf_deinit);

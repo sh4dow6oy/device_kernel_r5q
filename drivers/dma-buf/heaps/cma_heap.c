@@ -12,16 +12,16 @@
 #include <linux/cma.h>
 #include <linux/dma-buf.h>
 #include <linux/dma-heap.h>
-#include <linux/dma-map-ops.h>
+#include <linux/dma-contiguous.h>
 #include <linux/err.h>
 #include <linux/highmem.h>
 #include <linux/io.h>
 #include <linux/mm.h>
 #include <linux/module.h>
 #include <linux/scatterlist.h>
+#include <linux/sched/signal.h>
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
-#include <linux/sched/signal.h>
 
 
 struct cma_heap {
@@ -49,7 +49,6 @@ struct dma_heap_attachment {
 };
 
 static int cma_heap_attach(struct dma_buf *dmabuf,
-			   struct device *dev,
 			   struct dma_buf_attachment *attachment)
 {
 	struct cma_heap_buffer *buffer = dmabuf->priv;
@@ -101,10 +100,9 @@ static struct sg_table *cma_heap_map_dma_buf(struct dma_buf_attachment *attachme
 {
 	struct dma_heap_attachment *a = attachment->priv;
 	struct sg_table *table = &a->table;
-	int attrs = attachment->dma_map_attrs;
 	int ret;
 
-	ret = dma_map_sgtable(attachment->dev, table, direction, attrs);
+	ret = dma_map_sgtable(attachment->dev, table, direction, 0);
 	if (ret)
 		return ERR_PTR(-ENOMEM);
 	a->mapped = true;
@@ -116,10 +114,9 @@ static void cma_heap_unmap_dma_buf(struct dma_buf_attachment *attachment,
 				   enum dma_data_direction direction)
 {
 	struct dma_heap_attachment *a = attachment->priv;
-	int attrs = attachment->dma_map_attrs;
 
 	a->mapped = false;
-	dma_unmap_sgtable(attachment->dev, table, direction, attrs);
+	dma_unmap_sgtable(attachment->dev, table, direction, 0);
 }
 
 static int cma_heap_dma_buf_begin_cpu_access(struct dma_buf *dmabuf,
@@ -250,7 +247,6 @@ static void cma_heap_dma_buf_release(struct dma_buf *dmabuf)
 	if (buffer->vmap_cnt > 0) {
 		WARN(1, "%s: buffer still mapped in the kernel\n", __func__);
 		vunmap(buffer->vaddr);
-		buffer->vaddr = NULL;
 	}
 
 	/* free page list */
@@ -351,6 +347,7 @@ static struct dma_buf *cma_heap_allocate(struct dma_heap *heap,
 		ret = PTR_ERR(dmabuf);
 		goto free_pages;
 	}
+
 	return dmabuf;
 
 free_pages:

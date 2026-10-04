@@ -87,14 +87,11 @@ static struct sctp_transport *sctp_transport_init(struct net *net,
 	INIT_LIST_HEAD(&peer->send_ready);
 	INIT_LIST_HEAD(&peer->transports);
 
-	setup_timer(&peer->T3_rtx_timer, sctp_generate_t3_rtx_event,
-		    (unsigned long)peer);
-	setup_timer(&peer->hb_timer, sctp_generate_heartbeat_event,
-		    (unsigned long)peer);
-	setup_timer(&peer->reconf_timer, sctp_generate_reconf_event,
-		    (unsigned long)peer);
-	setup_timer(&peer->proto_unreach_timer,
-		    sctp_generate_proto_unreach_event, (unsigned long)peer);
+	timer_setup(&peer->T3_rtx_timer, sctp_generate_t3_rtx_event, 0);
+	timer_setup(&peer->hb_timer, sctp_generate_heartbeat_event, 0);
+	timer_setup(&peer->reconf_timer, sctp_generate_reconf_event, 0);
+	timer_setup(&peer->proto_unreach_timer,
+		    sctp_generate_proto_unreach_event, 0);
 
 	/* Initialize the 64-bit random nonce sent with heartbeat. */
 	get_random_bytes(&peer->hb_nonce, sizeof(peer->hb_nonce));
@@ -134,6 +131,8 @@ fail:
  */
 void sctp_transport_free(struct sctp_transport *transport)
 {
+	transport->dead = 1;
+
 	/* Try to delete the heartbeat timer.  */
 	if (del_timer(&transport->hb_timer))
 		sctp_transport_put(transport);
@@ -210,7 +209,9 @@ void sctp_transport_reset_hb_timer(struct sctp_transport *transport)
 
 	/* When a data chunk is sent, reset the heartbeat interval.  */
 	expires = jiffies + sctp_transport_timeout(transport);
-	if (!mod_timer(&transport->hb_timer,
+	if ((time_before(transport->hb_timer.expires, expires) ||
+	     !timer_pending(&transport->hb_timer)) &&
+	    !mod_timer(&transport->hb_timer,
 		       expires + prandom_u32_max(transport->rto)))
 		sctp_transport_hold(transport);
 }
@@ -244,9 +245,18 @@ void sctp_transport_pmtu(struct sctp_transport *transport, struct sock *sk)
 						&transport->fl, sk);
 	}
 
-	if (transport->dst) {
-		transport->pathmtu = SCTP_TRUNC4(dst_mtu(transport->dst));
-	} else
+	if (transport->param_flags & SPP_PMTUD_DISABLE) {
+		struct sctp_association *asoc = transport->asoc;
+
+		if (!transport->pathmtu && asoc && asoc->pathmtu)
+			transport->pathmtu = asoc->pathmtu;
+		if (transport->pathmtu)
+			return;
+	}
+
+	if (transport->dst)
+		transport->pathmtu = sctp_dst_mtu(transport->dst);
+	else
 		transport->pathmtu = SCTP_DEFAULT_MAXSEGMENT;
 }
 
@@ -283,7 +293,7 @@ bool sctp_transport_update_pmtu(struct sctp_transport *t, u32 pmtu)
 
 	if (dst) {
 		/* Re-fetch, as under layers may have a higher minimum size */
-		pmtu = SCTP_TRUNC4(dst_mtu(dst));
+		pmtu = sctp_dst_mtu(dst);
 		change = t->pathmtu != pmtu;
 	}
 	t->pathmtu = pmtu;
@@ -300,6 +310,7 @@ void sctp_transport_route(struct sctp_transport *transport,
 	struct sctp_association *asoc = transport->asoc;
 	struct sctp_af *af = transport->af_specific;
 
+	sctp_transport_dst_release(transport);
 	af->get_dst(transport, saddr, &transport->fl, sctp_opt2sk(opt));
 
 	if (saddr)
@@ -307,21 +318,14 @@ void sctp_transport_route(struct sctp_transport *transport,
 	else
 		af->get_saddr(opt, transport, &transport->fl);
 
-	if ((transport->param_flags & SPP_PMTUD_DISABLE) && transport->pathmtu) {
-		return;
-	}
-	if (transport->dst) {
-		transport->pathmtu = SCTP_TRUNC4(dst_mtu(transport->dst));
+	sctp_transport_pmtu(transport, sctp_opt2sk(opt));
 
-		/* Initialize sk->sk_rcv_saddr, if the transport is the
-		 * association's active path for getsockname().
-		 */
-		if (asoc && (!asoc->peer.primary_path ||
-				(transport == asoc->peer.active_path)))
-			opt->pf->to_sk_saddr(&transport->saddr,
-					     asoc->base.sk);
-	} else
-		transport->pathmtu = SCTP_DEFAULT_MAXSEGMENT;
+	/* Initialize sk->sk_rcv_saddr, if the transport is the
+	 * association's active path for getsockname().
+	 */
+	if (transport->dst && asoc &&
+	    (!asoc->peer.primary_path || transport == asoc->peer.active_path))
+		opt->pf->to_sk_saddr(&transport->saddr, asoc->base.sk);
 }
 
 /* Hold a reference to a transport.  */
@@ -348,6 +352,7 @@ void sctp_transport_update_rto(struct sctp_transport *tp, __u32 rtt)
 
 	if (tp->rttvar || tp->srtt) {
 		struct net *net = sock_net(tp->asoc->base.sk);
+		unsigned int rto_beta, rto_alpha;
 		/* 6.3.1 C3) When a new RTT measurement R' is made, set
 		 * RTTVAR <- (1 - RTO.Beta) * RTTVAR + RTO.Beta * |SRTT - R'|
 		 * SRTT <- (1 - RTO.Alpha) * SRTT + RTO.Alpha * R'
@@ -359,10 +364,14 @@ void sctp_transport_update_rto(struct sctp_transport *tp, __u32 rtt)
 		 * For example, assuming the default value of RTO.Alpha of
 		 * 1/8, rto_alpha would be expressed as 3.
 		 */
-		tp->rttvar = tp->rttvar - (tp->rttvar >> net->sctp.rto_beta)
-			+ (((__u32)abs((__s64)tp->srtt - (__s64)rtt)) >> net->sctp.rto_beta);
-		tp->srtt = tp->srtt - (tp->srtt >> net->sctp.rto_alpha)
-			+ (rtt >> net->sctp.rto_alpha);
+		rto_beta = READ_ONCE(net->sctp.rto_beta);
+		if (rto_beta < 32)
+			tp->rttvar = tp->rttvar - (tp->rttvar >> rto_beta)
+				+ (((__u32)abs((__s64)tp->srtt - (__s64)rtt)) >> rto_beta);
+		rto_alpha = READ_ONCE(net->sctp.rto_alpha);
+		if (rto_alpha < 32)
+			tp->srtt = tp->srtt - (tp->srtt >> rto_alpha)
+				+ (rtt >> rto_alpha);
 	} else {
 		/* 6.3.1 C2) When the first RTT measurement R is made, set
 		 * SRTT <- R, RTTVAR <- R/2.

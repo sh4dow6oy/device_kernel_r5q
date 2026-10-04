@@ -1,4 +1,5 @@
-/* Copyright (C) 2007-2017  B.A.T.M.A.N. contributors:
+// SPDX-License-Identifier: GPL-2.0
+/* Copyright (C) 2007-2018  B.A.T.M.A.N. contributors:
  *
  * Marek Lindner, Simon Wunderlich
  *
@@ -52,6 +53,7 @@
 #include <linux/workqueue.h>
 #include <net/genetlink.h>
 #include <net/netlink.h>
+#include <uapi/linux/batadv_packet.h>
 #include <uapi/linux/batman_adv.h>
 
 #include "bat_algo.h"
@@ -63,7 +65,6 @@
 #include "netlink.h"
 #include "network-coding.h"
 #include "originator.h"
-#include "packet.h"
 #include "routing.h"
 #include "send.h"
 #include "translation-table.h"
@@ -73,21 +74,28 @@ static void batadv_iv_send_outstanding_bat_ogm_packet(struct work_struct *work);
 
 /**
  * enum batadv_dup_status - duplicate status
- * @BATADV_NO_DUP: the packet is no duplicate
- * @BATADV_ORIG_DUP: OGM is a duplicate in the originator (but not for the
- *  neighbor)
- * @BATADV_NEIGH_DUP: OGM is a duplicate for the neighbor
- * @BATADV_PROTECTED: originator is currently protected (after reboot)
  */
 enum batadv_dup_status {
+	/** @BATADV_NO_DUP: the packet is no duplicate */
 	BATADV_NO_DUP = 0,
+
+	/**
+	 * @BATADV_ORIG_DUP: OGM is a duplicate in the originator (but not for
+	 *  the neighbor)
+	 */
 	BATADV_ORIG_DUP,
+
+	/** @BATADV_NEIGH_DUP: OGM is a duplicate for the neighbor */
 	BATADV_NEIGH_DUP,
+
+	/**
+	 * @BATADV_PROTECTED: originator is currently protected (after reboot)
+	 */
 	BATADV_PROTECTED,
 };
 
 /**
- * batadv_ring_buffer_set - update the ring buffer with the given value
+ * batadv_ring_buffer_set() - update the ring buffer with the given value
  * @lq_recv: pointer to the ring buffer
  * @lq_index: index to store the value at
  * @value: value to store in the ring buffer
@@ -99,7 +107,7 @@ static void batadv_ring_buffer_set(u8 lq_recv[], u8 *lq_index, u8 value)
 }
 
 /**
- * batadv_ring_buffer_avg - compute the average of all non-zero values stored
+ * batadv_ring_buffer_avg() - compute the average of all non-zero values stored
  * in the given ring buffer
  * @lq_recv: pointer to the ring buffer
  *
@@ -131,7 +139,7 @@ static u8 batadv_ring_buffer_avg(const u8 lq_recv[])
 }
 
 /**
- * batadv_iv_ogm_orig_free - free the private resources allocated for this
+ * batadv_iv_ogm_orig_free() - free the private resources allocated for this
  *  orig_node
  * @orig_node: the orig_node for which the resources have to be free'd
  */
@@ -142,8 +150,8 @@ static void batadv_iv_ogm_orig_free(struct batadv_orig_node *orig_node)
 }
 
 /**
- * batadv_iv_ogm_orig_add_if - change the private structures of the orig_node to
- *  include the new hard-interface
+ * batadv_iv_ogm_orig_add_if() - change the private structures of the orig_node
+ *  to include the new hard-interface
  * @orig_node: the orig_node that has to be changed
  * @max_if_num: the current amount of interfaces
  *
@@ -187,7 +195,7 @@ unlock:
 }
 
 /**
- * batadv_iv_ogm_drop_bcast_own_entry - drop section of bcast_own
+ * batadv_iv_ogm_drop_bcast_own_entry() - drop section of bcast_own
  * @orig_node: the orig_node that has to be changed
  * @max_if_num: the current amount of interfaces
  * @del_if_num: the index of the interface being removed
@@ -226,7 +234,7 @@ batadv_iv_ogm_drop_bcast_own_entry(struct batadv_orig_node *orig_node,
 }
 
 /**
- * batadv_iv_ogm_drop_bcast_own_sum_entry - drop section of bcast_own_sum
+ * batadv_iv_ogm_drop_bcast_own_sum_entry() - drop section of bcast_own_sum
  * @orig_node: the orig_node that has to be changed
  * @max_if_num: the current amount of interfaces
  * @del_if_num: the index of the interface being removed
@@ -262,8 +270,8 @@ batadv_iv_ogm_drop_bcast_own_sum_entry(struct batadv_orig_node *orig_node,
 }
 
 /**
- * batadv_iv_ogm_orig_del_if - change the private structures of the orig_node to
- *  exclude the removed interface
+ * batadv_iv_ogm_orig_del_if() - change the private structures of the orig_node
+ *  to exclude the removed interface
  * @orig_node: the orig_node that has to be changed
  * @max_if_num: the current amount of interfaces
  * @del_if_num: the index of the interface being removed
@@ -294,7 +302,8 @@ static int batadv_iv_ogm_orig_del_if(struct batadv_orig_node *orig_node,
 }
 
 /**
- * batadv_iv_ogm_orig_get - retrieve or create (if does not exist) an originator
+ * batadv_iv_ogm_orig_get() - retrieve or create (if does not exist) an
+ *  originator
  * @bat_priv: the bat priv with all the soft interface information
  * @addr: mac address of the originator
  *
@@ -407,6 +416,8 @@ static void batadv_iv_ogm_iface_disable(struct batadv_hard_iface *hard_iface)
 	hard_iface->bat_iv.ogm_buff = NULL;
 
 	mutex_unlock(&hard_iface->bat_iv.ogm_buff_mutex);
+
+	cancel_delayed_work_sync(&hard_iface->bat_iv.reschedule_work);
 }
 
 static void batadv_iv_ogm_iface_update_mac(struct batadv_hard_iface *hard_iface)
@@ -480,7 +491,7 @@ static u8 batadv_hop_penalty(u8 tq, const struct batadv_priv *bat_priv)
 }
 
 /**
- * batadv_iv_ogm_aggr_packet - checks if there is another OGM attached
+ * batadv_iv_ogm_aggr_packet() - checks if there is another OGM attached
  * @buff_pos: current position in the skb
  * @packet_len: total length of the skb
  * @ogm_packet: potential OGM in buffer
@@ -492,17 +503,25 @@ batadv_iv_ogm_aggr_packet(int buff_pos, int packet_len,
 			  const struct batadv_ogm_packet *ogm_packet)
 {
 	int next_buff_pos = 0;
+	u16 tvlv_len;
 
 	/* check if there is enough space for the header */
 	next_buff_pos += buff_pos + sizeof(*ogm_packet);
 	if (next_buff_pos > packet_len)
 		return false;
 
-	/* check if there is enough space for the optional TVLV */
-	next_buff_pos += ntohs(ogm_packet->tvlv_len);
+	tvlv_len = ntohs(ogm_packet->tvlv_len);
 
-	return (next_buff_pos <= packet_len) &&
-	       (next_buff_pos <= BATADV_MAX_AGGREGATION_BYTES);
+	/* the fields of an aggregated OGM are accessed assuming (at least)
+	 * 2-byte alignment, so a following OGM must start at an even offset.
+	 */
+	if (tvlv_len & 1)
+		return false;
+
+	/* check if there is enough space for the optional TVLV */
+	next_buff_pos += tvlv_len;
+
+	return next_buff_pos <= packet_len;
 }
 
 /* send a batman ogm to a given interface */
@@ -512,7 +531,7 @@ static void batadv_iv_ogm_send_to_if(struct batadv_forw_packet *forw_packet,
 	struct batadv_priv *bat_priv = netdev_priv(hard_iface->soft_iface);
 	const char *fwd_str;
 	u8 packet_num;
-	s16 buff_pos;
+	int buff_pos;
 	struct batadv_ogm_packet *batadv_ogm_packet;
 	struct sk_buff *skb;
 	u8 *packet_pos;
@@ -598,7 +617,7 @@ static void batadv_iv_ogm_emit(struct batadv_forw_packet *forw_packet)
 }
 
 /**
- * batadv_iv_ogm_can_aggregate - find out if an OGM can be aggregated on an
+ * batadv_iv_ogm_can_aggregate() - find out if an OGM can be aggregated on an
  *  existing forward packet
  * @new_bat_ogm_packet: OGM packet to be aggregated
  * @bat_priv: the bat priv with all the soft interface information
@@ -640,6 +659,9 @@ batadv_iv_ogm_can_aggregate(const struct batadv_ogm_packet *new_bat_ogm_packet,
 	 */
 	if (!time_before(send_time, forw_packet->send_time) ||
 	    !time_after_eq(aggregation_end_time, forw_packet->send_time))
+		return false;
+
+	if (skb_tailroom(forw_packet->skb) < packet_len)
 		return false;
 
 	if (aggregated_bytes > BATADV_MAX_AGGREGATION_BYTES)
@@ -701,7 +723,7 @@ out:
 }
 
 /**
- * batadv_iv_ogm_aggregate_new - create a new aggregated packet and add this
+ * batadv_iv_ogm_aggregate_new() - create a new aggregated packet and add this
  *  packet to it.
  * @packet_buff: pointer to the OGM
  * @packet_len: (total) length of the OGM
@@ -710,8 +732,10 @@ out:
  * @if_incoming: interface where the packet was received
  * @if_outgoing: interface for which the retransmission should be considered
  * @own_packet: true if it is a self-generated ogm
+ *
+ * Return: whether forward packet was scheduled
  */
-static void batadv_iv_ogm_aggregate_new(const unsigned char *packet_buff,
+static bool batadv_iv_ogm_aggregate_new(const unsigned char *packet_buff,
 					int packet_len, unsigned long send_time,
 					bool direct_link,
 					struct batadv_hard_iface *if_incoming,
@@ -735,13 +759,13 @@ static void batadv_iv_ogm_aggregate_new(const unsigned char *packet_buff,
 
 	skb = netdev_alloc_skb_ip_align(NULL, skb_size);
 	if (!skb)
-		return;
+		return false;
 
 	forw_packet_aggr = batadv_forw_packet_alloc(if_incoming, if_outgoing,
 						    queue_left, bat_priv, skb);
 	if (!forw_packet_aggr) {
 		kfree_skb(skb);
-		return;
+		return false;
 	}
 
 	forw_packet_aggr->skb->priority = TC_PRIO_CONTROL;
@@ -763,6 +787,8 @@ static void batadv_iv_ogm_aggregate_new(const unsigned char *packet_buff,
 			  batadv_iv_send_outstanding_bat_ogm_packet);
 
 	batadv_forw_packet_ogmv1_queue(bat_priv, forw_packet_aggr, send_time);
+
+	return true;
 }
 
 /* aggregate a new packet into the existing ogm packet */
@@ -784,7 +810,7 @@ static void batadv_iv_ogm_aggregate(struct batadv_forw_packet *forw_packet_aggr,
 }
 
 /**
- * batadv_iv_ogm_queue_add - queue up an OGM for transmission
+ * batadv_iv_ogm_queue_add() - queue up an OGM for transmission
  * @bat_priv: the bat priv with all the soft interface information
  * @packet_buff: pointer to the OGM
  * @packet_len: (total) length of the OGM
@@ -792,8 +818,10 @@ static void batadv_iv_ogm_aggregate(struct batadv_forw_packet *forw_packet_aggr,
  * @if_outgoing: interface for which the retransmission should be considered
  * @own_packet: true if it is a self-generated ogm
  * @send_time: timestamp (jiffies) when the packet is to be sent
+ *
+ * Return: whether forward packet was scheduled
  */
-static void batadv_iv_ogm_queue_add(struct batadv_priv *bat_priv,
+static bool batadv_iv_ogm_queue_add(struct batadv_priv *bat_priv,
 				    unsigned char *packet_buff,
 				    int packet_len,
 				    struct batadv_hard_iface *if_incoming,
@@ -845,14 +873,16 @@ static void batadv_iv_ogm_queue_add(struct batadv_priv *bat_priv,
 		if (!own_packet && atomic_read(&bat_priv->aggregated_ogms))
 			send_time += max_aggregation_jiffies;
 
-		batadv_iv_ogm_aggregate_new(packet_buff, packet_len,
-					    send_time, direct_link,
-					    if_incoming, if_outgoing,
-					    own_packet);
+		return batadv_iv_ogm_aggregate_new(packet_buff, packet_len,
+						   send_time, direct_link,
+						   if_incoming, if_outgoing,
+						   own_packet);
 	} else {
 		batadv_iv_ogm_aggregate(forw_packet_aggr, packet_buff,
 					packet_len, direct_link);
 		spin_unlock_bh(&bat_priv->forw_bat_list_lock);
+
+		return true;
 	}
 }
 
@@ -910,8 +940,8 @@ static void batadv_iv_ogm_forward(struct batadv_orig_node *orig_node,
 }
 
 /**
- * batadv_iv_ogm_slide_own_bcast_window - bitshift own OGM broadcast windows for
- * the given interface
+ * batadv_iv_ogm_slide_own_bcast_window() - bitshift own OGM broadcast windows
+ *  for the given interface
  * @hard_iface: the interface for which the windows have to be shifted
  */
 static void
@@ -960,6 +990,9 @@ static void batadv_iv_ogm_schedule_buff(struct batadv_hard_iface *hard_iface)
 	u32 seqno;
 	u16 tvlv_len = 0;
 	unsigned long send_time;
+	bool reschedule = false;
+	bool scheduled;
+	int ret;
 
 	lockdep_assert_held(&hard_iface->bat_iv.ogm_buff_mutex);
 
@@ -983,9 +1016,15 @@ static void batadv_iv_ogm_schedule_buff(struct batadv_hard_iface *hard_iface)
 		 * appended as it may alter the tt tvlv container
 		 */
 		batadv_tt_local_commit_changes(bat_priv);
-		tvlv_len = batadv_tvlv_container_ogm_append(bat_priv, ogm_buff,
-							    ogm_buff_len,
-							    BATADV_OGM_HLEN);
+		ret = batadv_tvlv_container_ogm_append(bat_priv, ogm_buff,
+						       ogm_buff_len,
+						       BATADV_OGM_HLEN);
+		if (ret < 0) {
+			reschedule = true;
+			goto out;
+		}
+
+		tvlv_len = ret;
 	}
 
 	batadv_ogm_packet = (struct batadv_ogm_packet *)(*ogm_buff);
@@ -1004,8 +1043,11 @@ static void batadv_iv_ogm_schedule_buff(struct batadv_hard_iface *hard_iface)
 		/* OGMs from secondary interfaces are only scheduled on their
 		 * respective interfaces.
 		 */
-		batadv_iv_ogm_queue_add(bat_priv, *ogm_buff, *ogm_buff_len,
-					hard_iface, hard_iface, 1, send_time);
+		scheduled = batadv_iv_ogm_queue_add(bat_priv, *ogm_buff, *ogm_buff_len,
+						    hard_iface, hard_iface, 1, send_time);
+		if (!scheduled)
+			reschedule = true;
+
 		goto out;
 	}
 
@@ -1020,15 +1062,28 @@ static void batadv_iv_ogm_schedule_buff(struct batadv_hard_iface *hard_iface)
 		if (!kref_get_unless_zero(&tmp_hard_iface->refcount))
 			continue;
 
-		batadv_iv_ogm_queue_add(bat_priv, *ogm_buff,
-					*ogm_buff_len, hard_iface,
-					tmp_hard_iface, 1, send_time);
-
+		scheduled = batadv_iv_ogm_queue_add(bat_priv, *ogm_buff,
+						    *ogm_buff_len, hard_iface,
+						    tmp_hard_iface, 1, send_time);
 		batadv_hardif_put(tmp_hard_iface);
+
+		if (!scheduled && tmp_hard_iface == hard_iface)
+			reschedule = true;
 	}
 	rcu_read_unlock();
 
 out:
+	if (reschedule) {
+		/* there was a failure scheduling the own forward packet.
+		 * as result, the batadv_iv_send_outstanding_bat_ogm_packet()
+		 * work item is no longer scheduled. it is therefore necessary
+		 * to reschedule it manually
+		 */
+		queue_delayed_work(batadv_event_workqueue,
+				   &hard_iface->bat_iv.reschedule_work,
+				   msecs_to_jiffies(atomic_read(&bat_priv->orig_interval)));
+	}
+
 	if (primary_if)
 		batadv_hardif_put(primary_if);
 }
@@ -1044,8 +1099,19 @@ static void batadv_iv_ogm_schedule(struct batadv_hard_iface *hard_iface)
 	mutex_unlock(&hard_iface->bat_iv.ogm_buff_mutex);
 }
 
+static void batadv_iv_ogm_reschedule(struct work_struct *work)
+{
+	struct delayed_work *delayed_work = to_delayed_work(work);
+	struct batadv_hard_iface *hard_iface;
+
+	hard_iface = container_of(delayed_work,
+				  struct batadv_hard_iface,
+				  bat_iv.reschedule_work);
+	batadv_iv_ogm_schedule(hard_iface);
+}
+
 /**
- * batadv_iv_ogm_orig_update - use OGM to update corresponding data in an
+ * batadv_iv_ogm_orig_update() - use OGM to update corresponding data in an
  *  originator
  * @bat_priv: the bat priv with all the soft interface information
  * @orig_node: the orig node who originally emitted the ogm packet
@@ -1210,7 +1276,7 @@ out:
 }
 
 /**
- * batadv_iv_ogm_calc_tq - calculate tq for current received ogm packet
+ * batadv_iv_ogm_calc_tq() - calculate tq for current received ogm packet
  * @orig_node: the orig node who originally emitted the ogm packet
  * @orig_neigh_node: the orig node struct of the neighbor who sent the packet
  * @batadv_ogm_packet: the ogm packet
@@ -1322,7 +1388,7 @@ static bool batadv_iv_ogm_calc_tq(struct batadv_orig_node *orig_node,
 	 * drops as they can't send and receive at the same time.
 	 */
 	tq_iface_penalty = BATADV_TQ_MAX_VALUE;
-	if (if_outgoing && (if_incoming == if_outgoing) &&
+	if (if_outgoing && if_incoming == if_outgoing &&
 	    batadv_is_wifi_hardif(if_outgoing))
 		tq_iface_penalty = batadv_hop_penalty(BATADV_TQ_MAX_VALUE,
 						      bat_priv);
@@ -1356,7 +1422,7 @@ out:
 }
 
 /**
- * batadv_iv_ogm_update_seqnos -  process a batman packet for all interfaces,
+ * batadv_iv_ogm_update_seqnos() -  process a batman packet for all interfaces,
  *  adjust the sequence number and find out whether it is a duplicate
  * @ethhdr: ethernet header of the packet
  * @batadv_ogm_packet: OGM packet to be considered
@@ -1427,7 +1493,7 @@ batadv_iv_ogm_update_seqnos(const struct ethhdr *ethhdr,
 				ret = BATADV_NEIGH_DUP;
 		} else {
 			set_mark = 0;
-			if (is_dup && (ret != BATADV_NEIGH_DUP))
+			if (is_dup && ret != BATADV_NEIGH_DUP)
 				ret = BATADV_ORIG_DUP;
 		}
 
@@ -1459,7 +1525,8 @@ out:
 }
 
 /**
- * batadv_iv_ogm_process_per_outif - process a batman iv OGM for an outgoing if
+ * batadv_iv_ogm_process_per_outif() - process a batman iv OGM for an outgoing
+ *  interface
  * @skb: the skb containing the OGM
  * @ogm_offset: offset from skb->data to start of ogm header
  * @orig_node: the (cached) orig node for the originator of this OGM
@@ -1573,7 +1640,7 @@ batadv_iv_ogm_process_per_outif(const struct sk_buff *skb, int ogm_offset,
 	/* drop packet if sender is not a direct neighbor and if we
 	 * don't route towards it
 	 */
-	if (!is_single_hop_neigh && (!orig_neigh_router)) {
+	if (!is_single_hop_neigh && !orig_neigh_router) {
 		batadv_dbg(BATADV_DBG_BATMAN, bat_priv,
 			   "Drop packet: OGM via unknown neighbor!\n");
 		goto out_neigh;
@@ -1593,7 +1660,7 @@ batadv_iv_ogm_process_per_outif(const struct sk_buff *skb, int ogm_offset,
 	sameseq = orig_ifinfo->last_real_seqno == ntohl(ogm_packet->seqno);
 	similar_ttl = (orig_ifinfo->last_ttl - 3) <= ogm_packet->ttl;
 
-	if (is_bidirect && ((dup_status == BATADV_NO_DUP) ||
+	if (is_bidirect && (dup_status == BATADV_NO_DUP ||
 			    (sameseq && similar_ttl))) {
 		batadv_iv_ogm_orig_update(bat_priv, orig_node,
 					  orig_ifinfo, ethhdr,
@@ -1611,8 +1678,8 @@ batadv_iv_ogm_process_per_outif(const struct sk_buff *skb, int ogm_offset,
 		/* OGMs from secondary interfaces should only scheduled once
 		 * per interface where it has been received, not multiple times
 		 */
-		if ((ogm_packet->ttl <= 2) &&
-		    (if_incoming != if_outgoing)) {
+		if (ogm_packet->ttl <= 2 &&
+		    if_incoming != if_outgoing) {
 			batadv_dbg(BATADV_DBG_BATMAN, bat_priv,
 				   "Drop packet: OGM from secondary interface and wrong outgoing interface\n");
 			goto out_neigh;
@@ -1648,7 +1715,7 @@ batadv_iv_ogm_process_per_outif(const struct sk_buff *skb, int ogm_offset,
 			      if_incoming, if_outgoing);
 
 out_neigh:
-	if ((orig_neigh_node) && (!is_single_hop_neigh))
+	if (orig_neigh_node && !is_single_hop_neigh)
 		batadv_orig_node_put(orig_neigh_node);
 out:
 	if (router_ifinfo)
@@ -1666,7 +1733,7 @@ out:
 }
 
 /**
- * batadv_iv_ogm_process - process an incoming batman iv OGM
+ * batadv_iv_ogm_process() - process an incoming batman iv OGM
  * @skb: the skb containing the OGM
  * @ogm_offset: offset to the OGM which should be processed (for aggregates)
  * @if_incoming: the interface where this packet was receved
@@ -1919,7 +1986,7 @@ free_skb:
 
 #ifdef CONFIG_BATMAN_ADV_DEBUGFS
 /**
- * batadv_iv_ogm_orig_print_neigh - print neighbors for the originator table
+ * batadv_iv_ogm_orig_print_neigh() - print neighbors for the originator table
  * @orig_node: the orig_node for which the neighbors are printed
  * @if_outgoing: outgoing interface for these entries
  * @seq: debugfs table seq_file struct
@@ -1948,7 +2015,7 @@ batadv_iv_ogm_orig_print_neigh(struct batadv_orig_node *orig_node,
 }
 
 /**
- * batadv_iv_ogm_orig_print - print the originator table
+ * batadv_iv_ogm_orig_print() - print the originator table
  * @bat_priv: the bat priv with all the soft interface information
  * @seq: debugfs table seq_file struct
  * @if_outgoing: the outgoing interface for which this should be printed
@@ -2018,7 +2085,7 @@ next:
 #endif
 
 /**
- * batadv_iv_ogm_neigh_get_tq_avg - Get the TQ average for a neighbour on a
+ * batadv_iv_ogm_neigh_get_tq_avg() - Get the TQ average for a neighbour on a
  *  given outgoing interface.
  * @neigh_node: Neighbour of interest
  * @if_outgoing: Outgoing interface of interest
@@ -2044,7 +2111,7 @@ batadv_iv_ogm_neigh_get_tq_avg(struct batadv_neigh_node *neigh_node,
 }
 
 /**
- * batadv_iv_ogm_orig_dump_subentry - Dump an originator subentry into a
+ * batadv_iv_ogm_orig_dump_subentry() - Dump an originator subentry into a
  *  message
  * @msg: Netlink message to dump into
  * @portid: Port making netlink request
@@ -2106,7 +2173,7 @@ batadv_iv_ogm_orig_dump_subentry(struct sk_buff *msg, u32 portid, u32 seq,
 }
 
 /**
- * batadv_iv_ogm_orig_dump_entry - Dump an originator entry into a message
+ * batadv_iv_ogm_orig_dump_entry() - Dump an originator entry into a message
  * @msg: Netlink message to dump into
  * @portid: Port making netlink request
  * @seq: Sequence number of netlink message
@@ -2168,7 +2235,7 @@ batadv_iv_ogm_orig_dump_entry(struct sk_buff *msg, u32 portid, u32 seq,
 }
 
 /**
- * batadv_iv_ogm_orig_dump_bucket - Dump an originator bucket into a
+ * batadv_iv_ogm_orig_dump_bucket() - Dump an originator bucket into a
  *  message
  * @msg: Netlink message to dump into
  * @portid: Port making netlink request
@@ -2211,7 +2278,7 @@ batadv_iv_ogm_orig_dump_bucket(struct sk_buff *msg, u32 portid, u32 seq,
 }
 
 /**
- * batadv_iv_ogm_orig_dump - Dump the originators into a message
+ * batadv_iv_ogm_orig_dump() - Dump the originators into a message
  * @msg: Netlink message to dump into
  * @cb: Control block containing additional options
  * @bat_priv: The bat priv with all the soft interface information
@@ -2248,7 +2315,7 @@ batadv_iv_ogm_orig_dump(struct sk_buff *msg, struct netlink_callback *cb,
 
 #ifdef CONFIG_BATMAN_ADV_DEBUGFS
 /**
- * batadv_iv_hardif_neigh_print - print a single hop neighbour node
+ * batadv_iv_hardif_neigh_print() - print a single hop neighbour node
  * @seq: neighbour table seq_file struct
  * @hardif_neigh: hardif neighbour information
  */
@@ -2267,7 +2334,7 @@ batadv_iv_hardif_neigh_print(struct seq_file *seq,
 }
 
 /**
- * batadv_iv_ogm_neigh_print - print the single hop neighbour list
+ * batadv_iv_ogm_neigh_print() - print the single hop neighbour list
  * @bat_priv: the bat priv with all the soft interface information
  * @seq: neighbour table seq_file struct
  */
@@ -2300,7 +2367,7 @@ static void batadv_iv_neigh_print(struct batadv_priv *bat_priv,
 #endif
 
 /**
- * batadv_iv_ogm_neigh_diff - calculate tq difference of two neighbors
+ * batadv_iv_ogm_neigh_diff() - calculate tq difference of two neighbors
  * @neigh1: the first neighbor object of the comparison
  * @if_outgoing1: outgoing interface for the first neighbor
  * @neigh2: the second neighbor object of the comparison
@@ -2345,7 +2412,7 @@ out:
 }
 
 /**
- * batadv_iv_ogm_neigh_dump_neigh - Dump a neighbour into a netlink message
+ * batadv_iv_ogm_neigh_dump_neigh() - Dump a neighbour into a netlink message
  * @msg: Netlink message to dump into
  * @portid: Port making netlink request
  * @seq: Sequence number of netlink message
@@ -2384,7 +2451,7 @@ batadv_iv_ogm_neigh_dump_neigh(struct sk_buff *msg, u32 portid, u32 seq,
 }
 
 /**
- * batadv_iv_ogm_neigh_dump_hardif - Dump the neighbours of a hard interface
+ * batadv_iv_ogm_neigh_dump_hardif() - Dump the neighbours of a hard interface
  *  into a message
  * @msg: Netlink message to dump into
  * @portid: Port making netlink request
@@ -2423,7 +2490,7 @@ batadv_iv_ogm_neigh_dump_hardif(struct sk_buff *msg, u32 portid, u32 seq,
 }
 
 /**
- * batadv_iv_ogm_neigh_dump - Dump the neighbours into a message
+ * batadv_iv_ogm_neigh_dump() - Dump the neighbours into a message
  * @msg: Netlink message to dump into
  * @cb: Control block containing additional options
  * @bat_priv: The bat priv with all the soft interface information
@@ -2475,7 +2542,7 @@ batadv_iv_ogm_neigh_dump(struct sk_buff *msg, struct netlink_callback *cb,
 }
 
 /**
- * batadv_iv_ogm_neigh_cmp - compare the metrics of two neighbors
+ * batadv_iv_ogm_neigh_cmp() - compare the metrics of two neighbors
  * @neigh1: the first neighbor object of the comparison
  * @if_outgoing1: outgoing interface for the first neighbor
  * @neigh2: the second neighbor object of the comparison
@@ -2501,7 +2568,7 @@ static int batadv_iv_ogm_neigh_cmp(struct batadv_neigh_node *neigh1,
 }
 
 /**
- * batadv_iv_ogm_neigh_is_sob - check if neigh1 is similarly good or better
+ * batadv_iv_ogm_neigh_is_sob() - check if neigh1 is similarly good or better
  *  than neigh2 from the metric prospective
  * @neigh1: the first neighbor object of the comparison
  * @if_outgoing1: outgoing interface for the first neighbor
@@ -2531,12 +2598,14 @@ batadv_iv_ogm_neigh_is_sob(struct batadv_neigh_node *neigh1,
 
 static void batadv_iv_iface_enabled(struct batadv_hard_iface *hard_iface)
 {
+	INIT_DELAYED_WORK(&hard_iface->bat_iv.reschedule_work, batadv_iv_ogm_reschedule);
+
 	/* begin scheduling originator messages on that interface */
 	batadv_iv_ogm_schedule(hard_iface);
 }
 
 /**
- * batadv_iv_init_sel_class - initialize GW selection class
+ * batadv_iv_init_sel_class() - initialize GW selection class
  * @bat_priv: the bat priv with all the soft interface information
  */
 static void batadv_iv_init_sel_class(struct batadv_priv *bat_priv)
@@ -2581,9 +2650,9 @@ batadv_iv_gw_get_best_gw_node(struct batadv_priv *bat_priv)
 			tmp_gw_factor *= 100 * 100;
 			tmp_gw_factor >>= 18;
 
-			if ((tmp_gw_factor > max_gw_factor) ||
-			    ((tmp_gw_factor == max_gw_factor) &&
-			     (tq_avg > max_tq))) {
+			if (tmp_gw_factor > max_gw_factor ||
+			    (tmp_gw_factor == max_gw_factor &&
+			     tq_avg > max_tq)) {
 				if (curr_gw)
 					batadv_gw_node_put(curr_gw);
 				curr_gw = gw_node;
@@ -2761,7 +2830,7 @@ static void batadv_iv_gw_print(struct batadv_priv *bat_priv,
 #endif
 
 /**
- * batadv_iv_gw_dump_entry - Dump a gateway into a message
+ * batadv_iv_gw_dump_entry() - Dump a gateway into a message
  * @msg: Netlink message to dump into
  * @portid: Port making netlink request
  * @seq: Sequence number of netlink message
@@ -2834,7 +2903,7 @@ out:
 }
 
 /**
- * batadv_iv_gw_dump - Dump gateways into a message
+ * batadv_iv_gw_dump() - Dump gateways into a message
  * @msg: Netlink message to dump into
  * @cb: Control block containing additional options
  * @bat_priv: The bat priv with all the soft interface information
@@ -2903,6 +2972,11 @@ static struct batadv_algo_ops batadv_batman_iv __read_mostly = {
 	},
 };
 
+/**
+ * batadv_iv_init() - B.A.T.M.A.N. IV initialization function
+ *
+ * Return: 0 on success or negative error number in case of failure
+ */
 int __init batadv_iv_init(void)
 {
 	int ret;

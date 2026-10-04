@@ -32,7 +32,7 @@
 #include <linux/pci.h>
 #include <asm/io.h>
 #include <linux/ioport.h>
-#include <asm/pgtable.h>
+#include <linux/pgtable.h>
 #include <asm/page.h>
 #include <linux/types.h>
 #include <linux/interrupt.h>
@@ -40,8 +40,8 @@
 #include <linux/vmalloc.h>
 #include <linux/init.h>
 
-#include "dmxdev.h"
-#include "dvbdev.h"
+#include <media/dmxdev.h>
+#include <media/dvbdev.h>
 #include "bt878.h"
 #include "dst_priv.h"
 

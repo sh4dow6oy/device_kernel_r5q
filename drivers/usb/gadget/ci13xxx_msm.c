@@ -1,4 +1,5 @@
-/* Copyright (c) 2010-2019, The Linux Foundation. All rights reserved.
+// SPDX-License-Identifier: GPL-2.0-only
+/* Copyright (c) 2010-2019,2021 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -352,7 +353,7 @@ static void ci13xxx_msm_uninstall_wake_gpio(struct platform_device *pdev)
 	}
 }
 
-static void enable_usb_irq_timer_func(unsigned long data);
+static void enable_usb_irq_timer_func(struct timer_list *t);
 static int ci13xxx_msm_probe(struct platform_device *pdev)
 {
 	struct resource *res;
@@ -415,7 +416,7 @@ static int ci13xxx_msm_probe(struct platform_device *pdev)
 	_udc_ctxt.ci13xxx_pinctrl = devm_pinctrl_get(&pdev->dev);
 	if (IS_ERR(_udc_ctxt.ci13xxx_pinctrl)) {
 		if (of_property_read_bool(pdev->dev.of_node, "pinctrl-names")) {
-			dev_err(&pdev->dev, "Error encountered while getting pinctrl");
+			dev_err(&pdev->dev, "Error encountered while getting pinctrl\n");
 			ret = PTR_ERR(_udc_ctxt.ci13xxx_pinctrl);
 			goto udc_remove;
 		}
@@ -437,8 +438,7 @@ static int ci13xxx_msm_probe(struct platform_device *pdev)
 		goto gpio_uninstall;
 	}
 
-	setup_timer(&_udc_ctxt.irq_enable_timer, enable_usb_irq_timer_func,
-							(unsigned long)NULL);
+	timer_setup(&_udc_ctxt.irq_enable_timer, enable_usb_irq_timer_func, 0);
 
 	pm_runtime_no_callbacks(&pdev->dev);
 	pm_runtime_set_active(&pdev->dev);
@@ -524,7 +524,7 @@ void msm_usb_irq_disable(bool disable)
 	spin_unlock_irqrestore(udc->lock, flags);
 }
 
-static void enable_usb_irq_timer_func(unsigned long data)
+static void enable_usb_irq_timer_func(struct timer_list *t)
 {
 	pr_debug("enabling interrupt from timer\n");
 	msm_usb_irq_disable(false);

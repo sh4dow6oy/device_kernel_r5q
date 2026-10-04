@@ -67,17 +67,12 @@ static LIST_HEAD(bridge_list);
  * drm_bridge_add - add the given bridge to the global bridge list
  *
  * @bridge: bridge control structure
- *
- * RETURNS:
- * Unconditionally returns Zero.
  */
-int drm_bridge_add(struct drm_bridge *bridge)
+void drm_bridge_add(struct drm_bridge *bridge)
 {
 	mutex_lock(&bridge_lock);
 	list_add_tail(&bridge->list, &bridge_list);
 	mutex_unlock(&bridge_lock);
-
-	return 0;
 }
 EXPORT_SYMBOL(drm_bridge_add);
 
@@ -160,32 +155,6 @@ void drm_bridge_detach(struct drm_bridge *bridge)
 
 	bridge->dev = NULL;
 }
-
-/**
- * drm_bridge_connector_init - call bridge's connector_init callback to allow
- *                     the bridge to update connector's behavior.
- * @bridge: bridge control structure
- * @connector: connector control structure
- *
- * Calls ->connector_init() &drm_bridge_funcs op for the bridge.
- *
- * RETURNS:
- * Zero on success, error code on failure
- */
-int drm_bridge_connector_init(struct drm_bridge *bridge,
-	struct drm_connector *connector)
-{
-	int ret = 0;
-
-	if (!bridge || !connector)
-		return -EINVAL;
-
-	if (bridge->funcs->connector_init)
-		ret = bridge->funcs->connector_init(bridge, connector);
-
-	return ret;
-}
-EXPORT_SYMBOL(drm_bridge_connector_init);
 
 /**
  * DOC: bridge callbacks
@@ -378,6 +347,116 @@ void drm_bridge_enable(struct drm_bridge *bridge)
 	drm_bridge_enable(bridge->next);
 }
 EXPORT_SYMBOL(drm_bridge_enable);
+
+/**
+ * drm_atomic_bridge_disable - disables all bridges in the encoder chain
+ * @bridge: bridge control structure
+ * @state: atomic state being committed
+ *
+ * Calls &drm_bridge_funcs.atomic_disable (falls back on
+ * &drm_bridge_funcs.disable) op for all the bridges in the encoder chain,
+ * starting from the last bridge to the first. These are called before calling
+ * &drm_encoder_helper_funcs.atomic_disable
+ *
+ * Note: the bridge passed should be the one closest to the encoder
+ */
+void drm_atomic_bridge_disable(struct drm_bridge *bridge,
+			       struct drm_atomic_state *state)
+{
+	if (!bridge)
+		return;
+
+	drm_atomic_bridge_disable(bridge->next, state);
+
+	if (bridge->funcs->atomic_disable)
+		bridge->funcs->atomic_disable(bridge, state);
+	else if (bridge->funcs->disable)
+		bridge->funcs->disable(bridge);
+}
+EXPORT_SYMBOL(drm_atomic_bridge_disable);
+
+/**
+ * drm_atomic_bridge_post_disable - cleans up after disabling all bridges in the
+ *				    encoder chain
+ * @bridge: bridge control structure
+ * @state: atomic state being committed
+ *
+ * Calls &drm_bridge_funcs.atomic_post_disable (falls back on
+ * &drm_bridge_funcs.post_disable) op for all the bridges in the encoder chain,
+ * starting from the first bridge to the last. These are called after completing
+ * &drm_encoder_helper_funcs.atomic_disable
+ *
+ * Note: the bridge passed should be the one closest to the encoder
+ */
+void drm_atomic_bridge_post_disable(struct drm_bridge *bridge,
+				    struct drm_atomic_state *state)
+{
+	if (!bridge)
+		return;
+
+	if (bridge->funcs->atomic_post_disable)
+		bridge->funcs->atomic_post_disable(bridge, state);
+	else if (bridge->funcs->post_disable)
+		bridge->funcs->post_disable(bridge);
+
+	drm_atomic_bridge_post_disable(bridge->next, state);
+}
+EXPORT_SYMBOL(drm_atomic_bridge_post_disable);
+
+/**
+ * drm_atomic_bridge_pre_enable - prepares for enabling all bridges in the
+ *				  encoder chain
+ * @bridge: bridge control structure
+ * @state: atomic state being committed
+ *
+ * Calls &drm_bridge_funcs.atomic_pre_enable (falls back on
+ * &drm_bridge_funcs.pre_enable) op for all the bridges in the encoder chain,
+ * starting from the last bridge to the first. These are called before calling
+ * &drm_encoder_helper_funcs.atomic_enable
+ *
+ * Note: the bridge passed should be the one closest to the encoder
+ */
+void drm_atomic_bridge_pre_enable(struct drm_bridge *bridge,
+				  struct drm_atomic_state *state)
+{
+	if (!bridge)
+		return;
+
+	drm_atomic_bridge_pre_enable(bridge->next, state);
+
+	if (bridge->funcs->atomic_pre_enable)
+		bridge->funcs->atomic_pre_enable(bridge, state);
+	else if (bridge->funcs->pre_enable)
+		bridge->funcs->pre_enable(bridge);
+}
+EXPORT_SYMBOL(drm_atomic_bridge_pre_enable);
+
+/**
+ * drm_atomic_bridge_enable - enables all bridges in the encoder chain
+ * @bridge: bridge control structure
+ * @state: atomic state being committed
+ *
+ * Calls &drm_bridge_funcs.atomic_enable (falls back on
+ * &drm_bridge_funcs.enable) op for all the bridges in the encoder chain,
+ * starting from the first bridge to the last. These are called after completing
+ * &drm_encoder_helper_funcs.atomic_enable
+ *
+ * Note: the bridge passed should be the one closest to the encoder
+ */
+void drm_atomic_bridge_enable(struct drm_bridge *bridge,
+			      struct drm_atomic_state *state)
+{
+	if (!bridge)
+		return;
+
+	if (bridge->funcs->atomic_enable)
+		bridge->funcs->atomic_enable(bridge, state);
+	else if (bridge->funcs->enable)
+		bridge->funcs->enable(bridge);
+
+	drm_atomic_bridge_enable(bridge->next, state);
+}
+EXPORT_SYMBOL(drm_atomic_bridge_enable);
 
 #ifdef CONFIG_OF
 /**

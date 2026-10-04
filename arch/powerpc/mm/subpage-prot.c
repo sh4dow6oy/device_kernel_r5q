@@ -13,10 +13,10 @@
 #include <linux/types.h>
 #include <linux/mm.h>
 #include <linux/hugetlb.h>
+#include <linux/syscalls.h>
 
-#include <asm/pgtable.h>
+#include <linux/pgtable.h>
 #include <linux/uaccess.h>
-#include <asm/tlbflush.h>
 
 /*
  * Free all pages allocated for subpage protection maps and pointers.
@@ -99,7 +99,7 @@ static void subpage_prot_clear(unsigned long addr, unsigned long len)
 	size_t nw;
 	unsigned long next, limit;
 
-	down_write(&mm->mmap_sem);
+	mmap_write_lock(mm);
 	limit = addr + len;
 	if (limit > spt->maxaddr)
 		limit = spt->maxaddr;
@@ -127,7 +127,7 @@ static void subpage_prot_clear(unsigned long addr, unsigned long len)
 		/* now flush any existing HPTEs for the range */
 		hpte_flush_range(mm, addr, nw);
 	}
-	up_write(&mm->mmap_sem);
+	mmap_write_unlock(mm);
 }
 
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE
@@ -185,7 +185,8 @@ static void subpage_mark_vma_nohuge(struct mm_struct *mm, unsigned long addr,
  * in a 2-bit field won't allow writes to a page that is otherwise
  * write-protected.
  */
-long sys_subpage_prot(unsigned long addr, unsigned long len, u32 __user *map)
+SYSCALL_DEFINE3(subpage_prot, unsigned long, addr,
+		unsigned long, len, u32 __user *, map)
 {
 	struct mm_struct *mm = current->mm;
 	struct subpage_prot_table *spt = &mm->context.spt;
@@ -194,6 +195,9 @@ long sys_subpage_prot(unsigned long addr, unsigned long len, u32 __user *map)
 	size_t nw;
 	unsigned long next, limit;
 	int err;
+
+	if (radix_enabled())
+		return -ENOENT;
 
 	/* Check parameters */
 	if ((addr & ~PAGE_MASK) || (len & ~PAGE_MASK) ||
@@ -213,7 +217,7 @@ long sys_subpage_prot(unsigned long addr, unsigned long len, u32 __user *map)
 	if (!access_ok(VERIFY_READ, map, (len >> PAGE_SHIFT) * sizeof(u32)))
 		return -EFAULT;
 
-	down_write(&mm->mmap_sem);
+	mmap_write_lock(mm);
 	subpage_mark_vma_nohuge(mm, addr, len);
 	for (limit = addr + len; addr < limit; addr = next) {
 		next = pmd_addr_end(addr, limit);
@@ -248,11 +252,11 @@ long sys_subpage_prot(unsigned long addr, unsigned long len, u32 __user *map)
 		if (addr + (nw << PAGE_SHIFT) > next)
 			nw = (next - addr) >> PAGE_SHIFT;
 
-		up_write(&mm->mmap_sem);
+		mmap_write_unlock(mm);
 		if (__copy_from_user(spp, map, nw * sizeof(u32)))
 			return -EFAULT;
 		map += nw;
-		down_write(&mm->mmap_sem);
+		mmap_write_lock(mm);
 
 		/* now flush any existing HPTEs for the range */
 		hpte_flush_range(mm, addr, nw);
@@ -261,6 +265,6 @@ long sys_subpage_prot(unsigned long addr, unsigned long len, u32 __user *map)
 		spt->maxaddr = limit;
 	err = 0;
  out:
-	up_write(&mm->mmap_sem);
+	mmap_write_unlock(mm);
 	return err;
 }

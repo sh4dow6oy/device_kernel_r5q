@@ -12,7 +12,6 @@
 
 #include <linux/kernel.h>
 #include <linux/cpuidle.h>
-#include <linux/pm_qos.h>
 #include <linux/time.h>
 #include <linux/ktime.h>
 #include <linux/hrtimer.h>
@@ -21,7 +20,6 @@
 #include <linux/sched/loadavg.h>
 #include <linux/sched/stat.h>
 #include <linux/math64.h>
-#include <linux/cpu.h>
 
 /*
  * Please note when changing the tuning values:
@@ -269,8 +267,16 @@ again:
 	 *
 	 * This can deal with workloads that have long pauses interspersed
 	 * with sporadic activity with a bunch of short pauses.
+	 *
+	 * However, if the number of remaining samples is too small to exclude
+	 * any more outliers, allow the deepest available idle state to be
+	 * selected because there are systems where the time spent by CPUs in
+	 * deep idle states is correlated to the maximum frequency the CPUs
+	 * can get to.  On those systems, shallow idle states should be avoided
+	 * unless there is a clear indication that the given CPU is most likley
+	 * going to be woken up shortly.
 	 */
-	if ((divisor * 4) <= INTERVALS * 3)
+	if (divisor * 4 <= INTERVALS * 3)
 		return UINT_MAX;
 
 	thresh = max - 1;
@@ -287,25 +293,19 @@ static int menu_select(struct cpuidle_driver *drv, struct cpuidle_device *dev,
 		       bool *stop_tick)
 {
 	struct menu_device *data = this_cpu_ptr(&menu_devices);
-	struct device *device = get_cpu_device(dev->cpu);
-	int latency_req = pm_qos_request(PM_QOS_CPU_DMA_LATENCY);
+	int latency_req = cpuidle_governor_latency_req(dev->cpu);
 	int i;
 	int first_idx;
 	int idx;
 	unsigned int interactivity_req;
 	unsigned int expected_interval;
 	unsigned long nr_iowaiters, cpu_load;
-	int resume_latency = dev_pm_qos_raw_read_value(device);
 	ktime_t delta_next;
 
 	if (data->needs_update) {
 		menu_update(drv, dev);
 		data->needs_update = 0;
 	}
-
-	/* resume_latency is 0 means no restriction */
-	if (resume_latency && resume_latency < latency_req)
-		latency_req = resume_latency;
 
 	/* Special case when user has set very strict latency requirement */
 	if (unlikely(latency_req == 0)) {
@@ -337,9 +337,8 @@ static int menu_select(struct cpuidle_driver *drv, struct cpuidle_device *dev,
 		unsigned int polling_threshold;
 
 		/*
-		 * We want to default to C1 (hlt), not to busy polling
-		 * unless the timer is happening really really soon, or
-		 * C1's exit latency exceeds the user configured limit.
+		 * Default to a physical idle state, not to busy polling, unless
+		 * a timer is going to trigger really really soon.
 		 */
 		polling_threshold = max_t(unsigned int, 20, s->target_residency);
 		if (data->next_timer_us > polling_threshold &&
@@ -449,8 +448,8 @@ static int menu_select(struct cpuidle_driver *drv, struct cpuidle_device *dev,
 			 * tick, so try to correct that.
 			 */
 			for (i = idx - 1; i >= 0; i--) {
-			    if (drv->states[i].disabled ||
-			        dev->states_usage[i].disable)
+				if (drv->states[i].disabled ||
+				    dev->states_usage[i].disable)
 					continue;
 
 				idx = i;
@@ -522,6 +521,16 @@ static void menu_update(struct cpuidle_driver *drv, struct cpuidle_device *dev)
 		 * duration predictor do a better job next time.
 		 */
 		measured_us = 9 * MAX_INTERESTING / 10;
+	} else if ((drv->states[last_idx].flags & CPUIDLE_FLAG_POLLING) &&
+		   dev->poll_time_limit) {
+		/*
+		 * The CPU exited the "polling" state due to a time limit, so
+		 * the idle duration prediction leading to the selection of that
+		 * state was inaccurate.  If a better prediction had been made,
+		 * the CPU might have been woken up from idle by the next timer.
+		 * Assume that to be the case.
+		 */
+		measured_us = data->next_timer_us;
 	} else {
 		/* measured value */
 		measured_us = cpuidle_get_last_residency(dev);

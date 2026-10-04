@@ -40,20 +40,20 @@ static LIST_HEAD(ser_list);
 static LIST_HEAD(ser_release_list);
 
 static bool ser_loop;
-module_param(ser_loop, bool, S_IRUGO);
+module_param(ser_loop, bool, 0444);
 MODULE_PARM_DESC(ser_loop, "Run in simulated loopback mode.");
 
 static bool ser_use_stx = true;
-module_param(ser_use_stx, bool, S_IRUGO);
+module_param(ser_use_stx, bool, 0444);
 MODULE_PARM_DESC(ser_use_stx, "STX enabled or not.");
 
 static bool ser_use_fcs = true;
 
-module_param(ser_use_fcs, bool, S_IRUGO);
+module_param(ser_use_fcs, bool, 0444);
 MODULE_PARM_DESC(ser_use_fcs, "FCS enabled or not.");
 
 static int ser_write_chunk = MAX_WRITE_CHUNK;
-module_param(ser_write_chunk, int, S_IRUGO);
+module_param(ser_write_chunk, int, 0444);
 
 MODULE_PARM_DESC(ser_write_chunk, "Maximum size of data written to UART.");
 
@@ -97,21 +97,21 @@ static inline void debugfs_init(struct ser_device *ser, struct tty_struct *tty)
 	ser->debugfs_tty_dir =
 			debugfs_create_dir(tty->name, debugfsdir);
 	if (!IS_ERR(ser->debugfs_tty_dir)) {
-		debugfs_create_blob("last_tx_msg", S_IRUSR,
-				ser->debugfs_tty_dir,
-				&ser->tx_blob);
+		debugfs_create_blob("last_tx_msg", 0400,
+				    ser->debugfs_tty_dir,
+				    &ser->tx_blob);
 
-		debugfs_create_blob("last_rx_msg", S_IRUSR,
-				ser->debugfs_tty_dir,
-				&ser->rx_blob);
+		debugfs_create_blob("last_rx_msg", 0400,
+				    ser->debugfs_tty_dir,
+				    &ser->rx_blob);
 
-		debugfs_create_x32("ser_state", S_IRUSR,
-				ser->debugfs_tty_dir,
-				(u32 *)&ser->state);
+		debugfs_create_x32("ser_state", 0400,
+				   ser->debugfs_tty_dir,
+				   (u32 *)&ser->state);
 
-		debugfs_create_x8("tty_status", S_IRUSR,
-				ser->debugfs_tty_dir,
-				&ser->tty_status);
+		debugfs_create_x8("tty_status", 0400,
+				  ser->debugfs_tty_dir,
+				  &ser->tty_status);
 
 	}
 	ser->tx_blob.data = ser->tx_data;
@@ -308,6 +308,7 @@ static void ser_release(struct work_struct *work)
 {
 	struct list_head list;
 	struct ser_device *ser, *tmp;
+	struct tty_struct *tty;
 
 	spin_lock(&ser_lock);
 	list_replace_init(&ser_release_list, &list);
@@ -316,9 +317,12 @@ static void ser_release(struct work_struct *work)
 	if (!list_empty(&list)) {
 		rtnl_lock();
 		list_for_each_entry_safe(ser, tmp, &list, node) {
+			tty = ser->tty;
 			dev_close(ser->dev);
 			unregister_netdevice(ser->dev);
 			debugfs_deinit(ser);
+			tty_kref_put(tty->link);
+			tty_kref_put(tty);
 		}
 		rtnl_unlock();
 	}
@@ -352,6 +356,7 @@ static int ldisc_open(struct tty_struct *tty)
 
 	ser = netdev_priv(dev);
 	ser->tty = tty_kref_get(tty);
+	tty_kref_get(tty->link);
 	ser->dev = dev;
 	debugfs_init(ser, tty);
 	tty->receive_room = N_TTY_BUF_SIZE;
@@ -360,6 +365,7 @@ static int ldisc_open(struct tty_struct *tty)
 	rtnl_lock();
 	result = register_netdevice(dev);
 	if (result) {
+		tty_kref_put(tty->link);
 		tty_kref_put(tty);
 		rtnl_unlock();
 		free_netdev(dev);
@@ -378,8 +384,6 @@ static int ldisc_open(struct tty_struct *tty)
 static void ldisc_close(struct tty_struct *tty)
 {
 	struct ser_device *ser = tty->disc_data;
-
-	tty_kref_put(ser->tty);
 
 	spin_lock(&ser_lock);
 	list_move(&ser->node, &ser_release_list);

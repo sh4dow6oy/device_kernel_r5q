@@ -42,14 +42,7 @@ static void
 force_sig_info_fault(int si_signo, int si_code, unsigned long address,
 		     struct task_struct *tsk)
 {
-	siginfo_t info;
-
-	info.si_signo	= si_signo;
-	info.si_errno	= 0;
-	info.si_code	= si_code;
-	info.si_addr	= (void __user *)address;
-
-	force_sig_info(si_signo, &info, tsk);
+	force_sig_fault(si_signo, si_code, (void __user *)address, tsk);
 }
 
 /*
@@ -285,7 +278,7 @@ __bad_area(struct pt_regs *regs, unsigned long error_code,
 	 * Something tried to access memory that isn't in our memory map..
 	 * Fix it, but check if it's kernel or user first..
 	 */
-	up_read(&mm->mmap_sem);
+	mmap_read_unlock(mm);
 
 	__bad_area_nosemaphore(regs, error_code, address, si_code);
 }
@@ -309,7 +302,7 @@ do_sigbus(struct pt_regs *regs, unsigned long error_code, unsigned long address)
 	struct task_struct *tsk = current;
 	struct mm_struct *mm = tsk->mm;
 
-	up_read(&mm->mmap_sem);
+	mmap_read_unlock(mm);
 
 	/* Kernel mode? Handle exceptions or die: */
 	if (!user_mode(regs))
@@ -320,21 +313,19 @@ do_sigbus(struct pt_regs *regs, unsigned long error_code, unsigned long address)
 
 static noinline int
 mm_fault_error(struct pt_regs *regs, unsigned long error_code,
-	       unsigned long address, unsigned int fault)
+	       unsigned long address, vm_fault_t fault)
 {
 	/*
 	 * Pagefault was interrupted by SIGKILL. We have no reason to
 	 * continue pagefault.
 	 */
-	if (fault_signal_pending(fault, regs)) {
+	if (fatal_signal_pending(current)) {
+		if (!(fault & VM_FAULT_RETRY))
+			mmap_read_unlock(current->mm);
 		if (!user_mode(regs))
 			no_context(regs, error_code, address);
 		return 1;
 	}
-
-	/* Release mmap_sem first if necessary */
-	if (!(fault & VM_FAULT_RETRY))
-		up_read(&current->mm->mmap_sem);
 
 	if (!(fault & VM_FAULT_ERROR))
 		return 0;
@@ -342,9 +333,11 @@ mm_fault_error(struct pt_regs *regs, unsigned long error_code,
 	if (fault & VM_FAULT_OOM) {
 		/* Kernel mode? Handle exceptions or die: */
 		if (!user_mode(regs)) {
+			mmap_read_unlock(current->mm);
 			no_context(regs, error_code, address);
 			return 1;
 		}
+		mmap_read_unlock(current->mm);
 
 		/*
 		 * We ran out of memory, call the OOM killer, and return the
@@ -403,8 +396,8 @@ asmlinkage void __kprobes do_page_fault(struct pt_regs *regs,
 	struct task_struct *tsk;
 	struct mm_struct *mm;
 	struct vm_area_struct * vma;
-	int fault;
-	unsigned int flags = FAULT_FLAG_DEFAULT;
+	vm_fault_t fault;
+	unsigned int flags = FAULT_FLAG_ALLOW_RETRY | FAULT_FLAG_KILLABLE;
 
 	tsk = current;
 	mm = tsk->mm;
@@ -448,7 +441,7 @@ asmlinkage void __kprobes do_page_fault(struct pt_regs *regs,
 	}
 
 retry:
-	down_read(&mm->mmap_sem);
+	mmap_read_lock(mm);
 
 	vma = find_vma(mm, address);
 	if (unlikely(!vma)) {
@@ -505,6 +498,7 @@ good_area:
 				      regs, address);
 		}
 		if (fault & VM_FAULT_RETRY) {
+			flags &= ~FAULT_FLAG_ALLOW_RETRY;
 			flags |= FAULT_FLAG_TRIED;
 
 			/*
@@ -516,5 +510,5 @@ good_area:
 		}
 	}
 
-	up_read(&mm->mmap_sem);
+	mmap_read_unlock(mm);
 }

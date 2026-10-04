@@ -145,6 +145,15 @@ struct seccomp_data {
 #define SECCOMP_FILTER_FLAG_SPEC_ALLOW (1UL << 2)
 #endif
 
+#ifndef PTRACE_SECCOMP_GET_METADATA
+#define PTRACE_SECCOMP_GET_METADATA	0x420d
+
+struct seccomp_metadata {
+	__u64 filter_off;       /* Input: which filter */
+	__u64 flags;             /* Output: filter's flags */
+};
+#endif
+
 #ifndef seccomp
 int seccomp(unsigned int op, unsigned int flags, void *args)
 {
@@ -2787,12 +2796,15 @@ TEST(syscall_restart)
 	ret = get_syscall(_metadata, child_pid);
 #if defined(__arm__)
 	/*
-	 * FIXME:
 	 * - native ARM registers do NOT expose true syscall.
 	 * - compat ARM registers on ARM64 DO expose true syscall.
+	 * - values of utsbuf.machine include 'armv8l' or 'armb8b'
+	 *   for ARM64 running in compat mode.
 	 */
 	ASSERT_EQ(0, uname(&utsbuf));
-	if (strncmp(utsbuf.machine, "arm", 3) == 0) {
+	if ((strncmp(utsbuf.machine, "arm", 3) == 0) &&
+	    (strncmp(utsbuf.machine, "armv8l", 6) != 0) &&
+	    (strncmp(utsbuf.machine, "armv8b", 6) != 0)) {
 		EXPECT_EQ(__NR_nanosleep, ret);
 	} else
 #endif
@@ -2901,6 +2913,75 @@ TEST(get_action_avail)
 	ret = seccomp(SECCOMP_GET_ACTION_AVAIL, 0, &unknown_action);
 	EXPECT_EQ(ret, -1);
 	EXPECT_EQ(errno, EOPNOTSUPP);
+}
+
+TEST(get_metadata)
+{
+	pid_t pid;
+	int pipefd[2];
+	char buf;
+	struct seccomp_metadata md;
+	long ret;
+
+	/* Only real root can get metadata. */
+	if (geteuid()) {
+		XFAIL(return, "get_metadata requires real root");
+		return;
+	}
+
+	ASSERT_EQ(0, pipe(pipefd));
+
+	pid = fork();
+	ASSERT_GE(pid, 0);
+	if (pid == 0) {
+		struct sock_filter filter[] = {
+			BPF_STMT(BPF_RET|BPF_K, SECCOMP_RET_ALLOW),
+		};
+		struct sock_fprog prog = {
+			.len = (unsigned short)ARRAY_SIZE(filter),
+			.filter = filter,
+		};
+
+		/* one with log, one without */
+		ASSERT_EQ(0, seccomp(SECCOMP_SET_MODE_FILTER,
+				     SECCOMP_FILTER_FLAG_LOG, &prog));
+		ASSERT_EQ(0, seccomp(SECCOMP_SET_MODE_FILTER, 0, &prog));
+
+		ASSERT_EQ(0, close(pipefd[0]));
+		ASSERT_EQ(1, write(pipefd[1], "1", 1));
+		ASSERT_EQ(0, close(pipefd[1]));
+
+		while (1)
+			sleep(100);
+	}
+
+	ASSERT_EQ(0, close(pipefd[1]));
+	ASSERT_EQ(1, read(pipefd[0], &buf, 1));
+
+	ASSERT_EQ(0, ptrace(PTRACE_ATTACH, pid));
+	ASSERT_EQ(pid, waitpid(pid, NULL, 0));
+
+	/* Past here must not use ASSERT or child process is never killed. */
+
+	md.filter_off = 0;
+	errno = 0;
+	ret = ptrace(PTRACE_SECCOMP_GET_METADATA, pid, sizeof(md), &md);
+	EXPECT_EQ(sizeof(md), ret) {
+		if (errno == EINVAL)
+			XFAIL(goto skip, "Kernel does not support PTRACE_SECCOMP_GET_METADATA (missing CONFIG_CHECKPOINT_RESTORE?)");
+	}
+
+	EXPECT_EQ(md.flags, SECCOMP_FILTER_FLAG_LOG);
+	EXPECT_EQ(md.filter_off, 0);
+
+	md.filter_off = 1;
+	ret = ptrace(PTRACE_SECCOMP_GET_METADATA, pid, sizeof(md), &md);
+	EXPECT_EQ(sizeof(md), ret);
+	EXPECT_EQ(md.flags, 0);
+	EXPECT_EQ(md.filter_off, 1);
+
+skip:
+	ASSERT_EQ(0, kill(pid, SIGKILL));
 }
 
 /*

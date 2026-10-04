@@ -7,6 +7,7 @@
 #include <linux/list.h>
 #include <linux/stddef.h>
 #include <linux/spinlock.h>
+#include <linux/sched/debug.h>
 
 #include <asm/current.h>
 #include <uapi/linux/wait.h>
@@ -203,18 +204,21 @@ void __wake_up_pollfree(struct wait_queue_head *wq_head);
 #define wake_up_interruptible_nr(x, nr)	__wake_up(x, TASK_INTERRUPTIBLE, nr, NULL)
 #define wake_up_interruptible_all(x)	__wake_up(x, TASK_INTERRUPTIBLE, 0, NULL)
 #define wake_up_interruptible_sync(x)	__wake_up_sync((x), TASK_INTERRUPTIBLE, 1)
+#define wake_up_sync(x)			__wake_up_sync(x, TASK_NORMAL, 1)
 
 /*
  * Wakeup macros to be used to report events to the targets.
  */
+#define poll_to_key(m) ((void *)(__force uintptr_t)(__poll_t)(m))
+#define key_to_poll(m) ((__force __poll_t)(uintptr_t)(void *)(m))
 #define wake_up_poll(x, m)							\
-	__wake_up(x, TASK_NORMAL, 1, (void *) (m))
+	__wake_up(x, TASK_NORMAL, 1, poll_to_key(m))
 #define wake_up_locked_poll(x, m)						\
-	__wake_up_locked_key((x), TASK_NORMAL, (void *) (m))
+	__wake_up_locked_key((x), TASK_NORMAL, poll_to_key(m))
 #define wake_up_interruptible_poll(x, m)					\
-	__wake_up(x, TASK_INTERRUPTIBLE, 1, (void *) (m))
+	__wake_up(x, TASK_INTERRUPTIBLE, 1, poll_to_key(m))
 #define wake_up_interruptible_sync_poll(x, m)					\
-	__wake_up_sync_key((x), TASK_INTERRUPTIBLE, 1, (void *) (m))
+	__wake_up_sync_key((x), TASK_INTERRUPTIBLE, 1, poll_to_key(m))
 
 /**
  * wake_up_pollfree - signal that a polled waitqueue is going away
@@ -1076,10 +1080,9 @@ do {										\
 	__ret;									\
 })
 
-#define __wait_event_interruptible_lock_irq_timeout(wq_head, condition,		\
-						    lock, timeout)		\
+#define __wait_event_lock_irq_timeout(wq_head, condition, lock, timeout, state)	\
 	___wait_event(wq_head, ___wait_cond_timeout(condition),			\
-		      TASK_INTERRUPTIBLE, 0, timeout,				\
+		      state, 0, timeout,					\
 		      spin_unlock_irq(&lock);					\
 		      __ret = schedule_timeout(__ret);				\
 		      spin_lock_irq(&lock));
@@ -1113,8 +1116,19 @@ do {										\
 ({										\
 	long __ret = timeout;							\
 	if (!___wait_cond_timeout(condition))					\
-		__ret = __wait_event_interruptible_lock_irq_timeout(		\
-					wq_head, condition, lock, timeout);	\
+		__ret = __wait_event_lock_irq_timeout(				\
+					wq_head, condition, lock, timeout,	\
+					TASK_INTERRUPTIBLE);			\
+	__ret;									\
+})
+
+#define wait_event_lock_irq_timeout(wq_head, condition, lock, timeout)		\
+({										\
+	long __ret = timeout;							\
+	if (!___wait_cond_timeout(condition))					\
+		__ret = __wait_event_lock_irq_timeout(				\
+					wq_head, condition, lock, timeout,	\
+					TASK_UNINTERRUPTIBLE);			\
 	__ret;									\
 })
 
@@ -1125,9 +1139,12 @@ void prepare_to_wait(struct wait_queue_head *wq_head, struct wait_queue_entry *w
 void prepare_to_wait_exclusive(struct wait_queue_head *wq_head, struct wait_queue_entry *wq_entry, int state);
 long prepare_to_wait_event(struct wait_queue_head *wq_head, struct wait_queue_entry *wq_entry, int state);
 void finish_wait(struct wait_queue_head *wq_head, struct wait_queue_entry *wq_entry);
-long wait_woken(struct wait_queue_entry *wq_entry, unsigned mode, long timeout);
-int woken_wake_function(struct wait_queue_entry *wq_entry, unsigned mode, int sync, void *key);
-int autoremove_wake_function(struct wait_queue_entry *wq_entry, unsigned mode, int sync, void *key);
+long __sched wait_woken(struct wait_queue_entry *wq_entry, unsigned int mode,
+			long timeout);
+int __sched woken_wake_function(struct wait_queue_entry *wq_entry,
+				unsigned int mode, int sync, void *key);
+int __sched autoremove_wake_function(struct wait_queue_entry *wq_entry,
+				     unsigned int mode, int sync, void *key);
 
 #define DEFINE_WAIT_FUNC(name, function)					\
 	struct wait_queue_entry name = {					\

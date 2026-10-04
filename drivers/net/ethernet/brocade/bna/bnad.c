@@ -46,7 +46,7 @@ module_param(bnad_ioc_auto_recover, uint, 0444);
 MODULE_PARM_DESC(bnad_ioc_auto_recover, "Enable / Disable auto recovery");
 
 static uint bna_debugfs_enable = 1;
-module_param(bna_debugfs_enable, uint, S_IRUGO | S_IWUSR);
+module_param(bna_debugfs_enable, uint, 0644);
 MODULE_PARM_DESC(bna_debugfs_enable, "Enables debugfs feature, default=1,"
 		 " Range[false:0|true:1]");
 
@@ -1694,9 +1694,9 @@ err_return:
 /* Timer callbacks */
 /* a) IOC timer */
 static void
-bnad_ioc_timeout(unsigned long data)
+bnad_ioc_timeout(struct timer_list *t)
 {
-	struct bnad *bnad = (struct bnad *)data;
+	struct bnad *bnad = from_timer(bnad, t, bna.ioceth.ioc.ioc_timer);
 	unsigned long flags;
 
 	spin_lock_irqsave(&bnad->bna_lock, flags);
@@ -1705,9 +1705,9 @@ bnad_ioc_timeout(unsigned long data)
 }
 
 static void
-bnad_ioc_hb_check(unsigned long data)
+bnad_ioc_hb_check(struct timer_list *t)
 {
-	struct bnad *bnad = (struct bnad *)data;
+	struct bnad *bnad = from_timer(bnad, t, bna.ioceth.ioc.hb_timer);
 	unsigned long flags;
 
 	spin_lock_irqsave(&bnad->bna_lock, flags);
@@ -1716,9 +1716,9 @@ bnad_ioc_hb_check(unsigned long data)
 }
 
 static void
-bnad_iocpf_timeout(unsigned long data)
+bnad_iocpf_timeout(struct timer_list *t)
 {
-	struct bnad *bnad = (struct bnad *)data;
+	struct bnad *bnad = from_timer(bnad, t, bna.ioceth.ioc.iocpf_timer);
 	unsigned long flags;
 
 	spin_lock_irqsave(&bnad->bna_lock, flags);
@@ -1727,9 +1727,9 @@ bnad_iocpf_timeout(unsigned long data)
 }
 
 static void
-bnad_iocpf_sem_timeout(unsigned long data)
+bnad_iocpf_sem_timeout(struct timer_list *t)
 {
-	struct bnad *bnad = (struct bnad *)data;
+	struct bnad *bnad = from_timer(bnad, t, bna.ioceth.ioc.sem_timer);
 	unsigned long flags;
 
 	spin_lock_irqsave(&bnad->bna_lock, flags);
@@ -1749,9 +1749,9 @@ bnad_iocpf_sem_timeout(unsigned long data)
 
 /* b) Dynamic Interrupt Moderation Timer */
 static void
-bnad_dim_timeout(unsigned long data)
+bnad_dim_timeout(struct timer_list *t)
 {
-	struct bnad *bnad = (struct bnad *)data;
+	struct bnad *bnad = from_timer(bnad, t, dim_timer);
 	struct bnad_rx_info *rx_info;
 	struct bnad_rx_ctrl *rx_ctrl;
 	int i, j;
@@ -1782,9 +1782,9 @@ bnad_dim_timeout(unsigned long data)
 
 /* c)  Statistics Timer */
 static void
-bnad_stats_timeout(unsigned long data)
+bnad_stats_timeout(struct timer_list *t)
 {
-	struct bnad *bnad = (struct bnad *)data;
+	struct bnad *bnad = from_timer(bnad, t, stats_timer);
 	unsigned long flags;
 
 	if (!netif_running(bnad->netdev) ||
@@ -1805,8 +1805,7 @@ bnad_dim_timer_start(struct bnad *bnad)
 {
 	if (bnad->cfg_flags & BNAD_CF_DIM_ENABLED &&
 	    !test_bit(BNAD_RF_DIM_TIMER_RUNNING, &bnad->run_flags)) {
-		setup_timer(&bnad->dim_timer, bnad_dim_timeout,
-			    (unsigned long)bnad);
+		timer_setup(&bnad->dim_timer, bnad_dim_timeout, 0);
 		set_bit(BNAD_RF_DIM_TIMER_RUNNING, &bnad->run_flags);
 		mod_timer(&bnad->dim_timer,
 			  jiffies + msecs_to_jiffies(BNAD_DIM_TIMER_FREQ));
@@ -1824,8 +1823,7 @@ bnad_stats_timer_start(struct bnad *bnad)
 
 	spin_lock_irqsave(&bnad->bna_lock, flags);
 	if (!test_and_set_bit(BNAD_RF_STATS_TIMER_RUNNING, &bnad->run_flags)) {
-		setup_timer(&bnad->stats_timer, bnad_stats_timeout,
-			    (unsigned long)bnad);
+		timer_setup(&bnad->stats_timer, bnad_stats_timeout, 0);
 		mod_timer(&bnad->stats_timer,
 			  jiffies + msecs_to_jiffies(BNAD_STATS_TIMER_FREQ));
 	}
@@ -3144,7 +3142,7 @@ bnad_set_rx_ucast_fltr(struct bnad *bnad)
 	if (uc_count > bna_attr(&bnad->bna)->num_ucmac)
 		goto mode_default;
 
-	mac_list = kzalloc(uc_count * ETH_ALEN, GFP_ATOMIC);
+	mac_list = kcalloc(ETH_ALEN, uc_count, GFP_ATOMIC);
 	if (mac_list == NULL)
 		goto mode_default;
 
@@ -3185,7 +3183,7 @@ bnad_set_rx_mcast_fltr(struct bnad *bnad)
 	if (mc_count > bna_attr(&bnad->bna)->num_mcmac)
 		goto mode_allmulti;
 
-	mac_list = kzalloc((mc_count + 1) * ETH_ALEN, GFP_ATOMIC);
+	mac_list = kcalloc(mc_count + 1, ETH_ALEN, GFP_ATOMIC);
 
 	if (mac_list == NULL)
 		goto mode_allmulti;
@@ -3690,14 +3688,11 @@ bnad_pci_probe(struct pci_dev *pdev,
 		goto res_free;
 
 	/* Set up timers */
-	setup_timer(&bnad->bna.ioceth.ioc.ioc_timer, bnad_ioc_timeout,
-		    (unsigned long)bnad);
-	setup_timer(&bnad->bna.ioceth.ioc.hb_timer, bnad_ioc_hb_check,
-		    (unsigned long)bnad);
-	setup_timer(&bnad->bna.ioceth.ioc.iocpf_timer, bnad_iocpf_timeout,
-		    (unsigned long)bnad);
-	setup_timer(&bnad->bna.ioceth.ioc.sem_timer, bnad_iocpf_sem_timeout,
-		    (unsigned long)bnad);
+	timer_setup(&bnad->bna.ioceth.ioc.ioc_timer, bnad_ioc_timeout, 0);
+	timer_setup(&bnad->bna.ioceth.ioc.hb_timer, bnad_ioc_hb_check, 0);
+	timer_setup(&bnad->bna.ioceth.ioc.iocpf_timer, bnad_iocpf_timeout, 0);
+	timer_setup(&bnad->bna.ioceth.ioc.sem_timer, bnad_iocpf_sem_timeout,
+		    0);
 
 	/*
 	 * Start the chip

@@ -22,43 +22,36 @@
 #define _LINUX_RADIX_TREE_H
 
 #include <linux/bitops.h>
-#include <linux/bug.h>
 #include <linux/kernel.h>
 #include <linux/list.h>
 #include <linux/preempt.h>
 #include <linux/rcupdate.h>
 #include <linux/spinlock.h>
 #include <linux/types.h>
+#include <linux/xarray.h>
+
+/* Keep unconverted code working */
+#define radix_tree_root		xarray
+#define radix_tree_node		xa_node
 
 /*
  * The bottom two bits of the slot determine how the remaining bits in the
  * slot are interpreted:
  *
  * 00 - data pointer
- * 01 - internal entry
- * 10 - exceptional entry
- * 11 - this bit combination is currently unused/reserved
+ * 10 - internal entry
+ * x1 - value entry
  *
  * The internal entry may be a pointer to the next level in the tree, a
  * sibling entry, or an indicator that the entry in this slot has been moved
  * to another location in the tree and the lookup should be restarted.  While
  * NULL fits the 'data pointer' pattern, it means that there is no entry in
  * the tree for this index (no matter what level of the tree it is found at).
- * This means that you cannot store NULL in the tree as a value for the index.
+ * This means that storing a NULL entry in the tree is the same as deleting
+ * the entry from the tree.
  */
 #define RADIX_TREE_ENTRY_MASK		3UL
-#define RADIX_TREE_INTERNAL_NODE	1UL
-
-#define RADIX_TREE_INDIRECT_PTR		1
-
-/*
- * Most users of the radix tree store pointers but shmem/tmpfs stores swap
- * entries in the same tree.  They are marked as exceptional entries to
- * distinguish them from pointers to struct page.
- * EXCEPTIONAL_ENTRY tests the bit, EXCEPTIONAL_SHIFT shifts content past it.
- */
-#define RADIX_TREE_EXCEPTIONAL_ENTRY	2
-#define RADIX_TREE_EXCEPTIONAL_SHIFT	2
+#define RADIX_TREE_INTERNAL_NODE	2UL
 
 static inline bool radix_tree_is_internal_node(void *ptr)
 {
@@ -68,74 +61,32 @@ static inline bool radix_tree_is_internal_node(void *ptr)
 
 /*** radix-tree API starts here ***/
 
-#define RADIX_TREE_MAX_TAGS 3
-
-#ifndef RADIX_TREE_MAP_SHIFT
-#define RADIX_TREE_MAP_SHIFT	(CONFIG_BASE_SMALL ? 4 : 6)
-#endif
-
+#define RADIX_TREE_MAP_SHIFT	XA_CHUNK_SHIFT
 #define RADIX_TREE_MAP_SIZE	(1UL << RADIX_TREE_MAP_SHIFT)
 #define RADIX_TREE_MAP_MASK	(RADIX_TREE_MAP_SIZE-1)
 
-#define RADIX_TREE_TAG_LONGS	\
-	((RADIX_TREE_MAP_SIZE + BITS_PER_LONG - 1) / BITS_PER_LONG)
+#define RADIX_TREE_MAX_TAGS	XA_MAX_MARKS
+#define RADIX_TREE_TAG_LONGS	XA_MARK_LONGS
 
 #define RADIX_TREE_INDEX_BITS  (8 /* CHAR_BIT */ * sizeof(unsigned long))
 #define RADIX_TREE_MAX_PATH (DIV_ROUND_UP(RADIX_TREE_INDEX_BITS, \
 					  RADIX_TREE_MAP_SHIFT))
 
-/*
- * @count is the count of every non-NULL element in the ->slots array
- * whether that is an exceptional entry, a retry entry, a user pointer,
- * a sibling entry or a pointer to the next level of the tree.
- * @exceptional is the count of every element in ->slots which is
- * either radix_tree_exceptional_entry() or is a sibling entry for an
- * exceptional entry.
- */
-struct radix_tree_node {
-	unsigned char	shift;		/* Bits remaining in each slot */
-	unsigned char	offset;		/* Slot offset in parent */
-	unsigned char	count;		/* Total entry count */
-	unsigned char	exceptional;	/* Exceptional entry count */
-	struct radix_tree_node *parent;		/* Used when ascending tree */
-	struct radix_tree_root *root;		/* The tree we belong to */
-	union {
-		struct list_head private_list;	/* For tree user */
-		struct rcu_head	rcu_head;	/* Used when freeing node */
-	};
-	void __rcu	*slots[RADIX_TREE_MAP_SIZE];
-	unsigned long	tags[RADIX_TREE_MAX_TAGS][RADIX_TREE_TAG_LONGS];
-};
+/* The IDR tag is stored in the low bits of xa_flags */
+#define ROOT_IS_IDR	((__force gfp_t)4)
+/* The top bits of xa_flags are used to store the root tags */
+#define ROOT_TAG_SHIFT	(__GFP_BITS_SHIFT)
 
-/* The top bits of gfp_mask are used to store the root tags and the IDR flag */
-#define ROOT_IS_IDR	((__force gfp_t)(1 << __GFP_BITS_SHIFT))
-#define ROOT_TAG_SHIFT	(__GFP_BITS_SHIFT + 1)
-
-struct radix_tree_root {
-	spinlock_t		xa_lock;
-	gfp_t			gfp_mask;
-	struct radix_tree_node	__rcu *rnode;
-};
-
-#define RADIX_TREE_INIT(name, mask)	{				\
-	.xa_lock = __SPIN_LOCK_UNLOCKED(name.xa_lock),			\
-	.gfp_mask = (mask),						\
-	.rnode = NULL,							\
-}
+#define RADIX_TREE_INIT(name, mask)	XARRAY_INIT(name, mask)
 
 #define RADIX_TREE(name, mask) \
 	struct radix_tree_root name = RADIX_TREE_INIT(name, mask)
 
-#define INIT_RADIX_TREE(root, mask)					\
-do {									\
-	spin_lock_init(&(root)->xa_lock);				\
-	(root)->gfp_mask = (mask);					\
-	(root)->rnode = NULL;						\
-} while (0)
+#define INIT_RADIX_TREE(root, mask) xa_init_flags(root, mask)
 
 static inline bool radix_tree_empty(const struct radix_tree_root *root)
 {
-	return root->rnode == NULL;
+	return root->xa_head == NULL;
 }
 
 /**
@@ -271,17 +222,6 @@ static inline int radix_tree_deref_retry(void *arg)
 }
 
 /**
- * radix_tree_exceptional_entry	- radix_tree_deref_slot gave exceptional entry?
- * @arg:	value returned by radix_tree_deref_slot
- * Returns:	0 if well-aligned pointer, non-0 if exceptional entry.
- */
-static inline int radix_tree_exceptional_entry(void *arg)
-{
-	/* Not unlikely because radix_tree_exception often tested first */
-	return (unsigned long)arg & RADIX_TREE_EXCEPTIONAL_ENTRY;
-}
-
-/**
  * radix_tree_exception	- radix_tree_deref_slot returned either exception?
  * @arg:	value returned by radix_tree_deref_slot
  * Returns:	0 if well-aligned pointer, non-0 if either kind of exception.
@@ -291,9 +231,6 @@ static inline int radix_tree_exception(void *arg)
 	return unlikely((unsigned long)arg & RADIX_TREE_ENTRY_MASK);
 }
 
-int __radix_tree_create(struct radix_tree_root *, unsigned long index,
-			unsigned order, struct radix_tree_node **nodep,
-			void __rcu ***slotp);
 int __radix_tree_insert(struct radix_tree_root *, unsigned long index,
 			unsigned order, void *);
 static inline int radix_tree_insert(struct radix_tree_root *root,
@@ -306,18 +243,17 @@ void *__radix_tree_lookup(const struct radix_tree_root *, unsigned long index,
 void *radix_tree_lookup(const struct radix_tree_root *, unsigned long);
 void __rcu **radix_tree_lookup_slot(const struct radix_tree_root *,
 					unsigned long index);
-typedef void (*radix_tree_update_node_t)(struct radix_tree_node *, void *);
+typedef void (*radix_tree_update_node_t)(struct radix_tree_node *);
 void __radix_tree_replace(struct radix_tree_root *, struct radix_tree_node *,
 			  void __rcu **slot, void *entry,
-			  radix_tree_update_node_t update_node, void *private);
+			  radix_tree_update_node_t update_node);
 void radix_tree_iter_replace(struct radix_tree_root *,
 		const struct radix_tree_iter *, void __rcu **slot, void *entry);
 void radix_tree_replace_slot(struct radix_tree_root *,
 			     void __rcu **slot, void *entry);
 void __radix_tree_delete_node(struct radix_tree_root *,
 			      struct radix_tree_node *,
-			      radix_tree_update_node_t update_node,
-			      void *private);
+			      radix_tree_update_node_t update_node);
 void radix_tree_iter_delete(struct radix_tree_root *,
 			struct radix_tree_iter *iter, void __rcu **slot);
 void *radix_tree_delete_item(struct radix_tree_root *, unsigned long, void *);
@@ -326,10 +262,6 @@ void radix_tree_clear_tags(struct radix_tree_root *, struct radix_tree_node *,
 			   void __rcu **slot);
 unsigned int radix_tree_gang_lookup(const struct radix_tree_root *,
 			void **results, unsigned long first_index,
-			unsigned int max_items);
-unsigned int
-radix_tree_gang_lookup_index(struct radix_tree_root *root, void **results,
-			unsigned long *indices, unsigned long first_index,
 			unsigned int max_items);
 unsigned int radix_tree_gang_lookup_slot(const struct radix_tree_root *,
 			void __rcu ***results, unsigned long *indices,
@@ -367,24 +299,9 @@ int radix_tree_split(struct radix_tree_root *, unsigned long index,
 int radix_tree_join(struct radix_tree_root *, unsigned long index,
 			unsigned new_order, void *);
 
-void __rcu **idr_get_free_cmn(struct radix_tree_root *root,
+void __rcu **idr_get_free(struct radix_tree_root *root,
 			      struct radix_tree_iter *iter, gfp_t gfp,
 			      unsigned long max);
-static inline void __rcu **idr_get_free(struct radix_tree_root *root,
-					struct radix_tree_iter *iter,
-					gfp_t gfp,
-					int end)
-{
-	return idr_get_free_cmn(root, iter, gfp, end > 0 ? end - 1 : INT_MAX);
-}
-
-static inline void __rcu **idr_get_free_ext(struct radix_tree_root *root,
-					    struct radix_tree_iter *iter,
-					    gfp_t gfp,
-					    unsigned long end)
-{
-	return idr_get_free_cmn(root, iter, gfp, end - 1);
-}
 
 enum {
 	RADIX_TREE_ITER_TAG_MASK = 0x0f,	/* tag index in lower nybble */

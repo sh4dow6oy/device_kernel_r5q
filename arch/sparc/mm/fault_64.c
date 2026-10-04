@@ -27,7 +27,7 @@
 #include <linux/uaccess.h>
 
 #include <asm/page.h>
-#include <asm/pgtable.h>
+#include <linux/pgtable.h>
 #include <asm/openprom.h>
 #include <asm/oplib.h>
 #include <asm/asi.h>
@@ -170,11 +170,7 @@ static void do_fault_siginfo(int code, int sig, struct pt_regs *regs,
 			     int fault_code)
 {
 	unsigned long addr;
-	siginfo_t info;
 
-	info.si_code = code;
-	info.si_signo = sig;
-	info.si_errno = 0;
 	if (fault_code & FAULT_CODE_ITLB) {
 		addr = regs->tpc;
 	} else {
@@ -187,13 +183,11 @@ static void do_fault_siginfo(int code, int sig, struct pt_regs *regs,
 		else
 			addr = fault_addr;
 	}
-	info.si_addr = (void __user *) addr;
-	info.si_trapno = 0;
 
 	if (unlikely(show_unhandled_signals))
 		show_signal_msg(regs, sig, code, addr, current);
 
-	force_sig_info(sig, &info, current);
+	force_sig_fault(sig, code, (void __user *) addr, 0, current);
 }
 
 static unsigned int get_fault_insn(struct pt_regs *regs, unsigned int insn)
@@ -284,9 +278,10 @@ asmlinkage void __kprobes do_sparc64_fault(struct pt_regs *regs)
 	struct mm_struct *mm = current->mm;
 	struct vm_area_struct *vma;
 	unsigned int insn = 0;
-	int si_code, fault_code, fault;
+	int si_code, fault_code;
+	vm_fault_t fault;
 	unsigned long address, mm_rss;
-	unsigned int flags = FAULT_FLAG_DEFAULT;
+	unsigned int flags = FAULT_FLAG_ALLOW_RETRY | FAULT_FLAG_KILLABLE;
 
 	fault_code = get_thread_fault_code();
 
@@ -334,7 +329,7 @@ asmlinkage void __kprobes do_sparc64_fault(struct pt_regs *regs)
 
 	perf_sw_event(PERF_COUNT_SW_PAGE_FAULTS, 1, regs, address);
 
-	if (!down_read_trylock(&mm->mmap_sem)) {
+	if (!mmap_read_trylock(mm)) {
 		if ((regs->tstate & TSTATE_PRIV) &&
 		    !search_exception_tables(regs->tpc)) {
 			insn = get_fault_insn(regs, insn);
@@ -342,7 +337,7 @@ asmlinkage void __kprobes do_sparc64_fault(struct pt_regs *regs)
 		}
 
 retry:
-		down_read(&mm->mmap_sem);
+		mmap_read_lock(mm);
 	}
 
 	if (fault_code & FAULT_CODE_BAD_RA)
@@ -464,6 +459,7 @@ good_area:
 				      1, regs, address);
 		}
 		if (fault & VM_FAULT_RETRY) {
+			flags &= ~FAULT_FLAG_ALLOW_RETRY;
 			flags |= FAULT_FLAG_TRIED;
 
 			/* No need to up_read(&mm->mmap_sem) as we would
@@ -474,7 +470,7 @@ good_area:
 			goto retry;
 		}
 	}
-	up_read(&mm->mmap_sem);
+	mmap_read_unlock(mm);
 
 	mm_rss = get_mm_rss(mm);
 #if defined(CONFIG_TRANSPARENT_HUGEPAGE)
@@ -505,7 +501,7 @@ exit_exception:
 	 */
 bad_area:
 	insn = get_fault_insn(regs, insn);
-	up_read(&mm->mmap_sem);
+	mmap_read_unlock(mm);
 
 handle_kernel_fault:
 	do_kernel_fault(regs, si_code, fault_code, insn, address);
@@ -517,7 +513,7 @@ handle_kernel_fault:
  */
 out_of_memory:
 	insn = get_fault_insn(regs, insn);
-	up_read(&mm->mmap_sem);
+	mmap_read_unlock(mm);
 	if (!(regs->tstate & TSTATE_PRIV)) {
 		pagefault_out_of_memory();
 		goto exit_exception;
@@ -530,7 +526,7 @@ intr_or_no_mm:
 
 do_sigbus:
 	insn = get_fault_insn(regs, insn);
-	up_read(&mm->mmap_sem);
+	mmap_read_unlock(mm);
 
 	/*
 	 * Send a sigbus, regardless of whether we were in kernel

@@ -14,6 +14,7 @@
 #include <linux/bio.h>
 #include <linux/posix_acl.h>
 #include <linux/security.h>
+#include <linux/log2.h>
 
 #include "gfs2.h"
 #include "incore.h"
@@ -109,7 +110,8 @@ static void gfs2_ail_empty_gl(struct gfs2_glock *gl)
 	__gfs2_ail_flush(gl, 0, tr.tr_revokes);
 
 	gfs2_trans_end(sdp);
-	gfs2_log_flush(sdp, NULL, NORMAL_FLUSH);
+	gfs2_log_flush(sdp, NULL, GFS2_LOG_HEAD_FLUSH_NORMAL |
+		       GFS2_LFC_AIL_EMPTY_GL);
 }
 
 void gfs2_ail_flush(struct gfs2_glock *gl, bool fsync)
@@ -130,7 +132,8 @@ void gfs2_ail_flush(struct gfs2_glock *gl, bool fsync)
 		return;
 	__gfs2_ail_flush(gl, fsync, max_revokes);
 	gfs2_trans_end(sdp);
-	gfs2_log_flush(sdp, NULL, NORMAL_FLUSH);
+	gfs2_log_flush(sdp, NULL, GFS2_LOG_HEAD_FLUSH_NORMAL |
+		       GFS2_LFC_AIL_FLUSH);
 }
 
 /**
@@ -159,7 +162,8 @@ static void rgrp_go_sync(struct gfs2_glock *gl)
 		return;
 	GLOCK_BUG_ON(gl, gl->gl_state != LM_ST_EXCLUSIVE);
 
-	gfs2_log_flush(sdp, gl, NORMAL_FLUSH);
+	gfs2_log_flush(sdp, gl, GFS2_LOG_HEAD_FLUSH_NORMAL |
+		       GFS2_LFC_RGRP_GO_SYNC);
 	filemap_fdatawrite_range(mapping, gl->gl_vm.start, gl->gl_vm.end);
 	error = filemap_fdatawait_range(mapping, gl->gl_vm.start, gl->gl_vm.end);
 	mapping_set_error(mapping, error);
@@ -254,7 +258,8 @@ static void inode_go_sync(struct gfs2_glock *gl)
 
 	GLOCK_BUG_ON(gl, gl->gl_state != LM_ST_EXCLUSIVE);
 
-	gfs2_log_flush(gl->gl_name.ln_sbd, gl, NORMAL_FLUSH);
+	gfs2_log_flush(gl->gl_name.ln_sbd, gl, GFS2_LOG_HEAD_FLUSH_NORMAL |
+		       GFS2_LFC_INODE_GO_SYNC);
 	filemap_fdatawrite(metamapping);
 	if (isreg) {
 		struct address_space *mapping = ip->i_inode.i_mapping;
@@ -305,7 +310,9 @@ static void inode_go_inval(struct gfs2_glock *gl, int flags)
 	}
 
 	if (ip == GFS2_I(gl->gl_name.ln_sbd->sd_rindex)) {
-		gfs2_log_flush(gl->gl_name.ln_sbd, NULL, NORMAL_FLUSH);
+		gfs2_log_flush(gl->gl_name.ln_sbd, NULL,
+			       GFS2_LOG_HEAD_FLUSH_NORMAL |
+			       GFS2_LFC_INODE_GO_INVAL);
 		gl->gl_name.ln_sbd->sd_rindex_uptodate = 0;
 	}
 	if (ip && S_ISREG(ip->i_inode.i_mode))
@@ -380,8 +387,14 @@ static int gfs2_dinode_in(struct gfs2_inode *ip, const void *buf)
 	depth = be16_to_cpu(str->di_depth);
 	if (unlikely(depth > GFS2_DIR_MAX_DEPTH))
 		goto corrupt;
+	if ((ip->i_diskflags & GFS2_DIF_EXHASH) &&
+	    depth < ilog2(sdp->sd_hash_ptrs))
+		goto corrupt;
 	ip->i_depth = (u8)depth;
 	ip->i_entries = be32_to_cpu(str->di_entries);
+
+	if (gfs2_is_stuffed(ip) && ip->i_inode.i_size > gfs2_max_stuffed_size(ip))
+		goto corrupt;
 
 	if (S_ISREG(ip->i_inode.i_mode))
 		gfs2_set_aops(&ip->i_inode);
@@ -498,7 +511,8 @@ static void freeze_go_sync(struct gfs2_glock *gl)
 			gfs2_assert_withdraw(sdp, 0);
 		}
 		queue_work(gfs2_freeze_wq, &sdp->sd_freeze_work);
-		gfs2_log_flush(sdp, NULL, FREEZE_FLUSH);
+		gfs2_log_flush(sdp, NULL, GFS2_LOG_HEAD_FLUSH_FREEZE |
+			       GFS2_LFC_FREEZE_GO_SYNC);
 	}
 }
 

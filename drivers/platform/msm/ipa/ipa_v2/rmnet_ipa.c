@@ -1,13 +1,6 @@
-/* Copyright (c) 2014-2018, 2020, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2014-2018, 2020-2021, The Linux Foundation. All rights reserved.
  */
 
 /*
@@ -33,7 +26,6 @@
 #include "ipa_qmi_service.h"
 #include <linux/rmnet_ipa_fd_ioctl.h>
 #include <linux/ipa.h>
-#include <uapi/linux/net_map.h>
 #include <uapi/linux/msm_rmnet.h>
 #include <net/rmnet_config.h>
 
@@ -642,8 +634,7 @@ static int wwan_add_ul_flt_rule_to_ipa(void)
 	if (!param)
 		return -ENOMEM;
 
-	req = (struct ipa_fltr_installed_notif_req_msg_v01 *)
-		kzalloc(sizeof(struct ipa_fltr_installed_notif_req_msg_v01),
+	req = kzalloc(sizeof(struct ipa_fltr_installed_notif_req_msg_v01),
 			GFP_KERNEL);
 	if (!req) {
 		kfree(param);
@@ -923,7 +914,7 @@ int wwan_update_mux_channel_prop(void)
 	/* install UL filter rules */
 	if (egress_set) {
 		if (ipa_qmi_ctx &&
-			ipa_qmi_ctx->modem_cfg_emb_pipe_flt == false) {
+			!ipa_qmi_ctx->modem_cfg_emb_pipe_flt) {
 			IPAWANDBG("setup UL filter rules\n");
 			if (a7_ul_flt_set) {
 				IPAWANDBG("del previous UL filter rules\n");
@@ -1618,8 +1609,7 @@ static int ipa_wwan_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 			if (num_q6_rule != 0) {
 				/* already got Q6 UL filter rules*/
 				if (ipa_qmi_ctx &&
-					ipa_qmi_ctx->modem_cfg_emb_pipe_flt
-					== false) {
+					!ipa_qmi_ctx->modem_cfg_emb_pipe_flt) {
 					/* protect num_q6_rule */
 					mutex_lock(&add_mux_channel_lock);
 					rc = wwan_add_ul_flt_rule_to_ipa();
@@ -2253,7 +2243,7 @@ static int ipa_wwan_remove(struct platform_device *pdev)
 	ipa_del_dflt_wan_rt_tables();
 	ipa_del_a7_qmap_hdr();
 	ipa_del_mux_qmap_hdrs();
-	if (ipa_qmi_ctx && ipa_qmi_ctx->modem_cfg_emb_pipe_flt == false)
+	if (ipa_qmi_ctx && !ipa_qmi_ctx->modem_cfg_emb_pipe_flt)
 		wwan_del_ul_flt_rule_to_ipa();
 	ipa_cleanup_deregister_intf();
 	atomic_set(&is_initialized, 0);
@@ -2349,7 +2339,6 @@ static const struct dev_pm_ops rmnet_ipa_pm_ops = {
 static struct platform_driver rmnet_ipa_driver = {
 	.driver = {
 		.name = "rmnet_ipa",
-		.owner = THIS_MODULE,
 		.pm = &rmnet_ipa_pm_ops,
 		.of_match_table = rmnet_ipa_dt_match,
 	},
@@ -2478,7 +2467,7 @@ static void rmnet_ipa_get_stats_and_update(bool reset)
 	memset(resp, 0, sizeof(struct ipa_get_data_stats_resp_msg_v01));
 
 	req.ipa_stats_type = QMI_IPA_STATS_TYPE_PIPE_V01;
-	if (reset == true) {
+	if (reset) {
 		req.reset_stats_valid = true;
 		req.reset_stats = true;
 		IPAWANERR("Get the latest pipe-stats and reset it\n");
@@ -2642,7 +2631,7 @@ static int rmnet_ipa_set_data_quota_modem(struct wan_ioctl_set_data_quota *data)
 	index = find_vchannel_name_index(data->interface_name);
 	IPAWANERR("iface name %s, quota %lu\n",
 			  data->interface_name,
-			  (unsigned long int) data->quota_mbytes);
+			  (unsigned long) data->quota_mbytes);
 
 	if (index == MAX_NUM_OF_MUX_CHANNEL) {
 		IPAWANERR("%s is an invalid iface name\n",
@@ -2673,7 +2662,7 @@ static int rmnet_ipa_set_data_quota_wifi(struct wan_ioctl_set_data_quota *data)
 	wifi_quota.quota_bytes = data->quota_mbytes;
 	IPAWANDBG("iface name %s, quota %lu\n",
 		  data->interface_name,
-		  (unsigned long int) data->quota_mbytes);
+		  (unsigned long) data->quota_mbytes);
 
 	rc = ipa2_set_wlan_quota(&wifi_quota);
 	/* check if wlan-fw takes this quota-set */
@@ -2825,15 +2814,15 @@ static int rmnet_ipa_query_tethering_stats_wifi(
 	}
 
 	IPAWANDBG("v4_rx_p(%lu) v6_rx_p(%lu) v4_rx_b(%lu) v6_rx_b(%lu)\n",
-		(unsigned long int) data->ipv4_rx_packets,
-		(unsigned long int) data->ipv6_rx_packets,
-		(unsigned long int) data->ipv4_rx_bytes,
-		(unsigned long int) data->ipv6_rx_bytes);
+		(unsigned long) data->ipv4_rx_packets,
+		(unsigned long) data->ipv6_rx_packets,
+		(unsigned long) data->ipv4_rx_bytes,
+		(unsigned long) data->ipv6_rx_bytes);
 	IPAWANDBG("tx_p_v4(%lu)v6(%lu)tx_b_v4(%lu) v6(%lu)\n",
-		(unsigned long int) data->ipv4_tx_packets,
-		(unsigned long  int) data->ipv6_tx_packets,
-		(unsigned long int) data->ipv4_tx_bytes,
-		(unsigned long int) data->ipv6_tx_bytes);
+		(unsigned long) data->ipv4_tx_packets,
+		(unsigned long) data->ipv6_tx_packets,
+		(unsigned long) data->ipv4_tx_bytes,
+		(unsigned long) data->ipv6_tx_bytes);
 
 	kfree(sap_stats);
 	return rc;
@@ -2847,6 +2836,16 @@ static int rmnet_ipa_query_tethering_stats_modem(
 	struct ipa_get_data_stats_req_msg_v01 *req;
 	struct ipa_get_data_stats_resp_msg_v01 *resp;
 	int pipe_len, rc;
+
+	if (data != NULL) {
+		/* prevent string buffer overflows */
+		data->upstreamIface[IFNAMSIZ-1] = '\0';
+		data->tetherIface[IFNAMSIZ-1] = '\0';
+	} else if (!reset) {
+		/* only reset can have data == NULL*/
+		IPAWANERR("query without allocate tether_stats strucutre\n");
+		return -EINVAL;
+	}
 
 	req = kzalloc(sizeof(struct ipa_get_data_stats_req_msg_v01),
 			GFP_KERNEL);
@@ -2871,7 +2870,13 @@ static int rmnet_ipa_query_tethering_stats_modem(
 		IPAWANDBG("reset the pipe stats\n");
 	} else {
 		/* print tethered-client enum */
-		IPAWANDBG_LOW("Tethered-client enum(%d)\n", data->ipa_client);
+		if (data == NULL) {
+			kfree(req);
+			kfree(resp);
+			return -EINVAL;
+		}
+		IPAWANDBG_LOW("Tethered-client enum(%d)\n",
+				data->ipa_client);
 	}
 
 	rc = ipa_qmi_get_data_stats(req, resp);
@@ -2895,13 +2900,13 @@ static int rmnet_ipa_query_tethering_stats_modem(
 			resp->dl_dst_pipe_stats_list[pipe_len].pipe_index);
 			IPAWANDBG_LOW
 		("dl_p_v4(%lu)v6(%lu) dl_b_v4(%lu)v6(%lu)\n",
-		(unsigned long int)
+		(unsigned long)
 		 resp->dl_dst_pipe_stats_list[pipe_len].num_ipv4_packets,
-		(unsigned long int)
+		(unsigned long)
 		resp->dl_dst_pipe_stats_list[pipe_len].num_ipv6_packets,
-		(unsigned long int)
+		(unsigned long)
 		resp->dl_dst_pipe_stats_list[pipe_len].num_ipv4_bytes,
-		(unsigned long int)
+		(unsigned long)
 		resp->dl_dst_pipe_stats_list[pipe_len].num_ipv6_bytes);
 		if (ipa_get_client_uplink(
 			resp->dl_dst_pipe_stats_list[pipe_len].pipe_index)
@@ -2922,10 +2927,10 @@ static int rmnet_ipa_query_tethering_stats_modem(
 		}
 	}
 	IPAWANDBG_LOW("v4_rx_p(%lu) v6_rx_p(%lu) v4_rx_b(%lu) v6_rx_b(%lu)\n",
-		(unsigned long int) data->ipv4_rx_packets,
-		(unsigned long int) data->ipv6_rx_packets,
-		(unsigned long int) data->ipv4_rx_bytes,
-		(unsigned long int) data->ipv6_rx_bytes);
+		(unsigned long) data->ipv4_rx_packets,
+		(unsigned long) data->ipv6_rx_packets,
+		(unsigned long) data->ipv4_rx_bytes,
+		(unsigned long) data->ipv6_rx_bytes);
 
 	if (resp->ul_src_pipe_stats_list_valid) {
 		for (pipe_len = 0; pipe_len < resp->ul_src_pipe_stats_list_len;
@@ -2935,13 +2940,13 @@ static int rmnet_ipa_query_tethering_stats_modem(
 			resp->ul_src_pipe_stats_list[pipe_len].pipe_index);
 			IPAWANDBG_LOW
 		("ul_p_v4(%lu)v6(%lu)ul_b_v4(%lu)v6(%lu)\n",
-		(unsigned long int)
+		(unsigned long)
 		 resp->ul_src_pipe_stats_list[pipe_len].num_ipv4_packets,
-		(unsigned long int)
+		(unsigned long)
 		resp->ul_src_pipe_stats_list[pipe_len].num_ipv6_packets,
-		(unsigned long int)
+		(unsigned long)
 		resp->ul_src_pipe_stats_list[pipe_len].num_ipv4_bytes,
-		(unsigned long int)
+		(unsigned long)
 		resp->ul_src_pipe_stats_list[pipe_len].num_ipv6_bytes);
 		if (ipa_get_client_uplink(
 			resp->ul_src_pipe_stats_list[pipe_len].pipe_index)
@@ -2962,10 +2967,10 @@ static int rmnet_ipa_query_tethering_stats_modem(
 		}
 	}
 	IPAWANDBG_LOW("tx_p_v4(%lu)v6(%lu)tx_b_v4(%lu) v6(%lu)\n",
-		(unsigned long int) data->ipv4_tx_packets,
-		(unsigned long  int) data->ipv6_tx_packets,
-		(unsigned long int) data->ipv4_tx_bytes,
-		(unsigned long int) data->ipv6_tx_bytes);
+		(unsigned long) data->ipv4_tx_packets,
+		(unsigned long) data->ipv6_tx_packets,
+		(unsigned long) data->ipv4_tx_bytes,
+		(unsigned long) data->ipv6_tx_bytes);
 	kfree(req);
 	kfree(resp);
 	return 0;
@@ -3123,7 +3128,7 @@ void ipa_broadcast_quota_reach_ind(u32 mux_id,
 		}
 	}
 
-	res = snprintf(alert_msg, IPA_QUOTA_REACH_ALERT_MAX_SIZE,
+	res = scnprintf(alert_msg, IPA_QUOTA_REACH_ALERT_MAX_SIZE,
 			"ALERT_NAME=%s", "quotaReachedAlert");
 	if (res >= IPA_QUOTA_REACH_ALERT_MAX_SIZE) {
 		IPAWANERR("message too long (%d)", res);
@@ -3132,10 +3137,10 @@ void ipa_broadcast_quota_reach_ind(u32 mux_id,
 
 	/* posting msg for L-release for CNE */
 	if (upstream_type == IPA_UPSTEAM_MODEM) {
-		res = snprintf(iface_name_l, IPA_QUOTA_REACH_IF_NAME_MAX_SIZE,
+		res = scnprintf(iface_name_l, IPA_QUOTA_REACH_IF_NAME_MAX_SIZE,
 			"UPSTREAM=%s", mux_channel[index].vchannel_name);
 	} else {
-		res = snprintf(iface_name_l, IPA_QUOTA_REACH_IF_NAME_MAX_SIZE,
+		res = scnprintf(iface_name_l, IPA_QUOTA_REACH_IF_NAME_MAX_SIZE,
 			"UPSTREAM=%s", IPA_UPSTEAM_WLAN_IFACE_NAME);
 	}
 	if (res >= IPA_QUOTA_REACH_IF_NAME_MAX_SIZE) {
@@ -3145,10 +3150,10 @@ void ipa_broadcast_quota_reach_ind(u32 mux_id,
 
 	/* posting msg for M-release for CNE */
 	if (upstream_type == IPA_UPSTEAM_MODEM) {
-		res = snprintf(iface_name_m, IPA_QUOTA_REACH_IF_NAME_MAX_SIZE,
+		res = scnprintf(iface_name_m, IPA_QUOTA_REACH_IF_NAME_MAX_SIZE,
 			"INTERFACE=%s", mux_channel[index].vchannel_name);
 	} else {
-		res = snprintf(iface_name_m, IPA_QUOTA_REACH_IF_NAME_MAX_SIZE,
+		res = scnprintf(iface_name_m, IPA_QUOTA_REACH_IF_NAME_MAX_SIZE,
 			"INTERFACE=%s", IPA_UPSTEAM_WLAN_IFACE_NAME);
 	}
 	if (res >= IPA_QUOTA_REACH_IF_NAME_MAX_SIZE) {

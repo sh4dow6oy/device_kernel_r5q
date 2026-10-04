@@ -75,7 +75,8 @@ struct fib_rules_ops {
 	int			(*configure)(struct fib_rule *,
 					     struct sk_buff *,
 					     struct fib_rule_hdr *,
-					     struct nlattr **);
+					     struct nlattr **,
+					     struct netlink_ext_ack *);
 	int			(*delete)(struct fib_rule *);
 	int			(*compare)(struct fib_rule *,
 					   struct fib_rule_hdr *,
@@ -102,6 +103,7 @@ struct fib_rule_notifier_info {
 };
 
 #define FRA_GENERIC_POLICY \
+	[FRA_UNSPEC]	= { .strict_start_type = FRA_DPORT_RANGE + 1 }, \
 	[FRA_IIFNAME]	= { .type = NLA_STRING, .len = IFNAMSIZ - 1 }, \
 	[FRA_OIFNAME]	= { .type = NLA_STRING, .len = IFNAMSIZ - 1 }, \
 	[FRA_PRIORITY]	= { .type = NLA_U32 }, \
@@ -123,6 +125,11 @@ struct fib_rule_notifier_info {
 static inline void fib_rule_get(struct fib_rule *rule)
 {
 	refcount_inc(&rule->refcnt);
+}
+
+static inline bool fib_rule_get_safe(struct fib_rule *rule)
+{
+	return refcount_inc_not_zero(&rule->refcnt);
 }
 
 static inline void fib_rule_put(struct fib_rule *rule)

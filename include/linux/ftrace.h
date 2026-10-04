@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
  * Ftrace header.  For implementation details beyond the random comments
- * scattered below, see: Documentation/trace/ftrace-design.txt
+ * scattered below, see: Documentation/trace/ftrace-design.rst
  */
 
 #ifndef _LINUX_FTRACE_H
@@ -51,6 +51,31 @@ static inline void early_trace_init(void) { }
 
 struct module;
 struct ftrace_hash;
+struct ftrace_direct_func;
+
+#if defined(CONFIG_FUNCTION_TRACER) && defined(CONFIG_MODULES) && \
+	defined(CONFIG_DYNAMIC_FTRACE)
+const char *
+ftrace_mod_address_lookup(unsigned long addr, unsigned long *size,
+		   unsigned long *off, char **modname, char *sym);
+int ftrace_mod_get_kallsym(unsigned int symnum, unsigned long *value,
+			   char *type, char *name,
+			   char *module_name, int *exported);
+#else
+static inline const char *
+ftrace_mod_address_lookup(unsigned long addr, unsigned long *size,
+		   unsigned long *off, char **modname, char *sym)
+{
+	return NULL;
+}
+static inline int ftrace_mod_get_kallsym(unsigned int symnum, unsigned long *value,
+					 char *type, char *name,
+					 char *module_name, int *exported)
+{
+	return -1;
+}
+#endif
+
 
 #ifdef CONFIG_FUNCTION_TRACER
 
@@ -153,8 +178,10 @@ struct ftrace_ops_hash {
 };
 
 void ftrace_free_init_mem(void);
+void ftrace_free_mem(struct module *mod, void *start, void *end);
 #else
 static inline void ftrace_free_init_mem(void) { }
+static inline void ftrace_free_mem(struct module *mod, void *start, void *end) { }
 #endif
 
 /*
@@ -203,7 +230,6 @@ extern enum ftrace_tracing_type_t ftrace_tracing_type;
  */
 int register_ftrace_function(struct ftrace_ops *ops);
 int unregister_ftrace_function(struct ftrace_ops *ops);
-void clear_ftrace_function(void);
 
 #ifdef CONFIG_CFI_CLANG
 /* Use a C stub with the correct type for CFI */
@@ -223,30 +249,50 @@ extern void ftrace_stub(unsigned long a0, unsigned long a1,
  */
 #define register_ftrace_function(ops) ({ 0; })
 #define unregister_ftrace_function(ops) ({ 0; })
-static inline int ftrace_nr_registered_ops(void)
-{
-	return 0;
-}
-static inline void clear_ftrace_function(void) { }
 static inline void ftrace_kill(void) { }
 static inline void ftrace_free_init_mem(void) { }
+static inline void ftrace_free_mem(struct module *mod, void *start, void *end) { }
 #endif /* CONFIG_FUNCTION_TRACER */
+
+struct ftrace_func_entry {
+	struct hlist_node hlist;
+	unsigned long ip;
+	unsigned long direct; /* for direct lookup only */
+};
+
+struct dyn_ftrace;
 
 #ifdef CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS
 int register_ftrace_direct(unsigned long ip, unsigned long addr);
 int unregister_ftrace_direct(unsigned long ip, unsigned long addr);
 int modify_ftrace_direct(unsigned long ip, unsigned long old_addr, unsigned long new_addr);
+struct ftrace_direct_func *ftrace_find_direct_func(unsigned long addr);
+int ftrace_modify_direct_caller(struct ftrace_func_entry *entry,
+				struct dyn_ftrace *rec,
+				unsigned long old_addr,
+				unsigned long new_addr);
 #else
 static inline int register_ftrace_direct(unsigned long ip, unsigned long addr)
 {
-	return -ENODEV;
+	return -ENOTSUPP;
 }
 static inline int unregister_ftrace_direct(unsigned long ip, unsigned long addr)
 {
-	return -ENODEV;
+	return -ENOTSUPP;
 }
 static inline int modify_ftrace_direct(unsigned long ip,
 				       unsigned long old_addr, unsigned long new_addr)
+{
+	return -ENOTSUPP;
+}
+static inline struct ftrace_direct_func *ftrace_find_direct_func(unsigned long addr)
+{
+	return NULL;
+}
+static inline int ftrace_modify_direct_caller(struct ftrace_func_entry *entry,
+					      struct dyn_ftrace *rec,
+					      unsigned long old_addr,
+					      unsigned long new_addr)
 {
 	return -ENODEV;
 }
@@ -326,8 +372,6 @@ static inline void stack_tracer_enable(void) { }
 int ftrace_arch_code_modify_prepare(void);
 int ftrace_arch_code_modify_post_process(void);
 
-struct dyn_ftrace;
-
 enum ftrace_bug_type {
 	FTRACE_BUG_UNKNOWN,
 	FTRACE_BUG_INIT,
@@ -349,7 +393,7 @@ struct seq_file;
 
 extern int ftrace_text_reserved(const void *start, const void *end);
 
-extern int ftrace_nr_registered_ops(void);
+struct ftrace_ops *ftrace_ops_trampoline(unsigned long addr);
 
 bool is_ftrace_trampoline(unsigned long addr);
 
@@ -729,16 +773,7 @@ static __always_inline unsigned long get_lock_parent_ip(void)
 	return CALLER_ADDR2;
 }
 
-#ifdef CONFIG_IRQSOFF_TRACER
-  extern void time_hardirqs_on(unsigned long a0, unsigned long a1);
-  extern void time_hardirqs_off(unsigned long a0, unsigned long a1);
-#else
-  static inline void time_hardirqs_on(unsigned long a0, unsigned long a1) { }
-  static inline void time_hardirqs_off(unsigned long a0, unsigned long a1) { }
-#endif
-
-#if defined(CONFIG_PREEMPT_TRACER) || \
-	(defined(CONFIG_DEBUG_PREEMPT) && defined(CONFIG_PREEMPTIRQ_EVENTS))
+#ifdef CONFIG_TRACE_PREEMPT_TOGGLE
   extern void trace_preempt_on(unsigned long a0, unsigned long a1);
   extern void trace_preempt_off(unsigned long a0, unsigned long a1);
 #else
@@ -786,11 +821,6 @@ typedef int (*trace_func_graph_ent_t)(struct ftrace_graph_ent *); /* entry */
 
 #ifdef CONFIG_FUNCTION_GRAPH_TRACER
 
-/* for init task */
-#define INIT_FTRACE_GRAPH				\
-	.ret_stack		= NULL,			\
-	.tracing_graph_pause	= ATOMIC_INIT(0),
-
 /*
  * Stack of return addresses for functions
  * of a thread.
@@ -819,8 +849,8 @@ struct ftrace_ret_stack {
 extern void return_to_handler(void);
 
 extern int
-ftrace_push_return_trace(unsigned long ret, unsigned long func, int *depth,
-			 unsigned long frame_pointer, unsigned long *retp);
+function_graph_enter(unsigned long ret, unsigned long func,
+		     unsigned long frame_pointer, unsigned long *retp);
 
 unsigned long ftrace_graph_ret_addr(struct task_struct *task, int *idx,
 				    unsigned long ret, unsigned long *retp);
@@ -868,7 +898,6 @@ static inline void unpause_graph_tracing(void)
 #else /* !CONFIG_FUNCTION_GRAPH_TRACER */
 
 #define __notrace_funcgraph
-#define INIT_FTRACE_GRAPH
 
 static inline void ftrace_graph_init_task(struct task_struct *t) { }
 static inline void ftrace_graph_exit_task(struct task_struct *t) { }
@@ -947,20 +976,12 @@ extern int tracepoint_printk;
 extern void disable_trace_on_warning(void);
 extern int __disable_trace_on_warning;
 
-#ifdef CONFIG_PREEMPT
-#define INIT_TRACE_RECURSION		.trace_recursion = 0,
-#endif
-
 int tracepoint_printk_sysctl(struct ctl_table *table, int write,
 			     void *buffer, size_t *lenp, loff_t *ppos);
 
 #else /* CONFIG_TRACING */
 static inline void  disable_trace_on_warning(void) { }
 #endif /* CONFIG_TRACING */
-
-#ifndef INIT_TRACE_RECURSION
-#define INIT_TRACE_RECURSION
-#endif
 
 #ifdef CONFIG_FTRACE_SYSCALLS
 

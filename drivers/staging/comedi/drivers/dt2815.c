@@ -1,19 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * comedi/drivers/dt2815.c
  * Hardware driver for Data Translation DT2815
  *
  * COMEDI - Linux Control and Measurement Device Interface
  * Copyright (C) 1999 Anders Blomdell <anders.blomdell@control.lth.se>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 /*
  * Driver: dt2815
@@ -183,6 +174,18 @@ static int dt2815_attach(struct comedi_device *dev, struct comedi_devconfig *it)
 	for (i = 0; i < 8; i++) {
 		devpriv->range_type_list[i] = (it->options[5 + i])
 		    ? current_range_type : voltage_range_type;
+	}
+
+	/*
+	 * Check if hardware is present before attempting any I/O operations.
+	 * Reading 0xff from status register typically indicates no hardware
+	 * on the bus (floating bus reads as all 1s).
+	 */
+	if (inb(dev->iobase + DT2815_STATUS) == 0xff) {
+		dev_err(dev->class_dev,
+			"No hardware detected at I/O base 0x%lx\n",
+			dev->iobase);
+		return -ENODEV;
 	}
 
 	/* Init the 2815 */

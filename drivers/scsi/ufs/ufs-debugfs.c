@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /* Copyright (c) 2013-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -155,14 +156,14 @@ static bool inject_fatal_err_tr(struct ufs_hba *hba, u8 ocs_err)
 
 	tag = find_first_bit(&hba->outstanding_reqs, hba->nutrs);
 	if (tag == hba->nutrs)
-		return 0;
+		return false;
 
 	ufshcd_writel(hba, ~(1 << tag), REG_UTP_TRANSFER_REQ_LIST_CLEAR);
 	(&hba->lrb[tag])->utr_descriptor_ptr->header.dword_2 =
 							cpu_to_be32(ocs_err);
 
 	/* fatal error injected */
-	return 1;
+	return true;
 }
 
 static bool inject_fatal_err_tm(struct ufs_hba *hba, u8 ocs_err)
@@ -171,14 +172,14 @@ static bool inject_fatal_err_tm(struct ufs_hba *hba, u8 ocs_err)
 
 	tag = find_first_bit(&hba->outstanding_tasks, hba->nutmrs);
 	if (tag == hba->nutmrs)
-		return 0;
+		return false;
 
 	ufshcd_writel(hba, ~(1 << tag), REG_UTP_TASK_REQ_LIST_CLEAR);
 	(&hba->utmrdl_base_addr[tag])->header.dword_2 =
 						cpu_to_be32(ocs_err);
 
 	/* fatal error injected */
-	return 1;
+	return true;
 }
 
 static bool inject_cmd_hang_tr(struct ufs_hba *hba)
@@ -187,14 +188,14 @@ static bool inject_cmd_hang_tr(struct ufs_hba *hba)
 
 	tag = find_first_bit(&hba->outstanding_reqs, hba->nutrs);
 	if (tag == hba->nutrs)
-		return 0;
+		return false;
 
 	__clear_bit(tag, &hba->outstanding_reqs);
 	hba->lrb[tag].cmd = NULL;
 	__clear_bit(tag, &hba->lrb_in_use);
 
 	/* command hang injected */
-	return 1;
+	return true;
 }
 
 static int inject_cmd_hang_tm(struct ufs_hba *hba)
@@ -236,7 +237,7 @@ set_ocs:
 			inject_cmd_hang_tm(hba);
 		break;
 	default:
-		BUG();
+		WARN_ON(1);
 		/* some configurations ignore panics caused by BUG() */
 		break;
 	}
@@ -389,7 +390,7 @@ static const struct file_operations ufsdbg_err_inj_scenario_ops = {
 	.open		= ufsdbg_err_inj_scenario_open,
 	.read		= seq_read,
 	.write		= ufsdbg_err_inj_scenario_write,
-	.release	= single_release,
+	.release        = single_release,
 };
 
 static int ufsdbg_err_inj_stats_read(struct seq_file *file, void *data)
@@ -431,7 +432,7 @@ static const struct file_operations ufsdbg_err_inj_stats_ops = {
 	.open		= ufsdbg_err_inj_stats_open,
 	.read		= seq_read,
 	.write		= ufsdbg_err_inj_stats_write,
-	.release	= single_release,
+	.release        = single_release,
 };
 
 static void ufsdbg_setup_fault_injection(struct ufs_hba *hba)
@@ -457,20 +458,19 @@ static void ufsdbg_setup_fault_injection(struct ufs_hba *hba)
 	}
 
 	hba->debugfs_files.err_inj_scenario =
-		debugfs_create_file("err_inj_scenario",
-				   S_IRUGO | S_IWUGO,
+		debugfs_create_file("err_inj_scenario", 0600,
 				   hba->debugfs_files.debugfs_root, hba,
 				   &ufsdbg_err_inj_scenario_ops);
 
 	if (!hba->debugfs_files.err_inj_scenario) {
 		dev_err(hba->dev,
-			"%s: Could not create debugfs entry for err_scenario",
+			"%s: Could not create debugfs entry for err_scenario\n",
 				__func__);
 		goto fail_err_inj_scenario;
 	}
 
 	hba->debugfs_files.err_inj_stats =
-		debugfs_create_file("err_inj_stats", S_IRUSR | S_IWUSR,
+		debugfs_create_file("err_inj_stats", 0600,
 				    hba->debugfs_files.debugfs_root, hba,
 				    &ufsdbg_err_inj_stats_ops);
 	if (!hba->debugfs_files.err_inj_stats) {
@@ -560,7 +560,7 @@ static int ufsdbg_tag_stats_show(struct seq_file *file, void *data)
 	spin_unlock_irqrestore(hba->host->host_lock, flags);
 
 	if (is_tag_empty)
-		pr_debug("%s: All tags statistics are empty", __func__);
+		pr_debug("%s: All tags statistics are empty\n", __func__);
 
 exit:
 	return 0;
@@ -592,10 +592,10 @@ static ssize_t ufsdbg_tag_stats_write(struct file *filp,
 
 	if (!val) {
 		ufs_stats->enabled = false;
-		pr_debug("%s: Disabling UFS tag statistics", __func__);
+		pr_debug("%s: Disabling UFS tag statistics\n", __func__);
 	} else {
 		ufs_stats->enabled = true;
-		pr_debug("%s: Enabling & Resetting UFS tag statistics",
+		pr_debug("%s: Enabling & Resetting UFS tag statistics\n",
 			 __func__);
 		memset(hba->ufs_stats.tag_stats[0], 0,
 			sizeof(**hba->ufs_stats.tag_stats) *
@@ -605,7 +605,7 @@ static ssize_t ufsdbg_tag_stats_write(struct file *filp,
 		ufs_stats->q_depth = 0;
 		for_each_set_bit_from(bit, &hba->outstanding_reqs, hba->nutrs)
 			ufs_stats->q_depth++;
-		pr_debug("%s: Enabled UFS tag statistics", __func__);
+		pr_debug("%s: Enabled UFS tag statistics\n", __func__);
 	}
 
 	spin_unlock_irqrestore(hba->host->host_lock, flags);
@@ -616,7 +616,7 @@ static const struct file_operations ufsdbg_tag_stats_fops = {
 	.open		= ufsdbg_tag_stats_open,
 	.read		= seq_read,
 	.write		= ufsdbg_tag_stats_write,
-	.release	= single_release,
+	.release        = single_release,
 };
 
 static int ufsdbg_query_stats_show(struct seq_file *file, void *data)
@@ -688,7 +688,7 @@ static const struct file_operations ufsdbg_query_stats_fops = {
 	.open		= ufsdbg_query_stats_open,
 	.read		= seq_read,
 	.write		= ufsdbg_query_stats_write,
-	.release	= single_release,
+	.release        = single_release,
 };
 
 static int ufsdbg_err_stats_show(struct seq_file *file, void *data)
@@ -782,7 +782,7 @@ static ssize_t ufsdbg_err_stats_write(struct file *filp,
 	ufs_stats = &hba->ufs_stats;
 	spin_lock_irqsave(hba->host->host_lock, flags);
 
-	pr_debug("%s: Resetting UFS error statistics", __func__);
+	pr_debug("%s: Resetting UFS error statistics\n", __func__);
 	memset(ufs_stats->err_stats, 0, sizeof(hba->ufs_stats.err_stats));
 
 	spin_unlock_irqrestore(hba->host->host_lock, flags);
@@ -793,7 +793,7 @@ static const struct file_operations ufsdbg_err_stats_fops = {
 	.open		= ufsdbg_err_stats_open,
 	.read		= seq_read,
 	.write		= ufsdbg_err_stats_write,
-	.release	= single_release,
+	.release        = single_release,
 };
 
 static int ufshcd_init_statistics(struct ufs_hba *hba)
@@ -803,7 +803,7 @@ static int ufshcd_init_statistics(struct ufs_hba *hba)
 	int i;
 
 	stats->enabled = false;
-	stats->tag_stats = kzalloc(sizeof(*stats->tag_stats) * hba->nutrs,
+	stats->tag_stats = kcalloc(hba->nutrs, sizeof(*stats->tag_stats),
 			GFP_KERNEL);
 	if (!hba->ufs_stats.tag_stats)
 		goto no_mem;
@@ -821,7 +821,7 @@ static int ufshcd_init_statistics(struct ufs_hba *hba)
 	goto exit;
 
 no_mem:
-	dev_err(hba->dev, "%s: Unable to allocate UFS tag_stats", __func__);
+	dev_err(hba->dev, "%s: Unable to allocate UFS tag_stats\n", __func__);
 	ret = -ENOMEM;
 exit:
 	return ret;
@@ -873,44 +873,7 @@ static int ufsdbg_host_regs_open(struct inode *inode, struct file *file)
 static const struct file_operations ufsdbg_host_regs_fops = {
 	.open		= ufsdbg_host_regs_open,
 	.read		= seq_read,
-	.release	= single_release,
-};
-
-static int ufsdbg_phy_regs_show(struct seq_file *file, void *data)
-{
-	struct ufs_hba *hba = (struct ufs_hba *)file->private;
-	ufshcd_print_phy_regs(hba);
-
-	return 0;
-}
-
-static int ufsdbg_phy_regs_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, ufsdbg_phy_regs_show, inode->i_private);
-}
-
-static const struct file_operations ufsdbg_phy_regs_fops = {
-	.open		= ufsdbg_phy_regs_open,
-	.read		= seq_read,
-};
-
-static int ufsdbg_clk_state_show(struct seq_file *file, void *data)
-{
-	struct ufs_hba *hba = (struct ufs_hba *)file->private;
-	ufshcd_print_ufs_clk_state(hba);
-	ufshcd_print_phy_clk_state(hba);
-
-	return 0;
-}
-
-static int ufsdbg_clk_state_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, ufsdbg_clk_state_show, inode->i_private);
-}
-
-static const struct file_operations ufsdbg_clk_state_fops = {
-	.open		= ufsdbg_clk_state_open,
-	.read		= seq_read,
+	.release        = single_release,
 };
 
 static int ufsdbg_dump_device_desc_show(struct seq_file *file, void *data)
@@ -1093,7 +1056,7 @@ static const struct file_operations ufsdbg_dump_device_desc = {
 static int ufsdbg_power_mode_show(struct seq_file *file, void *data)
 {
 	struct ufs_hba *hba = (struct ufs_hba *)file->private;
-	char *names[] = {
+	static const char * const names[] = {
 		"INVALID MODE",
 		"FAST MODE",
 		"SLOW MODE",
@@ -1383,7 +1346,7 @@ static int ufsdbg_dme_read(void *data, u64 *attr_val, bool peer)
 	int ret;
 	struct ufs_hba *hba = data;
 	u32 attr_id, read_val = 0;
-	int (*read_func)(struct ufs_hba *, u32, u32 *);
+	int (*read_func)(struct ufs_hba *hba, u32 attr_sel, u32 *mib_val);
 	u32 attr_sel;
 
 	if (!hba)
@@ -1431,7 +1394,7 @@ static int ufsdbg_dme_local_read(void *data, u64 *attr_val)
 	return ufsdbg_dme_read(data, attr_val, false);
 }
 
-DEFINE_SIMPLE_ATTRIBUTE(ufsdbg_dme_local_read_ops,
+DEFINE_DEBUGFS_ATTRIBUTE(ufsdbg_dme_local_read_ops,
 			ufsdbg_dme_local_read,
 			ufsdbg_dme_local_set_attr_id,
 			"%llu\n");
@@ -1458,7 +1421,7 @@ static int ufsdbg_dme_peer_set_attr_id(void *data, u64 attr_id)
 	return 0;
 }
 
-DEFINE_SIMPLE_ATTRIBUTE(ufsdbg_dme_peer_read_ops,
+DEFINE_DEBUGFS_ATTRIBUTE(ufsdbg_dme_peer_read_ops,
 			ufsdbg_dme_peer_read,
 			ufsdbg_dme_peer_set_attr_id,
 			"%llu\n");
@@ -1488,7 +1451,7 @@ static int ufsdbg_dbg_print_en_set(void *data, u64 attr_id)
 	return 0;
 }
 
-DEFINE_SIMPLE_ATTRIBUTE(ufsdbg_dbg_print_en_ops,
+DEFINE_DEBUGFS_ATTRIBUTE(ufsdbg_dbg_print_en_ops,
 			ufsdbg_dbg_print_en_read,
 			ufsdbg_dbg_print_en_set,
 			"%llu\n");
@@ -1555,56 +1518,7 @@ static const struct file_operations ufsdbg_req_stats_desc = {
 	.open		= ufsdbg_req_stats_open,
 	.read		= seq_read,
 	.write		= ufsdbg_req_stats_write,
-	.release	= single_release,
-};
-
-
-static int ufsdbg_reset_controller_show(struct seq_file *file, void *data)
-{
-	seq_puts(file, "echo 1 > /sys/kernel/debug/.../reset_controller\n");
-	seq_puts(file, "resets the UFS controller and restores its operational state\n\n");
-
-	return 0;
-}
-
-static int ufsdbg_reset_controller_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, ufsdbg_reset_controller_show,
-						inode->i_private);
-}
-
-static ssize_t ufsdbg_reset_controller_write(struct file *filp,
-		const char __user *ubuf, size_t cnt, loff_t *ppos)
-{
-	struct ufs_hba *hba = filp->f_mapping->host->i_private;
-	unsigned long flags;
-
-	pm_runtime_get_sync(hba->dev);
-	ufshcd_hold(hba, false);
-
-	spin_lock_irqsave(hba->host->host_lock, flags);
-	/*
-	 * simulating a dummy error in order to "convince"
-	 * eh_work to actually reset the controller
-	 */
-	hba->saved_err |= INT_FATAL_ERRORS;
-	hba->silence_err_logs = true;
-	schedule_work(&hba->eh_work);
-	spin_unlock_irqrestore(hba->host->host_lock, flags);
-
-	flush_work(&hba->eh_work);
-
-	ufshcd_release(hba, false);
-	pm_runtime_put_sync(hba->dev);
-
-	return cnt;
-}
-
-static const struct file_operations ufsdbg_reset_controller = {
-	.open		= ufsdbg_reset_controller_open,
-	.read		= seq_read,
-	.write		= ufsdbg_reset_controller_write,
-	.release	= single_release,
+	.release        = single_release,
 };
 
 static int ufsdbg_clear_err_state(void *data, u64 val)
@@ -1642,7 +1556,7 @@ void ufsdbg_clr_err_state(struct ufs_hba *hba)
 	hba->debugfs_files.err_occurred = false;
 }
 
-DEFINE_SIMPLE_ATTRIBUTE(ufsdbg_err_state,
+DEFINE_DEBUGFS_ATTRIBUTE(ufsdbg_err_state,
 			ufsdbg_read_err_state,
 			ufsdbg_clear_err_state,
 			"%llu\n");
@@ -1650,7 +1564,7 @@ DEFINE_SIMPLE_ATTRIBUTE(ufsdbg_err_state,
 void ufsdbg_add_debugfs(struct ufs_hba *hba)
 {
 	if (!hba) {
-		pr_err("%s: NULL hba, exiting", __func__);
+		pr_err("%s: NULL hba, exiting\n", __func__);
 		return;
 	}
 
@@ -1666,7 +1580,7 @@ void ufsdbg_add_debugfs(struct ufs_hba *hba)
 		 * create the directory
 		 */
 		dev_err(hba->dev,
-			"%s: NULL debugfs root directory, exiting", __func__);
+			"%s: NULL debugfs root directory, exiting\n", __func__);
 		goto err_no_root;
 	}
 
@@ -1674,100 +1588,85 @@ void ufsdbg_add_debugfs(struct ufs_hba *hba)
 					hba->debugfs_files.debugfs_root);
 	if (!hba->debugfs_files.stats_folder) {
 		dev_err(hba->dev,
-			"%s: NULL stats_folder, exiting", __func__);
+			"%s: NULL stats_folder, exiting\n", __func__);
 		goto err;
 	}
 
 	hba->debugfs_files.tag_stats =
-		debugfs_create_file("tag_stats", S_IRUSR | S_IWUSR,
+		debugfs_create_file("tag_stats", 0600,
 					   hba->debugfs_files.stats_folder, hba,
 					   &ufsdbg_tag_stats_fops);
 	if (!hba->debugfs_files.tag_stats) {
-		dev_err(hba->dev, "%s:  NULL tag_stats file, exiting",
+		dev_err(hba->dev, "%s:  NULL tag_stats file, exiting\n",
 			__func__);
 		goto err;
 	}
 
 	hba->debugfs_files.query_stats =
-		debugfs_create_file("query_stats", S_IRUSR | S_IWUSR,
+		debugfs_create_file("query_stats", 0600,
 					   hba->debugfs_files.stats_folder, hba,
 					   &ufsdbg_query_stats_fops);
 	if (!hba->debugfs_files.query_stats) {
-		dev_err(hba->dev, "%s:  NULL query_stats file, exiting",
+		dev_err(hba->dev, "%s:  NULL query_stats file, exiting\n",
 			__func__);
 		goto err;
 	}
 
 	hba->debugfs_files.err_stats =
-		debugfs_create_file("err_stats", S_IRUSR | S_IWUSR,
+		debugfs_create_file("err_stats", 0600,
 					   hba->debugfs_files.stats_folder, hba,
 					   &ufsdbg_err_stats_fops);
 	if (!hba->debugfs_files.err_stats) {
-		dev_err(hba->dev, "%s:  NULL err_stats file, exiting",
+		dev_err(hba->dev, "%s:  NULL err_stats file, exiting\n",
 			__func__);
 		goto err;
 	}
 
 	if (ufshcd_init_statistics(hba)) {
-		dev_err(hba->dev, "%s: Error initializing statistics",
+		dev_err(hba->dev, "%s: Error initializing statistics\n",
 			__func__);
 		goto err;
 	}
 
-	hba->debugfs_files.host_regs = debugfs_create_file("host_regs", S_IRUSR,
+	hba->debugfs_files.host_regs = debugfs_create_file("host_regs", 0400,
 				hba->debugfs_files.debugfs_root, hba,
 				&ufsdbg_host_regs_fops);
 	if (!hba->debugfs_files.host_regs) {
-		dev_err(hba->dev, "%s:  NULL hcd regs file, exiting", __func__);
+		dev_err(hba->dev, "%s:  NULL hcd regs file, exiting\n",
+			__func__);
 		goto err;
 	}
 
-	hba->debugfs_files.phy_regs = debugfs_create_file("phy_regs", S_IRUSR,
-			hba->debugfs_files.debugfs_root, hba,
-			&ufsdbg_phy_regs_fops);
-	if (!hba->debugfs_files.phy_regs) {
-		dev_err(hba->dev, "%s:  NULL phy regs file, exiting", __func__);
-		goto err;
-	}
-
-	hba->debugfs_files.clk_state = debugfs_create_file("clk_state", S_IRUSR,
-			hba->debugfs_files.debugfs_root, hba,
-			&ufsdbg_clk_state_fops);
-	if (!hba->debugfs_files.clk_state) {
-		dev_err(hba->dev, "%s:  NULL clk state file, exiting", __func__);
-		goto err;
-	}
-
-	hba->debugfs_files.show_hba = debugfs_create_file("show_hba", S_IRUSR,
+	hba->debugfs_files.show_hba = debugfs_create_file("show_hba", 0400,
 				hba->debugfs_files.debugfs_root, hba,
 				&ufsdbg_show_hba_fops);
 	if (!hba->debugfs_files.show_hba) {
-		dev_err(hba->dev, "%s:  NULL hba file, exiting", __func__);
+		dev_err(hba->dev, "%s:  NULL hba file, exiting\n", __func__);
 		goto err;
 	}
 
 	hba->debugfs_files.dump_dev_desc =
-		debugfs_create_file("dump_device_desc", S_IRUSR,
+		debugfs_create_file("dump_device_desc", 0400,
 				    hba->debugfs_files.debugfs_root, hba,
 				    &ufsdbg_dump_device_desc);
 	if (!hba->debugfs_files.dump_dev_desc) {
 		dev_err(hba->dev,
-			"%s:  NULL dump_device_desc file, exiting", __func__);
+			"%s:  NULL dump_device_desc file, exiting\n", __func__);
 		goto err;
 	}
 
 	hba->debugfs_files.power_mode =
-		debugfs_create_file("power_mode", S_IRUSR | S_IWUSR,
+		debugfs_create_file("power_mode", 0600,
 				    hba->debugfs_files.debugfs_root, hba,
 				    &ufsdbg_power_mode_desc);
 	if (!hba->debugfs_files.power_mode) {
 		dev_err(hba->dev,
-			"%s:  NULL power_mode_desc file, exiting", __func__);
+			"%s:  NULL power_mode_desc file, exiting\n", __func__);
 		goto err;
 	}
 
 	hba->debugfs_files.dme_local_read =
-		debugfs_create_file("dme_local_read", S_IRUSR | S_IWUSR,
+		debugfs_create_file("dme_local_read", 0600,
 				    hba->debugfs_files.debugfs_root, hba,
 				    &ufsdbg_dme_local_read_ops);
 	if (!hba->debugfs_files.dme_local_read) {
@@ -1778,7 +1677,7 @@ void ufsdbg_add_debugfs(struct ufs_hba *hba)
 	}
 
 	hba->debugfs_files.dme_peer_read =
-		debugfs_create_file("dme_peer_read", S_IRUSR | S_IWUSR,
+		debugfs_create_file("dme_peer_read", 0600,
 				    hba->debugfs_files.debugfs_root, hba,
 				    &ufsdbg_dme_peer_read_ops);
 	if (!hba->debugfs_files.dme_peer_read) {
@@ -1789,7 +1688,7 @@ void ufsdbg_add_debugfs(struct ufs_hba *hba)
 	}
 
 	hba->debugfs_files.dbg_print_en =
-		debugfs_create_file("dbg_print_en", S_IRUSR | S_IWUSR,
+		debugfs_create_file("dbg_print_en", 0600,
 				    hba->debugfs_files.debugfs_root, hba,
 				    &ufsdbg_dbg_print_en_ops);
 	if (!hba->debugfs_files.dbg_print_en) {
@@ -1800,7 +1699,7 @@ void ufsdbg_add_debugfs(struct ufs_hba *hba)
 	}
 
 	hba->debugfs_files.req_stats =
-		debugfs_create_file("req_stats", S_IRUSR | S_IWUSR,
+		debugfs_create_file("req_stats", 0600,
 			hba->debugfs_files.stats_folder, hba,
 			&ufsdbg_req_stats_desc);
 	if (!hba->debugfs_files.req_stats) {
@@ -1810,24 +1709,13 @@ void ufsdbg_add_debugfs(struct ufs_hba *hba)
 		goto err;
 	}
 
-	hba->debugfs_files.reset_controller =
-		debugfs_create_file("reset_controller", S_IRUSR | S_IWUSR,
-			hba->debugfs_files.debugfs_root, hba,
-			&ufsdbg_reset_controller);
-	if (!hba->debugfs_files.reset_controller) {
-		dev_err(hba->dev,
-			"%s: failed create reset_controller debugfs entry",
-				__func__);
-		goto err;
-	}
-
 	hba->debugfs_files.err_state =
-		debugfs_create_file("err_state", S_IRUSR | S_IWUSR,
+		debugfs_create_file("err_state", 0600,
 			hba->debugfs_files.debugfs_root, hba,
 			&ufsdbg_err_state);
 	if (!hba->debugfs_files.err_state) {
 		dev_err(hba->dev,
-		     "%s: failed create err_state debugfs entry", __func__);
+		     "%s: failed create err_state debugfs entry\n", __func__);
 		goto err;
 	}
 

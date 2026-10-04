@@ -328,7 +328,7 @@ retry:
 
 	up_write(&_hash_lock);
 
-	if (dev_skipped)
+	if (dev_skipped && !only_deferred)
 		DMWARN("remove_all left %d open device(s)", dev_skipped);
 }
 
@@ -1189,6 +1189,10 @@ static void retrieve_status(struct dm_table *table,
 		used = param->data_start + (outptr - outbuf);
 
 		outptr = align_ptr(outptr);
+		if (!outptr || outptr > outbuf + len) {
+			param->flags |= DM_BUFFER_FULL_FLAG;
+			break;
+		}
 		spec->next = outptr - outbuf;
 	}
 
@@ -1363,7 +1367,8 @@ static int table_load(struct file *filp, struct dm_ioctl *param, size_t param_si
 			goto err_unlock_md_type;
 		}
 	} else if (!is_valid_type(dm_get_md_type(md), dm_table_get_type(t))) {
-		DMWARN("can't change device type after initial table load.");
+		DMWARN("can't change device type (old=%u vs new=%u) after initial table load.",
+		       dm_get_md_type(md), dm_table_get_type(t));
 		r = -EINVAL;
 		goto err_unlock_md_type;
 	}
@@ -1603,8 +1608,11 @@ static int target_message(struct file *filp, struct dm_ioctl *param, size_t para
 		goto out_argv;
 
 	table = dm_get_live_table(md, &srcu_idx);
-	if (!table)
+	if (!table) {
+		DMERR("The device has no table.");
+		r = -EINVAL;
 		goto out_table;
+	}
 
 	if (dm_deleting_md(md)) {
 		r = -ENXIO;
@@ -1616,7 +1624,7 @@ static int target_message(struct file *filp, struct dm_ioctl *param, size_t para
 		DMWARN("Target message sector outside device.");
 		r = -EINVAL;
 	} else if (ti->type->message)
-		r = ti->type->message(ti, argc, argv);
+		r = ti->type->message(ti, argc, argv, result, maxlen);
 	else {
 		DMWARN("Target type does not support messages");
 		r = -EINVAL;
@@ -1946,15 +1954,15 @@ static int dm_release(struct inode *inode, struct file *filp)
 	return 0;
 }
 
-static unsigned dm_poll(struct file *filp, poll_table *wait)
+static __poll_t dm_poll(struct file *filp, poll_table *wait)
 {
 	struct dm_file *priv = filp->private_data;
-	unsigned mask = 0;
+	__poll_t mask = 0;
 
 	poll_wait(filp, &dm_global_eventq, wait);
 
 	if ((int)(atomic_read(&dm_global_event_nr) - priv->global_event_nr) > 0)
-		mask |= POLLIN;
+		mask |= EPOLLIN;
 
 	return mask;
 }

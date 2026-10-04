@@ -21,12 +21,13 @@
 
 #include <asm/reg.h>
 #include <asm/page.h>
-#include <asm/pgtable.h>
+#include <linux/pgtable.h>
 #include <asm/cputable.h>
 #include <asm/ppc_asm.h>
 #include <asm/thread_info.h>
 #include <asm/asm-offsets.h>
 #include <asm/export.h>
+#include <asm/feature-fixups.h>
 
 #ifdef CONFIG_SMP
 	.section .bss

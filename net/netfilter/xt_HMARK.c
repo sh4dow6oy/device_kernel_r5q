@@ -9,6 +9,8 @@
  * the Free Software Foundation.
  */
 
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+
 #include <linux/module.h>
 #include <linux/skbuff.h>
 #include <linux/icmp.h>
@@ -240,11 +242,7 @@ static int get_inner_hdr(const struct sk_buff *skb, int iphsz, int *nhoff)
 		return 0;
 
 	/* Error message? */
-	if (icmph->type != ICMP_DEST_UNREACH &&
-	    icmph->type != ICMP_SOURCE_QUENCH &&
-	    icmph->type != ICMP_TIME_EXCEEDED &&
-	    icmph->type != ICMP_PARAMETERPROB &&
-	    icmph->type != ICMP_REDIRECT)
+	if (!icmp_is_err(icmph->type))
 		return 0;
 
 	*nhoff += iphsz + sizeof(_ih);
@@ -312,29 +310,30 @@ hmark_tg_v4(struct sk_buff *skb, const struct xt_action_param *par)
 static int hmark_tg_check(const struct xt_tgchk_param *par)
 {
 	const struct xt_hmark_info *info = par->targinfo;
+	const char *errmsg = "proto mask must be zero with L3 mode";
 
-	if (!info->hmodulus) {
-		pr_info("xt_HMARK: hash modulus can't be zero\n");
+	if (!info->hmodulus)
 		return -EINVAL;
-	}
+
 	if (info->proto_mask &&
-	    (info->flags & XT_HMARK_FLAG(XT_HMARK_METHOD_L3))) {
-		pr_info("xt_HMARK: proto mask must be zero with L3 mode\n");
-		return -EINVAL;
-	}
+	    (info->flags & XT_HMARK_FLAG(XT_HMARK_METHOD_L3)))
+		goto err;
+
 	if (info->flags & XT_HMARK_FLAG(XT_HMARK_SPI_MASK) &&
 	    (info->flags & (XT_HMARK_FLAG(XT_HMARK_SPORT_MASK) |
-			     XT_HMARK_FLAG(XT_HMARK_DPORT_MASK)))) {
-		pr_info("xt_HMARK: spi-mask and port-mask can't be combined\n");
+			     XT_HMARK_FLAG(XT_HMARK_DPORT_MASK))))
 		return -EINVAL;
-	}
+
 	if (info->flags & XT_HMARK_FLAG(XT_HMARK_SPI) &&
 	    (info->flags & (XT_HMARK_FLAG(XT_HMARK_SPORT) |
 			     XT_HMARK_FLAG(XT_HMARK_DPORT)))) {
-		pr_info("xt_HMARK: spi-set and port-set can't be combined\n");
-		return -EINVAL;
+		errmsg = "spi-set and port-set can't be combined";
+		goto err;
 	}
 	return 0;
+err:
+	pr_info_ratelimited("%s\n", errmsg);
+	return -EINVAL;
 }
 
 static struct xt_target hmark_tg_reg[] __read_mostly = {

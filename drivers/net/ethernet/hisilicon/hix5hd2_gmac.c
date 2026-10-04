@@ -1006,12 +1006,11 @@ static int hix5hd2_init_hw_desc_queue(struct hix5hd2_priv *priv)
 
 	for (i = 0; i < QUEUE_NUMS; i++) {
 		size = priv->pool[i].count * sizeof(struct hix5hd2_desc);
-		virt_addr = dma_alloc_coherent(dev, size, &phys_addr,
-					       GFP_KERNEL);
+		virt_addr = dma_zalloc_coherent(dev, size, &phys_addr,
+						GFP_KERNEL);
 		if (virt_addr == NULL)
 			goto error_free_pool;
 
-		memset(virt_addr, 0, size);
 		priv->pool[i].size = size;
 		priv->pool[i].desc = virt_addr;
 		priv->pool[i].phys_addr = phys_addr;
@@ -1300,7 +1299,6 @@ static int hix5hd2_dev_remove(struct platform_device *pdev)
 	struct net_device *ndev = platform_get_drvdata(pdev);
 	struct hix5hd2_priv *priv = netdev_priv(ndev);
 
-	netif_napi_del(&priv->napi);
 	unregister_netdev(ndev);
 	mdiobus_unregister(priv->bus);
 	mdiobus_free(priv->bus);

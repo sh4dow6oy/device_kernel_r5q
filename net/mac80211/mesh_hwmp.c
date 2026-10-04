@@ -111,8 +111,8 @@ static int mesh_path_sel_frame_tx(enum mpath_frame_type action, u8 flags,
 	struct sk_buff *skb;
 	struct ieee80211_mgmt *mgmt;
 	u8 *pos, ie_len;
-	int hdr_len = offsetof(struct ieee80211_mgmt, u.action.u.mesh_action) +
-		      sizeof(mgmt->u.action.u.mesh_action);
+	int hdr_len = offsetofend(struct ieee80211_mgmt,
+				  u.action.u.mesh_action);
 
 	skb = dev_alloc_skb(local->tx_headroom +
 			    hdr_len +
@@ -242,8 +242,8 @@ int mesh_path_error_tx(struct ieee80211_sub_if_data *sdata,
 	struct ieee80211_if_mesh *ifmsh = &sdata->u.mesh;
 	struct ieee80211_mgmt *mgmt;
 	u8 *pos, ie_len;
-	int hdr_len = offsetof(struct ieee80211_mgmt, u.action.u.mesh_action) +
-		      sizeof(mgmt->u.action.u.mesh_action);
+	int hdr_len = offsetofend(struct ieee80211_mgmt,
+				  u.action.u.mesh_action);
 
 	if (time_before(jiffies, ifmsh->next_perr))
 		return -EAGAIN;
@@ -599,7 +599,7 @@ static void hwmp_preq_frame_process(struct ieee80211_sub_if_data *sdata,
 				mesh_path_add_gate(mpath);
 		}
 		rcu_read_unlock();
-	} else {
+	} else if (ifmsh->mshcfg.dot11MeshForwarding) {
 		rcu_read_lock();
 		mpath = mesh_path_lookup(sdata, target_addr);
 		if (mpath) {
@@ -617,6 +617,8 @@ static void hwmp_preq_frame_process(struct ieee80211_sub_if_data *sdata,
 			}
 		}
 		rcu_read_unlock();
+	} else {
+		forward = false;
 	}
 
 	if (reply) {
@@ -634,7 +636,7 @@ static void hwmp_preq_frame_process(struct ieee80211_sub_if_data *sdata,
 		}
 	}
 
-	if (forward && ifmsh->mshcfg.dot11MeshForwarding) {
+	if (forward) {
 		u32 preq_id;
 		u8 hopcount;
 
@@ -1209,9 +1211,9 @@ endlookup:
 	return err;
 }
 
-void mesh_path_timer(unsigned long data)
+void mesh_path_timer(struct timer_list *t)
 {
-	struct mesh_path *mpath = (void *) data;
+	struct mesh_path *mpath = from_timer(mpath, t, timer);
 	struct ieee80211_sub_if_data *sdata = mpath->sdata;
 	int ret;
 
@@ -1262,6 +1264,7 @@ void mesh_path_tx_root_frame(struct ieee80211_sub_if_data *sdata)
 		break;
 	case IEEE80211_PROACTIVE_PREQ_WITH_PREP:
 		flags |= IEEE80211_PREQ_PROACTIVE_PREP_FLAG;
+		/* fall through */
 	case IEEE80211_PROACTIVE_PREQ_NO_PREP:
 		interval = ifmsh->mshcfg.dot11MeshHWMPactivePathToRootTimeout;
 		target_flags |= IEEE80211_PREQ_TO_FLAG |

@@ -79,16 +79,11 @@
 /*
  * Generic and tag-based KASAN require 1/8th and 1/16th of the kernel virtual
  * address space for the shadow region respectively. They can bloat the stack
- * significantly, so double the (minimum) stack size when they are in use,
- * and then double it again if KASAN_EXTRA is on
+ * significantly, so double the (minimum) stack size when they are in use.
  */
 #ifdef CONFIG_KASAN
 #define KASAN_SHADOW_SIZE	(UL(1) << (VA_BITS - KASAN_SHADOW_SCALE_SHIFT))
-#ifdef CONFIG_KASAN_EXTRA
-#define KASAN_THREAD_SHIFT	2
-#else
 #define KASAN_THREAD_SHIFT	1
-#endif /* CONFIG_KASAN_EXTRA */
 #else
 #define KASAN_SHADOW_SIZE	(0)
 #define KASAN_THREAD_SHIFT	0
@@ -161,6 +156,13 @@
  */
 #define MT_S2_NORMAL		0xf
 #define MT_S2_DEVICE_nGnRE	0x1
+
+/*
+ * Memory types for Stage-2 translation when ID_AA64MMFR2_EL1.FWB is 0001
+ * Stage-2 enforces Normal-WB and Device-nGnRE
+ */
+#define MT_S2_FWB_NORMAL	6
+#define MT_S2_FWB_DEVICE_nGnRE	1
 
 #ifdef CONFIG_ARM64_4K_PAGES
 #define IOREMAP_MAX_ORDER	(PUD_SHIFT)
@@ -340,6 +342,11 @@ static inline void *phys_to_virt(phys_addr_t x)
 #define ARCH_PFN_OFFSET		((unsigned long)PHYS_PFN_OFFSET)
 
 #ifndef CONFIG_SPARSEMEM_VMEMMAP
+#define page_to_virt(x)	({						\
+	__typeof__(x) __page = x;					\
+	void *__addr = __va(page_to_phys(__page));			\
+	(void *)__tag_set((const void *)__addr, page_kasan_tag(__page));\
+})
 #define virt_to_page(kaddr)	pfn_to_page(__pa(kaddr) >> PAGE_SHIFT)
 #define _virt_addr_valid(kaddr)	pfn_valid(__pa(kaddr) >> PAGE_SHIFT)
 #else

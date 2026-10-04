@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-only WITH Linux-syscall-note */
 #ifndef __UAPI_LINUX_MSMB_CAMERA_H
 #define __UAPI_LINUX_MSMB_CAMERA_H
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * f_printer.c - USB printer function driver
  *
@@ -8,11 +9,6 @@
  *
  * Copyright (C) 2003-2005 David Brownell
  * Copyright (C) 2006 Craig W. Nadler
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  */
 
 #include <linux/module.h>
@@ -357,12 +353,11 @@ printer_open(struct inode *inode, struct file *fd)
 		ret = 0;
 		/* Change the printer status to show that it's on-line. */
 		dev->printer_status |= PRINTER_SELECTED;
+		kref_get(&dev->kref);
 	}
 
 	spin_unlock_irqrestore(&dev->lock, flags);
 
-	kref_get(&dev->kref);
-	DBG(dev, "printer_open returned %x\n", ret);
 	return ret;
 }
 
@@ -380,7 +375,6 @@ printer_close(struct inode *inode, struct file *fd)
 	spin_unlock_irqrestore(&dev->lock, flags);
 
 	kref_put(&dev->kref, printer_dev_free);
-	DBG(dev, "printer_close\n");
 
 	return 0;
 }
@@ -695,12 +689,12 @@ printer_fsync(struct file *fd, loff_t start, loff_t end, int datasync)
 	return 0;
 }
 
-static unsigned int
+static __poll_t
 printer_poll(struct file *fd, poll_table *wait)
 {
 	struct printer_dev	*dev = fd->private_data;
 	unsigned long		flags;
-	int			status = 0;
+	__poll_t		status = 0;
 
 	mutex_lock(&dev->lock_printer_io);
 	spin_lock_irqsave(&dev->lock, flags);
@@ -713,11 +707,11 @@ printer_poll(struct file *fd, poll_table *wait)
 
 	spin_lock_irqsave(&dev->lock, flags);
 	if (likely(!list_empty(&dev->tx_reqs)))
-		status |= POLLOUT | POLLWRNORM;
+		status |= EPOLLOUT | EPOLLWRNORM;
 
 	if (likely(dev->current_rx_bytes) ||
 			likely(!list_empty(&dev->rx_buffers)))
-		status |= POLLIN | POLLRDNORM;
+		status |= EPOLLIN | EPOLLRDNORM;
 
 	spin_unlock_irqrestore(&dev->lock, flags);
 
@@ -816,8 +810,6 @@ static void printer_reset_interface(struct printer_dev *dev)
 	if (dev->interface < 0)
 		return;
 
-	DBG(dev, "%s\n", __func__);
-
 	if (dev->in_ep->desc)
 		usb_ep_disable(dev->in_ep);
 
@@ -854,8 +846,6 @@ static int set_interface(struct printer_dev *dev, unsigned number)
 static void printer_soft_reset(struct printer_dev *dev)
 {
 	struct usb_request	*req;
-
-	INFO(dev, "Received Printer Reset Request\n");
 
 	if (usb_ep_disable(dev->in_ep))
 		DBG(dev, "Failed to disable USB in_ep\n");
@@ -1153,8 +1143,6 @@ static void printer_func_disable(struct usb_function *f)
 {
 	struct printer_dev *dev = func_to_printer(f);
 
-	DBG(dev, "%s\n", __func__);
-
 	printer_reset_interface(dev);
 }
 
@@ -1274,7 +1262,7 @@ static struct configfs_attribute *printer_attrs[] = {
 	NULL,
 };
 
-static struct config_item_type printer_func_type = {
+static const struct config_item_type printer_func_type = {
 	.ct_item_ops	= &printer_item_ops,
 	.ct_attrs	= printer_attrs,
 	.ct_owner	= THIS_MODULE,

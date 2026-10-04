@@ -48,7 +48,7 @@
 	.ib = _ib,				\
 }
 
-static DEFINE_VDD_REGULATORS(vdd_mm, VDD_MM_NUM, 1, vdd_corner);
+static DEFINE_VDD_REGULATORS(vdd_mm, VDD_NUM_MM, 1, vdd_corner);
 static DEFINE_VDD_REGULATORS(vdd_mx, VDD_NUM, 1, vdd_corner);
 
 static struct msm_bus_vectors clk_debugfs_vectors[] = {
@@ -194,14 +194,14 @@ static struct clk_alpha_pll cam_cc_pll0 = {
 	.offset = 0x0,
 	.vco_table = trion_vco,
 	.num_vco = ARRAY_SIZE(trion_vco),
-	.type = TRION_PLL,
+	.regs = clk_alpha_pll_regs[CLK_ALPHA_PLL_TYPE_TRION],
 	.config = &cam_cc_pll0_config,
 	.clkr = {
 		.hw.init = &(struct clk_init_data){
 			.name = "cam_cc_pll0",
 			.parent_names = (const char *[]){ "bi_tcxo" },
 			.num_parents = 1,
-			.ops = &clk_trion_pll_ops,
+			.ops = &clk_alpha_pll_trion_ops,
 			.vdd_class = &vdd_mx,
 			.num_rate_max = VDD_NUM,
 			.rate_max = (unsigned long[VDD_NUM]) {
@@ -220,6 +220,7 @@ static const struct clk_div_table post_div_table_trion_even[] = {
 
 static struct clk_alpha_pll_postdiv cam_cc_pll0_out_even = {
 	.offset = 0x0,
+	.regs = clk_alpha_pll_regs[CLK_ALPHA_PLL_TYPE_TRION],
 	.post_div_shift = 8,
 	.post_div_table = post_div_table_trion_even,
 	.num_post_div = ARRAY_SIZE(post_div_table_trion_even),
@@ -229,7 +230,7 @@ static struct clk_alpha_pll_postdiv cam_cc_pll0_out_even = {
 		.parent_names = (const char *[]){ "cam_cc_pll0" },
 		.num_parents = 1,
 		.flags = CLK_SET_RATE_PARENT,
-		.ops = &clk_trion_pll_postdiv_ops,
+		.ops = &clk_alpha_pll_postdiv_trion_ops,
 	},
 };
 
@@ -240,6 +241,7 @@ static const struct clk_div_table post_div_table_trion_odd[] = {
 
 static struct clk_alpha_pll_postdiv cam_cc_pll0_out_odd = {
 	.offset = 0x0,
+	.regs = clk_alpha_pll_regs[CLK_ALPHA_PLL_TYPE_TRION],
 	.post_div_shift = 12,
 	.post_div_table = post_div_table_trion_odd,
 	.num_post_div = ARRAY_SIZE(post_div_table_trion_odd),
@@ -249,7 +251,7 @@ static struct clk_alpha_pll_postdiv cam_cc_pll0_out_odd = {
 		.parent_names = (const char *[]){ "cam_cc_pll0" },
 		.num_parents = 1,
 		.flags = CLK_SET_RATE_PARENT,
-		.ops = &clk_trion_pll_postdiv_ops,
+		.ops = &clk_alpha_pll_postdiv_trion_ops,
 	},
 };
 
@@ -285,14 +287,14 @@ static struct clk_alpha_pll cam_cc_pll1 = {
 	.offset = 0x1000,
 	.vco_table = trion_vco,
 	.num_vco = ARRAY_SIZE(trion_vco),
-	.type = TRION_PLL,
+	.regs = clk_alpha_pll_regs[CLK_ALPHA_PLL_TYPE_TRION],
 	.config = &cam_cc_pll1_config,
 	.clkr = {
 		.hw.init = &(struct clk_init_data){
 			.name = "cam_cc_pll1",
 			.parent_names = (const char *[]){ "bi_tcxo" },
 			.num_parents = 1,
-			.ops = &clk_trion_pll_ops,
+			.ops = &clk_alpha_pll_trion_ops,
 			.vdd_class = &vdd_mx,
 			.num_rate_max = VDD_NUM,
 			.rate_max = (unsigned long[VDD_NUM]) {
@@ -306,6 +308,7 @@ static struct clk_alpha_pll cam_cc_pll1 = {
 
 static struct clk_alpha_pll_postdiv cam_cc_pll1_out_even = {
 	.offset = 0x1000,
+	.regs = clk_alpha_pll_regs[CLK_ALPHA_PLL_TYPE_TRION],
 	.post_div_shift = 8,
 	.post_div_table = post_div_table_trion_even,
 	.num_post_div = ARRAY_SIZE(post_div_table_trion_even),
@@ -315,7 +318,7 @@ static struct clk_alpha_pll_postdiv cam_cc_pll1_out_even = {
 		.parent_names = (const char *[]){ "cam_cc_pll1" },
 		.num_parents = 1,
 		.flags = CLK_SET_RATE_PARENT,
-		.ops = &clk_trion_pll_postdiv_ops,
+		.ops = &clk_alpha_pll_postdiv_trion_ops,
 	},
 };
 
@@ -335,14 +338,14 @@ static struct clk_alpha_pll cam_cc_pll2 = {
 	.offset = 0x2000,
 	.vco_table = regera_vco,
 	.num_vco = ARRAY_SIZE(regera_vco),
-	.type = REGERA_PLL,
+	.regs = clk_alpha_pll_regs[CLK_ALPHA_PLL_TYPE_REGERA],
 	.config = &cam_cc_pll2_config,
 	.clkr = {
 		.hw.init = &(struct clk_init_data){
 			.name = "cam_cc_pll2",
 			.parent_names = (const char *[]){ "bi_tcxo" },
 			.num_parents = 1,
-			.ops = &clk_regera_pll_ops,
+			.ops = &clk_alpha_pll_regera_ops,
 			.vdd_class = &vdd_mx,
 			.num_rate_max = VDD_NUM,
 			.rate_max = (unsigned long[VDD_NUM]) {
@@ -362,6 +365,7 @@ static const struct clk_div_table post_div_table_regera_main[] = {
 
 static struct clk_alpha_pll_postdiv cam_cc_pll2_out_main = {
 	.offset = 0x2000,
+	.regs = clk_alpha_pll_regs[CLK_ALPHA_PLL_TYPE_TRION],
 	.post_div_shift = 8,
 	.post_div_table = post_div_table_regera_main,
 	.num_post_div = ARRAY_SIZE(post_div_table_regera_main),
@@ -371,7 +375,7 @@ static struct clk_alpha_pll_postdiv cam_cc_pll2_out_main = {
 		.parent_names = (const char *[]){ "cam_cc_pll2" },
 		.num_parents = 1,
 		.flags = CLK_SET_RATE_PARENT,
-		.ops = &clk_trion_pll_postdiv_ops,
+		.ops = &clk_alpha_pll_postdiv_trion_ops,
 	},
 };
 
@@ -407,14 +411,14 @@ static struct clk_alpha_pll cam_cc_pll3 = {
 	.offset = 0x3000,
 	.vco_table = trion_vco,
 	.num_vco = ARRAY_SIZE(trion_vco),
-	.type = TRION_PLL,
+	.regs = clk_alpha_pll_regs[CLK_ALPHA_PLL_TYPE_TRION],
 	.config = &cam_cc_pll3_config,
 	.clkr = {
 		.hw.init = &(struct clk_init_data){
 			.name = "cam_cc_pll3",
 			.parent_names = (const char *[]){ "bi_tcxo" },
 			.num_parents = 1,
-			.ops = &clk_trion_pll_ops,
+			.ops = &clk_alpha_pll_trion_ops,
 			.vdd_class = &vdd_mx,
 			.num_rate_max = VDD_NUM,
 			.rate_max = (unsigned long[VDD_NUM]) {
@@ -428,6 +432,7 @@ static struct clk_alpha_pll cam_cc_pll3 = {
 
 static struct clk_alpha_pll_postdiv cam_cc_pll3_out_even = {
 	.offset = 0x3000,
+	.regs = clk_alpha_pll_regs[CLK_ALPHA_PLL_TYPE_TRION],
 	.post_div_shift = 8,
 	.post_div_table = post_div_table_trion_even,
 	.num_post_div = ARRAY_SIZE(post_div_table_trion_even),
@@ -437,7 +442,7 @@ static struct clk_alpha_pll_postdiv cam_cc_pll3_out_even = {
 		.parent_names = (const char *[]){ "cam_cc_pll3" },
 		.num_parents = 1,
 		.flags = CLK_SET_RATE_PARENT,
-		.ops = &clk_trion_pll_postdiv_ops,
+		.ops = &clk_alpha_pll_postdiv_trion_ops,
 	},
 };
 
@@ -473,14 +478,14 @@ static struct clk_alpha_pll cam_cc_pll4 = {
 	.offset = 0x4000,
 	.vco_table = trion_vco,
 	.num_vco = ARRAY_SIZE(trion_vco),
-	.type = TRION_PLL,
+	.regs = clk_alpha_pll_regs[CLK_ALPHA_PLL_TYPE_TRION],
 	.config = &cam_cc_pll4_config,
 	.clkr = {
 		.hw.init = &(struct clk_init_data){
 			.name = "cam_cc_pll4",
 			.parent_names = (const char *[]){ "bi_tcxo" },
 			.num_parents = 1,
-			.ops = &clk_trion_pll_ops,
+			.ops = &clk_alpha_pll_trion_ops,
 			.vdd_class = &vdd_mx,
 			.num_rate_max = VDD_NUM,
 			.rate_max = (unsigned long[VDD_NUM]) {
@@ -494,6 +499,7 @@ static struct clk_alpha_pll cam_cc_pll4 = {
 
 static struct clk_alpha_pll_postdiv cam_cc_pll4_out_even = {
 	.offset = 0x4000,
+	.regs = clk_alpha_pll_regs[CLK_ALPHA_PLL_TYPE_TRION],
 	.post_div_shift = 8,
 	.post_div_table = post_div_table_trion_even,
 	.num_post_div = ARRAY_SIZE(post_div_table_trion_even),
@@ -503,7 +509,7 @@ static struct clk_alpha_pll_postdiv cam_cc_pll4_out_even = {
 		.parent_names = (const char *[]){ "cam_cc_pll4" },
 		.num_parents = 1,
 		.flags = CLK_SET_RATE_PARENT,
-		.ops = &clk_trion_pll_postdiv_ops,
+		.ops = &clk_alpha_pll_postdiv_trion_ops,
 	},
 };
 
@@ -588,6 +594,7 @@ static struct clk_rcg2 cam_cc_cci_0_clk_src = {
 	.hid_width = 5,
 	.parent_map = cam_cc_parent_map_0,
 	.freq_tbl = ftbl_cam_cc_cci_0_clk_src,
+	.enable_safe_config = true,
 	.clkr.hw.init = &(struct clk_init_data){
 		.name = "cam_cc_cci_0_clk_src",
 		.parent_names = cam_cc_parent_names_0,
@@ -608,6 +615,7 @@ static struct clk_rcg2 cam_cc_cci_1_clk_src = {
 	.hid_width = 5,
 	.parent_map = cam_cc_parent_map_0,
 	.freq_tbl = ftbl_cam_cc_cci_0_clk_src,
+	.enable_safe_config = true,
 	.clkr.hw.init = &(struct clk_init_data){
 		.name = "cam_cc_cci_1_clk_src",
 		.parent_names = cam_cc_parent_names_0,
@@ -634,6 +642,7 @@ static struct clk_rcg2 cam_cc_cphy_rx_clk_src = {
 	.hid_width = 5,
 	.parent_map = cam_cc_parent_map_0,
 	.freq_tbl = ftbl_cam_cc_cphy_rx_clk_src,
+	.enable_safe_config = true,
 	.clkr.hw.init = &(struct clk_init_data){
 		.name = "cam_cc_cphy_rx_clk_src",
 		.parent_names = cam_cc_parent_names_0,
@@ -660,6 +669,7 @@ static struct clk_rcg2 cam_cc_csi0phytimer_clk_src = {
 	.hid_width = 5,
 	.parent_map = cam_cc_parent_map_0,
 	.freq_tbl = ftbl_cam_cc_csi0phytimer_clk_src,
+	.enable_safe_config = true,
 	.clkr.hw.init = &(struct clk_init_data){
 		.name = "cam_cc_csi0phytimer_clk_src",
 		.parent_names = cam_cc_parent_names_0,
@@ -680,6 +690,7 @@ static struct clk_rcg2 cam_cc_csi1phytimer_clk_src = {
 	.hid_width = 5,
 	.parent_map = cam_cc_parent_map_0,
 	.freq_tbl = ftbl_cam_cc_csi0phytimer_clk_src,
+	.enable_safe_config = true,
 	.clkr.hw.init = &(struct clk_init_data){
 		.name = "cam_cc_csi1phytimer_clk_src",
 		.parent_names = cam_cc_parent_names_0,
@@ -700,6 +711,7 @@ static struct clk_rcg2 cam_cc_csi2phytimer_clk_src = {
 	.hid_width = 5,
 	.parent_map = cam_cc_parent_map_0,
 	.freq_tbl = ftbl_cam_cc_csi0phytimer_clk_src,
+	.enable_safe_config = true,
 	.clkr.hw.init = &(struct clk_init_data){
 		.name = "cam_cc_csi2phytimer_clk_src",
 		.parent_names = cam_cc_parent_names_0,
@@ -720,6 +732,7 @@ static struct clk_rcg2 cam_cc_csi3phytimer_clk_src = {
 	.hid_width = 5,
 	.parent_map = cam_cc_parent_map_0,
 	.freq_tbl = ftbl_cam_cc_csi0phytimer_clk_src,
+	.enable_safe_config = true,
 	.clkr.hw.init = &(struct clk_init_data){
 		.name = "cam_cc_csi3phytimer_clk_src",
 		.parent_names = cam_cc_parent_names_0,
@@ -750,6 +763,7 @@ static struct clk_rcg2 cam_cc_fast_ahb_clk_src = {
 	.hid_width = 5,
 	.parent_map = cam_cc_parent_map_0,
 	.freq_tbl = ftbl_cam_cc_fast_ahb_clk_src,
+	.enable_safe_config = true,
 	.clkr.hw.init = &(struct clk_init_data){
 		.name = "cam_cc_fast_ahb_clk_src",
 		.parent_names = cam_cc_parent_names_0,
@@ -983,6 +997,7 @@ static struct clk_rcg2 cam_cc_ife_lite_0_clk_src = {
 	.hid_width = 5,
 	.parent_map = cam_cc_parent_map_0,
 	.freq_tbl = ftbl_cam_cc_ife_lite_0_clk_src,
+	.enable_safe_config = true,
 	.clkr.hw.init = &(struct clk_init_data){
 		.name = "cam_cc_ife_lite_0_clk_src",
 		.parent_names = cam_cc_parent_names_0,
@@ -1029,6 +1044,7 @@ static struct clk_rcg2 cam_cc_ife_lite_1_clk_src = {
 	.hid_width = 5,
 	.parent_map = cam_cc_parent_map_0,
 	.freq_tbl = ftbl_cam_cc_ife_lite_0_clk_src,
+	.enable_safe_config = true,
 	.clkr.hw.init = &(struct clk_init_data){
 		.name = "cam_cc_ife_lite_1_clk_src",
 		.parent_names = cam_cc_parent_names_0,
@@ -1183,6 +1199,7 @@ static struct clk_rcg2 cam_cc_mclk0_clk_src = {
 	.hid_width = 5,
 	.parent_map = cam_cc_parent_map_1,
 	.freq_tbl = ftbl_cam_cc_mclk0_clk_src,
+	.enable_safe_config = true,
 	.clkr.hw.init = &(struct clk_init_data){
 		.name = "cam_cc_mclk0_clk_src",
 		.parent_names = cam_cc_parent_names_1,
@@ -1192,7 +1209,7 @@ static struct clk_rcg2 cam_cc_mclk0_clk_src = {
 		.vdd_class = &vdd_mx,
 		.num_rate_max = VDD_NUM,
 		.rate_max = (unsigned long[VDD_NUM]) {
-			[VDD_MIN] = 19200000,
+			[VDD_MIN] = 12000000,
 			[VDD_LOWER] = 68571429},
 	},
 };
@@ -1203,6 +1220,7 @@ static struct clk_rcg2 cam_cc_mclk1_clk_src = {
 	.hid_width = 5,
 	.parent_map = cam_cc_parent_map_1,
 	.freq_tbl = ftbl_cam_cc_mclk0_clk_src,
+	.enable_safe_config = true,
 	.clkr.hw.init = &(struct clk_init_data){
 		.name = "cam_cc_mclk1_clk_src",
 		.parent_names = cam_cc_parent_names_1,
@@ -1223,6 +1241,7 @@ static struct clk_rcg2 cam_cc_mclk2_clk_src = {
 	.hid_width = 5,
 	.parent_map = cam_cc_parent_map_1,
 	.freq_tbl = ftbl_cam_cc_mclk0_clk_src,
+	.enable_safe_config = true,
 	.clkr.hw.init = &(struct clk_init_data){
 		.name = "cam_cc_mclk2_clk_src",
 		.parent_names = cam_cc_parent_names_1,
@@ -1243,6 +1262,7 @@ static struct clk_rcg2 cam_cc_mclk3_clk_src = {
 	.hid_width = 5,
 	.parent_map = cam_cc_parent_map_1,
 	.freq_tbl = ftbl_cam_cc_mclk0_clk_src,
+	.enable_safe_config = true,
 	.clkr.hw.init = &(struct clk_init_data){
 		.name = "cam_cc_mclk3_clk_src",
 		.parent_names = cam_cc_parent_names_1,
@@ -1271,6 +1291,7 @@ static struct clk_rcg2 cam_cc_qdss_debug_clk_src = {
 	.hid_width = 5,
 	.parent_map = cam_cc_parent_map_0,
 	.freq_tbl = ftbl_cam_cc_qdss_debug_clk_src,
+	.enable_safe_config = true,
 	.clkr.hw.init = &(struct clk_init_data){
 		.name = "cam_cc_qdss_debug_clk_src",
 		.parent_names = cam_cc_parent_names_0,
@@ -2416,32 +2437,12 @@ static const struct qcom_cc_desc cam_cc_sm8150_desc = {
 	.num_clks = ARRAY_SIZE(cam_cc_sm8150_clocks),
 };
 
-static struct clk_regmap *cam_cc_sm8150_critical_clocks[] = {
-	&cam_cc_gdsc_clk.clkr
-};
-
-static const struct qcom_cc_critical_desc cam_cc_sm8150_critical_desc = {
-	.clks = cam_cc_sm8150_critical_clocks,
-	.num_clks = ARRAY_SIZE(cam_cc_sm8150_critical_clocks),
-};
-
 static const struct of_device_id cam_cc_sm8150_match_table[] = {
 	{ .compatible = "qcom,camcc-sm8150" },
 	{ .compatible = "qcom,camcc-sm8150-v2" },
-	{ .compatible = "qcom,camcc-sa8155" },
-	{ .compatible = "qcom,camcc-sa8155-v2" },
 	{ }
 };
 MODULE_DEVICE_TABLE(of, cam_cc_sm8150_match_table);
-
-static int cam_cc_sa8150_resume(struct device *dev)
-{
-	return qcom_cc_enable_critical_clks(&cam_cc_sm8150_critical_desc);
-}
-
-static const struct dev_pm_ops cam_cc_sa8150_pm_ops = {
-	.restore_early = cam_cc_sa8150_resume,
-};
 
 static void cam_cc_sm8150_fixup_sm8150v2(struct regmap *regmap)
 {
@@ -2470,13 +2471,8 @@ static int cam_cc_sm8150_fixup(struct platform_device *pdev,
 	if (!compat || (compatlen <= 0))
 		return -EINVAL;
 
-	if (!strcmp(compat, "qcom,camcc-sm8150-v2") ||
-			!strcmp(compat, "qcom,camcc-sa8155-v2"))
+	if (!strcmp(compat, "qcom,camcc-sm8150-v2"))
 		cam_cc_sm8150_fixup_sm8150v2(regmap);
-
-	if (!strcmp(compat, "qcom,camcc-sa8155") ||
-			!strcmp(compat, "qcom,camcc-sa8155-v2"))
-		pdev->dev.driver->pm = &cam_cc_sa8150_pm_ops;
 
 	return 0;
 }

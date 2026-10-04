@@ -317,7 +317,7 @@ static void dma_post(struct ivtv_stream *s)
 			ivtv_process_vbi_data(itv, buf, 0, s->type);
 			s->q_dma.bytesused += buf->bytesused;
 		}
-		if (s->fh == NULL) {
+		if (s->id == NULL) {
 			ivtv_queue_move(s, &s->q_dma, NULL, &s->q_free, 0);
 			return;
 		}
@@ -342,7 +342,7 @@ static void dma_post(struct ivtv_stream *s)
 		set_bit(IVTV_F_I_HAVE_WORK, &itv->i_flags);
 	}
 
-	if (s->fh)
+	if (s->id)
 		wake_up(&s->waitq);
 }
 
@@ -1074,9 +1074,9 @@ irqreturn_t ivtv_irq_handler(int irq, void *dev_id)
 	return vsync_force ? IRQ_NONE : IRQ_HANDLED;
 }
 
-void ivtv_unfinished_dma(unsigned long arg)
+void ivtv_unfinished_dma(struct timer_list *t)
 {
-	struct ivtv *itv = (struct ivtv *)arg;
+	struct ivtv *itv = from_timer(itv, t, dma_timer);
 
 	if (!test_bit(IVTV_F_I_DMA, &itv->i_flags))
 		return;

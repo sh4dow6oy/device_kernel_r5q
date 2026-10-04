@@ -1,13 +1,6 @@
-/* Copyright (c) 2017-2019, 2021, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
  */
 
 #include <linux/of.h>
@@ -20,7 +13,6 @@
 #include <linux/rpmsg/qcom_glink.h>
 #include <linux/rpmsg.h>
 #include <linux/ipc_logging.h>
-
 
 #define GLINK_PROBE_LOG_PAGE_CNT 4
 static void *glink_ilc;
@@ -39,13 +31,10 @@ do {									       \
 		ipc_log_string(glink_ilc, "[%s]: "x, __func__, ##__VA_ARGS__); \
 } while (0)
 
-
 #define GLINK_SSR_DO_CLEANUP	0
 #define GLINK_SSR_CLEANUP_DONE	1
 #define GLINK_SSR_PRIORITY	1
 #define GLINK_SSR_REPLY_TIMEOUT	HZ
-
-extern const struct dev_pm_ops glink_native_pm_ops;
 
 struct do_cleanup_msg {
 	__le32 version;
@@ -93,8 +82,8 @@ struct edge_info {
 	const char *ssr_label;
 	void *glink;
 
-	int (*register_fn)(struct edge_info *);
-	void (*unregister_fn)(struct edge_info *);
+	int (*register_fn)(struct edge_info *einfo);
+	void (*unregister_fn)(struct edge_info *einfo);
 	struct notifier_block nb;
 };
 LIST_HEAD(edge_infos);
@@ -139,7 +128,7 @@ static int glink_ssr_ssr_cb(struct notifier_block *this,
 	if (!dev || !ssr->ept)
 		goto out;
 
-	if (code == SUBSYS_AFTER_SHUTDOWN) {
+	if (code == SUBSYS_AFTER_SHUTDOWN || code == SUBSYS_POWERUP_FAILURE) {
 		ssr->seq_num++;
 		reinit_completion(&ssr->completion);
 
@@ -163,7 +152,6 @@ static int glink_ssr_ssr_cb(struct notifier_block *this,
 		ret = wait_for_completion_timeout(&ssr->completion, HZ);
 		if (!ret)
 			GLINK_ERR(dev, "timeout waiting for cleanup resp\n");
-
 	}
 out:
 	mutex_unlock(&ssr_lock);
@@ -309,7 +297,7 @@ static int glink_probe_ssr_cb(struct notifier_block *this,
 {
 	struct edge_info *einfo = container_of(this, struct edge_info, nb);
 
-	GLINK_INFO("received %lu for %s", code, einfo->ssr_label);
+	GLINK_INFO("received %ld for %s\n", code, einfo->ssr_label);
 
 	switch (code) {
 	case SUBSYS_AFTER_POWERUP:
@@ -321,6 +309,7 @@ static int glink_probe_ssr_cb(struct notifier_block *this,
 	default:
 		break;
 	}
+
 	return NOTIFY_DONE;
 }
 
@@ -345,7 +334,6 @@ static void glink_probe_smem_unreg(struct edge_info *einfo)
 
 	einfo->glink = NULL;
 	GLINK_INFO("unregister for %s\n", einfo->ssr_label);
-
 }
 
 static int glink_probe_spss_reg(struct edge_info *einfo)
@@ -436,7 +424,6 @@ static void probe_subsystem(struct device *dev, struct device_node *np)
 
 free_einfo:
 	devm_kfree(dev, einfo);
-	return;
 }
 
 static int glink_probe(struct platform_device *pdev)
@@ -459,9 +446,7 @@ static struct platform_driver glink_probe_driver = {
 	.probe = glink_probe,
 	.driver = {
 		.name = "msm_glink",
-		.owner = THIS_MODULE,
 		.of_match_table = glink_match_table,
-		.pm = &glink_native_pm_ops,
 	},
 };
 
@@ -483,5 +468,5 @@ static int __init glink_probe_init(void)
 }
 arch_initcall(glink_probe_init);
 
-MODULE_DESCRIPTION("Qualcomm GLINK probe helper driver");
+MODULE_DESCRIPTION("Qualcomm Technologies, Inc. GLINK probe helper driver");
 MODULE_LICENSE("GPL v2");

@@ -39,7 +39,7 @@
 #include <sound/info.h>
 #include <sound/initval.h>
 /* for 440MX workaround */
-#include <asm/pgtable.h>
+#include <linux/pgtable.h>
 #ifdef CONFIG_X86
 #include <asm/set_memory.h>
 #endif
@@ -351,7 +351,7 @@ enum {
 struct ichdev {
 	unsigned int ichd;			/* ich device number */
 	unsigned long reg_offset;		/* offset to bmaddr */
-	u32 *bdbar;				/* CPU address (32bit) */
+	__le32 *bdbar;				/* CPU address (32bit) */
 	unsigned int bdbar_addr;		/* PCI bus address (32bit) */
 	struct snd_pcm_substream *substream;
 	unsigned int physbuf;			/* physical address (32bit) */
@@ -677,7 +677,7 @@ static void snd_intel8x0_ali_codec_write(struct snd_ac97 *ac97, unsigned short r
 static void snd_intel8x0_setup_periods(struct intel8x0 *chip, struct ichdev *ichdev) 
 {
 	int idx;
-	u32 *bdbar = ichdev->bdbar;
+	__le32 *bdbar = ichdev->bdbar;
 	unsigned long port = ichdev->reg_offset;
 
 	iputdword(chip, port + ICH_REG_OFF_BDBAR, ichdev->bdbar_addr);
@@ -2331,7 +2331,7 @@ static int snd_intel8x0_mixer(struct intel8x0 *chip, int ac97_clock,
 			tmp |= chip->ac97_sdin[0] << ICH_DI1L_SHIFT;
 			for (i = 1; i < 4; i++) {
 				if (pcm->r[0].codec[i]) {
-					tmp |= chip->ac97_sdin[pcm->r[0].codec[1]->num] << ICH_DI2L_SHIFT;
+					tmp |= chip->ac97_sdin[pcm->r[0].codec[i]->num] << ICH_DI2L_SHIFT;
 					break;
 				}
 			}
@@ -3143,7 +3143,7 @@ static int snd_intel8x0_create(struct snd_card *card,
 	int_sta_masks = 0;
 	for (i = 0; i < chip->bdbars_count; i++) {
 		ichdev = &chip->ichd[i];
-		ichdev->bdbar = ((u32 *)chip->bdbars.area) +
+		ichdev->bdbar = ((__le32 *)chip->bdbars.area) +
 			(i * ICH_MAX_FRAGS * 2);
 		ichdev->bdbar_addr = chip->bdbars.addr +
 			(i * sizeof(u32) * ICH_MAX_FRAGS * 2);

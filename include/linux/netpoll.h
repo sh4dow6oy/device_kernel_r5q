@@ -49,8 +49,9 @@ struct netpoll_info {
 };
 
 #ifdef CONFIG_NETPOLL
-extern void netpoll_poll_disable(struct net_device *dev);
-extern void netpoll_poll_enable(struct net_device *dev);
+void netpoll_poll_dev(struct net_device *dev);
+void netpoll_poll_disable(struct net_device *dev);
+void netpoll_poll_enable(struct net_device *dev);
 #else
 static inline void netpoll_poll_disable(struct net_device *dev) { return; }
 static inline void netpoll_poll_enable(struct net_device *dev) { return; }
@@ -64,22 +65,14 @@ int netpoll_setup(struct netpoll *np);
 void __netpoll_cleanup(struct netpoll *np);
 void __netpoll_free_async(struct netpoll *np);
 void netpoll_cleanup(struct netpoll *np);
-void netpoll_send_skb_on_dev(struct netpoll *np, struct sk_buff *skb,
-			     struct net_device *dev);
-static inline void netpoll_send_skb(struct netpoll *np, struct sk_buff *skb)
-{
-	unsigned long flags;
-	local_irq_save(flags);
-	netpoll_send_skb_on_dev(np, skb, np->dev);
-	local_irq_restore(flags);
-}
+netdev_tx_t netpoll_send_skb(struct netpoll *np, struct sk_buff *skb);
 
 #ifdef CONFIG_NETPOLL
 static inline void *netpoll_poll_lock(struct napi_struct *napi)
 {
 	struct net_device *dev = napi->dev;
 
-	if (dev && dev->npinfo) {
+	if (dev && rcu_access_pointer(dev->npinfo)) {
 		int owner = smp_processor_id();
 
 		while (cmpxchg(&napi->poll_owner, -1, owner) != -1)

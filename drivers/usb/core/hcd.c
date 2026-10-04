@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * (C) Copyright Linus Torvalds 1999
  * (C) Copyright Johannes Erdfelt 1999-2001
@@ -6,20 +7,6 @@
  * (C) Copyright Deti Fliegl 1999
  * (C) Copyright Randy Dunlap 2000
  * (C) Copyright David Brownell 2000-2002
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License as published by the
- * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
- * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software Foundation,
- * Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #include <linux/bcd.h>
@@ -46,10 +33,10 @@
 #include <linux/phy/phy.h>
 #include <linux/usb.h>
 #include <linux/usb/hcd.h>
-#include <linux/usb/phy.h>
 #include <linux/usb/otg.h>
 
 #include "usb.h"
+#include "phy.h"
 
 
 /*-------------------------------------------------------------------------*/
@@ -368,9 +355,7 @@ static const u8 ss_rh_config_descriptor[] = {
 	USB_DT_ENDPOINT, /* __u8 ep_bDescriptorType; Endpoint */
 	0x81,       /*  __u8  ep_bEndpointAddress; IN Endpoint 1 */
 	0x03,       /*  __u8  ep_bmAttributes; Interrupt */
-		    /* __le16 ep_wMaxPacketSize; 1 + (MAX_ROOT_PORTS / 8)
-		     * see hub.c:hub_configure() for details. */
-	(USB_MAXCHILDREN + 1 + 7) / 8, 0x00,
+	0x02, 0x00, /* __le16 ep_wMaxPacketSize; 2 bytes per USB3 10.15.1 */
 	0x0c,       /*  __u8  ep_bInterval; (256ms -- usb 2.0 spec) */
 
 	/* one SuperSpeed endpoint companion descriptor */
@@ -580,6 +565,7 @@ static int rh_call_control (struct usb_hcd *hcd, struct urb *urb)
 		switch (wValue & 0xff00) {
 		case USB_DT_DEVICE << 8:
 			switch (hcd->speed) {
+			case HCD_USB32:
 			case HCD_USB31:
 				bufp = usb31_rh_dev_descriptor;
 				break;
@@ -604,6 +590,7 @@ static int rh_call_control (struct usb_hcd *hcd, struct urb *urb)
 			break;
 		case USB_DT_CONFIG << 8:
 			switch (hcd->speed) {
+			case HCD_USB32:
 			case HCD_USB31:
 			case HCD_USB3:
 				bufp = ss_rh_config_descriptor;
@@ -808,9 +795,11 @@ void usb_hcd_poll_rh_status(struct usb_hcd *hcd)
 EXPORT_SYMBOL_GPL(usb_hcd_poll_rh_status);
 
 /* timer callback */
-static void rh_timer_func (unsigned long _hcd)
+static void rh_timer_func (struct timer_list *t)
 {
-	usb_hcd_poll_rh_status((struct usb_hcd *) _hcd);
+	struct usb_hcd *_hcd = from_timer(_hcd, t, rh_timer);
+
+	usb_hcd_poll_rh_status(_hcd);
 }
 
 /*-------------------------------------------------------------------------*/
@@ -1814,6 +1803,7 @@ static void usb_giveback_urb_bh(unsigned long param)
 
 	spin_lock_irq(&bh->lock);
 	bh->running = true;
+ restart:
 	list_replace_init(&bh->head, &local_list);
 	spin_unlock_irq(&bh->lock);
 
@@ -1827,17 +1817,10 @@ static void usb_giveback_urb_bh(unsigned long param)
 		bh->completing_ep = NULL;
 	}
 
-	/*
-	 * giveback new URBs next time to prevent this function
-	 * from not exiting for a long time.
-	 */
+	/* check if there are new URBs to giveback */
 	spin_lock_irq(&bh->lock);
-	if (!list_empty(&bh->head)) {
-		if (bh->high_prio)
-			tasklet_hi_schedule(&bh->bh);
-		else
-			tasklet_schedule(&bh->bh);
-	}
+	if (!list_empty(&bh->head))
+		goto restart;
 	bh->running = false;
 	spin_unlock_irq(&bh->lock);
 }
@@ -1862,7 +1845,7 @@ static void usb_giveback_urb_bh(unsigned long param)
 void usb_hcd_giveback_urb(struct usb_hcd *hcd, struct urb *urb, int status)
 {
 	struct giveback_urb_bh *bh;
-	bool running;
+	bool running, high_prio_bh;
 
 	/* pass status to tasklet via unlinked */
 	if (likely(!urb->unlinked))
@@ -1873,10 +1856,13 @@ void usb_hcd_giveback_urb(struct usb_hcd *hcd, struct urb *urb, int status)
 		return;
 	}
 
-	if (usb_pipeisoc(urb->pipe) || usb_pipeint(urb->pipe))
+	if (usb_pipeisoc(urb->pipe) || usb_pipeint(urb->pipe)) {
 		bh = &hcd->high_prio_bh;
-	else
+		high_prio_bh = true;
+	} else {
 		bh = &hcd->low_prio_bh;
+		high_prio_bh = false;
+	}
 
 	spin_lock(&bh->lock);
 	list_add_tail(&urb->urb_list, &bh->head);
@@ -1885,7 +1871,7 @@ void usb_hcd_giveback_urb(struct usb_hcd *hcd, struct urb *urb, int status)
 
 	if (running)
 		;
-	else if (bh->high_prio)
+	else if (high_prio_bh)
 		tasklet_hi_schedule(&bh->bh);
 	else
 		tasklet_schedule(&bh->bh);
@@ -2359,6 +2345,10 @@ int hcd_bus_suspend(struct usb_device *rhdev, pm_message_t msg)
 		usb_set_device_state(rhdev, USB_STATE_SUSPENDED);
 		hcd->state = HC_STATE_SUSPENDED;
 
+		if (!PMSG_IS_AUTO(msg))
+			usb_phy_roothub_suspend(hcd->self.sysdev,
+						hcd->phy_roothub);
+
 		/* Did we race with a root-hub wakeup event? */
 		if (rhdev->do_remote_wakeup) {
 			char	buffer[6];
@@ -2395,6 +2385,14 @@ int hcd_bus_resume(struct usb_device *rhdev, pm_message_t msg)
 		dev_dbg(&rhdev->dev, "skipped %s of dead bus\n", "resume");
 		return 0;
 	}
+
+	if (!PMSG_IS_AUTO(msg)) {
+		status = usb_phy_roothub_resume(hcd->self.sysdev,
+						hcd->phy_roothub);
+		if (status)
+			return status;
+	}
+
 	if (!hcd->driver->bus_resume)
 		return -ENOENT;
 	if (HCD_RH_RUNNING(hcd))
@@ -2432,6 +2430,7 @@ int hcd_bus_resume(struct usb_device *rhdev, pm_message_t msg)
 		}
 	} else {
 		hcd->state = old_state;
+		usb_phy_roothub_suspend(hcd->self.sysdev, hcd->phy_roothub);
 		dev_dbg(&rhdev->dev, "bus %s fail, err %d\n",
 				"resume", status);
 		if (status != -ESHUTDOWN)
@@ -2648,9 +2647,7 @@ struct usb_hcd *__usb_create_hcd(const struct hc_driver *driver,
 	hcd->self.bus_name = bus_name;
 	hcd->self.uses_dma = (sysdev->dma_mask != NULL);
 
-	init_timer(&hcd->rh_timer);
-	hcd->rh_timer.function = rh_timer_func;
-	hcd->rh_timer.data = (unsigned long) hcd;
+	timer_setup(&hcd->rh_timer, rh_timer_func, 0);
 #ifdef CONFIG_PM
 	INIT_WORK(&hcd->wakeup_work, hcd_resume_work);
 #endif
@@ -2830,46 +2827,18 @@ int usb_add_hcd(struct usb_hcd *hcd,
 	int retval;
 	struct usb_device *rhdev;
 
-	if (IS_ENABLED(CONFIG_USB_PHY) && !hcd->usb_phy) {
-		struct usb_phy *phy = usb_get_phy_dev(hcd->self.sysdev, 0);
+	if (!hcd->skip_phy_initialization && usb_hcd_is_primary_hcd(hcd)) {
+		hcd->phy_roothub = usb_phy_roothub_alloc(hcd->self.sysdev);
+		if (IS_ERR(hcd->phy_roothub))
+			return PTR_ERR(hcd->phy_roothub);
 
-		if (IS_ERR(phy)) {
-			retval = PTR_ERR(phy);
-			if (retval == -EPROBE_DEFER)
-				return retval;
-		} else {
-			retval = usb_phy_init(phy);
-			if (retval) {
-				usb_put_phy(phy);
-				return retval;
-			}
-			hcd->usb_phy = phy;
-			hcd->remove_phy = 1;
-		}
-	}
+		retval = usb_phy_roothub_init(hcd->phy_roothub);
+		if (retval)
+			return retval;
 
-	if (IS_ENABLED(CONFIG_GENERIC_PHY) && !hcd->phy) {
-		struct phy *phy = phy_get(hcd->self.sysdev, "usb");
-
-		if (IS_ERR(phy)) {
-			retval = PTR_ERR(phy);
-			if (retval == -EPROBE_DEFER)
-				goto err_phy;
-		} else {
-			retval = phy_init(phy);
-			if (retval) {
-				phy_put(phy);
-				goto err_phy;
-			}
-			retval = phy_power_on(phy);
-			if (retval) {
-				phy_exit(phy);
-				phy_put(phy);
-				goto err_phy;
-			}
-			hcd->phy = phy;
-			hcd->remove_phy = 1;
-		}
+		retval = usb_phy_roothub_power_on(hcd->phy_roothub);
+		if (retval)
+			goto err_usb_phy_roothub_power_on;
 	}
 
 	dev_info(hcd->self.controller, "%s\n", hcd->product_desc);
@@ -2915,6 +2884,9 @@ int usb_add_hcd(struct usb_hcd *hcd,
 	hcd->self.root_hub = rhdev;
 	mutex_unlock(&usb_port_peer_mutex);
 
+	rhdev->rx_lanes = 1;
+	rhdev->tx_lanes = 1;
+
 	switch (hcd->speed) {
 	case HCD_USB11:
 		rhdev->speed = USB_SPEED_FULL;
@@ -2928,6 +2900,10 @@ int usb_add_hcd(struct usb_hcd *hcd,
 	case HCD_USB3:
 		rhdev->speed = USB_SPEED_SUPER;
 		break;
+	case HCD_USB32:
+		rhdev->rx_lanes = 2;
+		rhdev->tx_lanes = 2;
+		/* fall through */
 	case HCD_USB31:
 		rhdev->speed = USB_SPEED_SUPER_PLUS;
 		break;
@@ -2968,7 +2944,6 @@ int usb_add_hcd(struct usb_hcd *hcd,
 
 	/* initialize tasklets */
 	init_giveback_urb_bh(&hcd->high_prio_bh);
-	hcd->high_prio_bh.high_prio = true;
 	init_giveback_urb_bh(&hcd->low_prio_bh);
 
 	/* enable irqs just before we start the controller,
@@ -3037,18 +3012,10 @@ err_allocate_root_hub:
 err_register_bus:
 	hcd_buffer_destroy(hcd);
 err_create_buf:
-	if (IS_ENABLED(CONFIG_GENERIC_PHY) && hcd->remove_phy && hcd->phy) {
-		phy_power_off(hcd->phy);
-		phy_exit(hcd->phy);
-		phy_put(hcd->phy);
-		hcd->phy = NULL;
-	}
-err_phy:
-	if (hcd->remove_phy && hcd->usb_phy) {
-		usb_phy_shutdown(hcd->usb_phy);
-		usb_put_phy(hcd->usb_phy);
-		hcd->usb_phy = NULL;
-	}
+	usb_phy_roothub_power_off(hcd->phy_roothub);
+err_usb_phy_roothub_power_on:
+	usb_phy_roothub_exit(hcd->phy_roothub);
+
 	return retval;
 }
 EXPORT_SYMBOL_GPL(usb_add_hcd);
@@ -3124,17 +3091,8 @@ void usb_remove_hcd(struct usb_hcd *hcd)
 	usb_deregister_bus(&hcd->self);
 	hcd_buffer_destroy(hcd);
 
-	if (IS_ENABLED(CONFIG_GENERIC_PHY) && hcd->remove_phy && hcd->phy) {
-		phy_power_off(hcd->phy);
-		phy_exit(hcd->phy);
-		phy_put(hcd->phy);
-		hcd->phy = NULL;
-	}
-	if (hcd->remove_phy && hcd->usb_phy) {
-		usb_phy_shutdown(hcd->usb_phy);
-		usb_put_phy(hcd->usb_phy);
-		hcd->usb_phy = NULL;
-	}
+	usb_phy_roothub_power_off(hcd->phy_roothub);
+	usb_phy_roothub_exit(hcd->phy_roothub);
 
 	usb_put_invalidate_rhdev(hcd);
 	hcd->flags = 0;

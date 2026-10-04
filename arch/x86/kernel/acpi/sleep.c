@@ -13,7 +13,7 @@
 #include <linux/cpumask.h>
 #include <asm/segment.h>
 #include <asm/desc.h>
-#include <asm/pgtable.h>
+#include <linux/pgtable.h>
 #include <asm/cacheflush.h>
 #include <asm/realmode.h>
 
@@ -138,6 +138,8 @@ static int __init acpi_sleep_setup(char *str)
 			acpi_nvs_nosave_s3();
 		if (strncmp(str, "old_ordering", 12) == 0)
 			acpi_old_suspend_ordering();
+		if (strncmp(str, "nobl", 4) == 0)
+			acpi_sleep_no_blacklist();
 		str = strchr(str, ',');
 		if (str != NULL)
 			str += strspn(str, ", \t");

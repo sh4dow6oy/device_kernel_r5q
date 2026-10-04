@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-only WITH Linux-syscall-note */
 #ifndef __UAPI_MSMB_PPROC_H
 #define __UAPI_MSMB_PPROC_H
 

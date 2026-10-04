@@ -52,7 +52,7 @@
 #include <asm/idprom.h>
 #include <asm/openprom.h>
 #include <asm/oplib.h>
-#include <asm/pgtable.h>
+#include <linux/pgtable.h>
 #endif
 
 #if defined(CONFIG_ATM_FORE200E_USE_TASKLET) /* defer interrupt work to a tasklet */
@@ -358,26 +358,37 @@ fore200e_shutdown(struct fore200e* fore200e)
     case FORE200E_STATE_COMPLETE:
 	kfree(fore200e->stats);
 
+	/* fall through */
     case FORE200E_STATE_IRQ:
 	free_irq(fore200e->irq, fore200e->atm_dev);
+#ifdef FORE200E_USE_TASKLET
+	tasklet_kill(&fore200e->tx_tasklet);
+	tasklet_kill(&fore200e->rx_tasklet);
+#endif
 
+	/* fall through */
     case FORE200E_STATE_ALLOC_BUF:
 	fore200e_free_rx_buf(fore200e);
 
+	/* fall through */
     case FORE200E_STATE_INIT_BSQ:
 	fore200e_uninit_bs_queue(fore200e);
 
+	/* fall through */
     case FORE200E_STATE_INIT_RXQ:
 	fore200e->bus->dma_chunk_free(fore200e, &fore200e->host_rxq.status);
 	fore200e->bus->dma_chunk_free(fore200e, &fore200e->host_rxq.rpd);
 
+	/* fall through */
     case FORE200E_STATE_INIT_TXQ:
 	fore200e->bus->dma_chunk_free(fore200e, &fore200e->host_txq.status);
 	fore200e->bus->dma_chunk_free(fore200e, &fore200e->host_txq.tpd);
 
+	/* fall through */
     case FORE200E_STATE_INIT_CMDQ:
 	fore200e->bus->dma_chunk_free(fore200e, &fore200e->host_cmdq.status);
 
+	/* fall through */
     case FORE200E_STATE_INITIALIZE:
 	/* nothing to do for that state */
 
@@ -390,6 +401,7 @@ fore200e_shutdown(struct fore200e* fore200e)
     case FORE200E_STATE_MAP:
 	fore200e->bus->unmap(fore200e);
 
+	/* fall through */
     case FORE200E_STATE_CONFIGURE:
 	/* nothing to do for that state */
 
@@ -1461,7 +1473,9 @@ fore200e_open(struct atm_vcc *vcc)
 
 	vcc->dev_data = NULL;
 
+	mutex_lock(&fore200e->rate_mtx);
 	fore200e->available_cell_rate += vcc->qos.txtp.max_pcr;
+	mutex_unlock(&fore200e->rate_mtx);
 
 	kfree(fore200e_vcc);
 	return -EINVAL;
@@ -1783,31 +1797,6 @@ fore200e_getstats(struct fore200e* fore200e)
     return 0;
 }
 
-
-static int
-fore200e_getsockopt(struct atm_vcc* vcc, int level, int optname, void __user *optval, int optlen)
-{
-    /* struct fore200e* fore200e = FORE200E_DEV(vcc->dev); */
-
-    DPRINTK(2, "getsockopt %d.%d.%d, level = %d, optname = 0x%x, optval = 0x%p, optlen = %d\n",
-	    vcc->itf, vcc->vpi, vcc->vci, level, optname, optval, optlen);
-
-    return -EINVAL;
-}
-
-
-static int
-fore200e_setsockopt(struct atm_vcc* vcc, int level, int optname, void __user *optval, unsigned int optlen)
-{
-    /* struct fore200e* fore200e = FORE200E_DEV(vcc->dev); */
-    
-    DPRINTK(2, "setsockopt %d.%d.%d, level = %d, optname = 0x%x, optval = 0x%p, optlen = %d\n",
-	    vcc->itf, vcc->vpi, vcc->vci, level, optname, optval, optlen);
-    
-    return -EINVAL;
-}
-
-
 #if 0 /* currently unused */
 static int
 fore200e_get_oc3(struct fore200e* fore200e, struct oc3_regs* regs)
@@ -2097,7 +2086,8 @@ static int fore200e_alloc_rx_buf(struct fore200e *fore200e)
 	    DPRINTK(2, "rx buffers %d / %d are being allocated\n", scheme, magn);
 
 	    /* allocate the array of receive buffers */
-	    buffer = bsq->buffer = kzalloc(nbr * sizeof(struct buffer), GFP_KERNEL);
+	    buffer = bsq->buffer = kcalloc(nbr, sizeof(struct buffer),
+                                           GFP_KERNEL);
 
 	    if (buffer == NULL)
 		return -ENOMEM;
@@ -3086,8 +3076,8 @@ fore200e_proc_read(struct atm_dev *dev, loff_t* pos, char* page)
 	    ASSERT(fore200e_vcc);
 
 	    len = sprintf(page,
-			  "  %08x  %03d %05d %1d   %09lu %05d/%05d      %09lu %05d/%05d\n",
-			  (u32)(unsigned long)vcc,
+			  "  %pK  %03d %05d %1d   %09lu %05d/%05d      %09lu %05d/%05d\n",
+			  vcc,
 			  vcc->vpi, vcc->vci, fore200e_atm2fore_aal(vcc->qos.aal),
 			  fore200e_vcc->tx_pdu,
 			  fore200e_vcc->tx_min_pdu > 0xFFFF ? 0 : fore200e_vcc->tx_min_pdu,
@@ -3115,8 +3105,6 @@ static const struct atmdev_ops fore200e_ops =
 	.open       = fore200e_open,
 	.close      = fore200e_close,
 	.ioctl      = fore200e_ioctl,
-	.getsockopt = fore200e_getsockopt,
-	.setsockopt = fore200e_setsockopt,
 	.send       = fore200e_send,
 	.change_qos = fore200e_change_qos,
 	.proc_read  = fore200e_proc_read,

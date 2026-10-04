@@ -48,10 +48,6 @@ nfs_encode_fh(struct inode *inode, __u32 *p, int *max_len, struct inode *parent)
 		*max_len = len;
 		return FILEID_INVALID;
 	}
-	if (IS_AUTOMOUNT(inode)) {
-		*max_len = FILEID_INVALID;
-		goto out;
-	}
 
 	p[FILEID_HIGH_OFF] = NFS_FILEID(inode) >> 32;
 	p[FILEID_LOW_OFF] = NFS_FILEID(inode);
@@ -59,7 +55,6 @@ nfs_encode_fh(struct inode *inode, __u32 *p, int *max_len, struct inode *parent)
 	p[len - 1] = 0; /* Padding */
 	nfs_copy_fh(clnt_fh, server_fh);
 	*max_len = len;
-out:
 	dprintk("%s: result fh fileid %llu mode %u size %d\n",
 		__func__, NFS_FILEID(inode), inode->i_mode, *max_len);
 	return *max_len;
@@ -72,14 +67,21 @@ nfs_fh_to_dentry(struct super_block *sb, struct fid *fid,
 	struct nfs4_label *label = NULL;
 	struct nfs_fattr *fattr = NULL;
 	struct nfs_fh *server_fh = nfs_exp_embedfh(fid->raw);
-	size_t fh_size = offsetof(struct nfs_fh, data) + server_fh->size;
+	size_t fh_size = offsetof(struct nfs_fh, data);
 	const struct nfs_rpc_ops *rpc_ops;
 	struct dentry *dentry;
 	struct inode *inode;
-	int len = EMBED_FH_OFF + XDR_QUADLEN(fh_size);
+	int len = EMBED_FH_OFF;
 	u32 *p = fid->raw;
 	int ret;
 
+	/* Initial check of bounds */
+	if (fh_len < len + XDR_QUADLEN(fh_size) ||
+	    fh_len > XDR_QUADLEN(NFS_MAXFHSIZE))
+		return NULL;
+	/* Calculate embedded filehandle size */
+	fh_size += server_fh->size;
+	len += XDR_QUADLEN(fh_size);
 	/* NULL translates to ESTALE */
 	if (fh_len < len || fh_type != len)
 		return NULL;
@@ -107,7 +109,7 @@ nfs_fh_to_dentry(struct super_block *sb, struct fid *fid,
 	}
 
 	rpc_ops = NFS_SB(sb)->nfs_client->rpc_ops;
-	ret = rpc_ops->getattr(NFS_SB(sb), server_fh, fattr, label);
+	ret = rpc_ops->getattr(NFS_SB(sb), server_fh, fattr, label, NULL);
 	if (ret) {
 		dprintk("%s: getattr failed %d\n", __func__, ret);
 		dentry = ERR_PTR(ret);

@@ -16,7 +16,6 @@
 #include <linux/blkdev.h>
 #include <linux/buffer_head.h>
 #include <linux/keyslot-manager.h>
-#include <linux/overflow.h>
 #include <linux/uio.h>
 
 #include "fscrypt_private.h"
@@ -45,7 +44,7 @@ static void fscrypt_get_devices(struct super_block *sb, int num_devs,
 
 #define SDHCI "sdhci"
 
-static int fscrypt_find_storage_type(char **device)
+int fscrypt_find_storage_type(char **device)
 {
 	char boot[20] = {'\0'};
 	char *match = (char *)strnstr(saved_command_line,
@@ -62,6 +61,7 @@ static int fscrypt_find_storage_type(char **device)
 	}
 	return -EINVAL;
 }
+EXPORT_SYMBOL(fscrypt_find_storage_type);
 
 static unsigned int fscrypt_get_dun_bytes(const struct fscrypt_info *ci)
 {
@@ -233,8 +233,10 @@ int fscrypt_prepare_inline_crypt_key(struct fscrypt_prepared_key *prep_key,
 		}
 	}
 	/*
-	 * Pairs with READ_ONCE() in fscrypt_is_key_prepared().  (Only matters
-	 * for the per-mode keys, which are shared by multiple inodes.)
+	 * Pairs with the smp_load_acquire() in fscrypt_is_key_prepared().
+	 * I.e., here we publish ->blk_key with a RELEASE barrier so that
+	 * concurrent tasks can ACQUIRE it.  Note that this concurrency is only
+	 * possible for per-mode keys, not for per-file keys.
 	 */
 	smp_store_release(&prep_key->blk_key, blk_key);
 	return 0;
@@ -355,11 +357,9 @@ void fscrypt_set_bio_crypt_ctx(struct bio *bio, const struct inode *inode,
 	fscrypt_generate_dun(ci, first_lblk, dun);
 	bio_crypt_set_ctx(bio, &ci->ci_key.blk_key->base, dun, gfp_mask);
 	if ((fscrypt_policy_contents_mode(&ci->ci_policy) ==
-		FSCRYPT_MODE_PRIVATE) &&
-		(!strcmp(inode->i_sb->s_type->name, "ext4")))
-			bio->bi_crypt_context->is_ext4 = true;
-	else
-			bio->bi_crypt_context->is_ext4 = false;
+	    FSCRYPT_MODE_PRIVATE) &&
+	    (!strcmp(inode->i_sb->s_type->name, "ext4")))
+		bio->bi_crypt_context->is_ext4 = true;
 }
 EXPORT_SYMBOL_GPL(fscrypt_set_bio_crypt_ctx);
 

@@ -397,11 +397,34 @@ int inet_pton_with_scope(struct net *net, __kernel_sa_family_t af,
 		break;
 	default:
 		pr_err("unexpected address family %d\n", af);
-	};
+	}
 
 	return ret;
 }
 EXPORT_SYMBOL(inet_pton_with_scope);
+
+bool inet_addr_is_any(struct sockaddr *addr)
+{
+	if (addr->sa_family == AF_INET6) {
+		struct sockaddr_in6 *in6 = (struct sockaddr_in6 *)addr;
+		const struct sockaddr_in6 in6_any =
+			{ .sin6_addr = IN6ADDR_ANY_INIT };
+
+		if (!memcmp(in6->sin6_addr.s6_addr,
+			    in6_any.sin6_addr.s6_addr, 16))
+			return true;
+	} else if (addr->sa_family == AF_INET) {
+		struct sockaddr_in *in = (struct sockaddr_in *)addr;
+
+		if (in->sin_addr.s_addr == htonl(INADDR_ANY))
+			return true;
+	} else {
+		pr_warn("unexpected address family %u\n", addr->sa_family);
+	}
+
+	return false;
+}
+EXPORT_SYMBOL(inet_addr_is_any);
 
 void inet_proto_csum_replace4(__sum16 *sum, struct sk_buff *skb,
 			      __be32 from, __be32 to, bool pseudohdr)
@@ -454,11 +477,11 @@ void inet_proto_csum_replace16(__sum16 *sum, struct sk_buff *skb,
 EXPORT_SYMBOL(inet_proto_csum_replace16);
 
 void inet_proto_csum_replace_by_diff(__sum16 *sum, struct sk_buff *skb,
-				     __wsum diff, bool pseudohdr)
+				     __wsum diff, bool pseudohdr, bool ipv6)
 {
 	if (skb->ip_summed != CHECKSUM_PARTIAL) {
 		*sum = csum_fold(csum_add(diff, ~csum_unfold(*sum)));
-		if (skb->ip_summed == CHECKSUM_COMPLETE && pseudohdr)
+		if (skb->ip_summed == CHECKSUM_COMPLETE && pseudohdr && !ipv6)
 			skb->csum = ~csum_add(diff, ~skb->csum);
 	} else if (pseudohdr) {
 		*sum = ~csum_fold(csum_add(diff, csum_unfold(*sum)));

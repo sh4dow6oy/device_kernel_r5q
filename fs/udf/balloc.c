@@ -82,8 +82,9 @@ static int __load_block_bitmap(struct super_block *sb,
 	int nr_groups = bitmap->s_nr_groups;
 
 	if (block_group >= nr_groups) {
-		udf_debug("block_group (%u) > nr_groups (%d)\n",
+		udf_debug("block_group (%u) >= nr_groups (%d)\n",
 			  block_group, nr_groups);
+		return -EFSCORRUPTED;
 	}
 
 	if (bitmap->s_block_bitmap[block_group])
@@ -231,16 +232,18 @@ out:
 	return alloc_count;
 }
 
-static int udf_bitmap_new_block(struct super_block *sb,
+static udf_pblk_t udf_bitmap_new_block(struct super_block *sb,
 				struct udf_bitmap *bitmap, uint16_t partition,
 				uint32_t goal, int *err)
 {
 	struct udf_sb_info *sbi = UDF_SB(sb);
-	int newbit, bit = 0, block, block_group, group_start;
+	int newbit, bit = 0;
+	udf_pblk_t block;
+	int block_group, group_start;
 	int end_goal, nr_groups, bitmap_nr, i;
 	struct buffer_head *bh = NULL;
 	char *ptr;
-	int newblock = 0;
+	udf_pblk_t newblock = 0;
 
 	*err = -ENOSPC;
 	mutex_lock(&sbi->s_alloc_mutex);
@@ -546,13 +549,14 @@ static int udf_table_prealloc_blocks(struct super_block *sb,
 	return alloc_count;
 }
 
-static int udf_table_new_block(struct super_block *sb,
+static udf_pblk_t udf_table_new_block(struct super_block *sb,
 			       struct inode *table, uint16_t partition,
 			       uint32_t goal, int *err)
 {
 	struct udf_sb_info *sbi = UDF_SB(sb);
 	uint32_t spread = 0xFFFFFFFF, nspread = 0xFFFFFFFF;
-	uint32_t newblock = 0, adsize;
+	udf_pblk_t newblock = 0;
+	uint32_t adsize;
 	uint32_t elen, goal_elen = 0;
 	struct kernel_lb_addr eloc, goal_eloc;
 	struct extent_position epos, goal_epos;
@@ -648,7 +652,7 @@ void udf_free_blocks(struct super_block *sb, struct inode *inode,
 
 	if (check_add_overflow(bloc->logicalBlockNum, offset, &blk) ||
 	    check_add_overflow(blk, count, &blk) ||
-	    bloc->logicalBlockNum + count > map->s_partition_len) {
+	    blk > map->s_partition_len) {
 		udf_debug("Invalid request to free blocks: (%d, %u), off %u, "
 			  "len %u, partition len %u\n",
 			  partition, bloc->logicalBlockNum, offset, count,
@@ -712,12 +716,12 @@ inline int udf_prealloc_blocks(struct super_block *sb,
 	return allocated;
 }
 
-inline int udf_new_block(struct super_block *sb,
+inline udf_pblk_t udf_new_block(struct super_block *sb,
 			 struct inode *inode,
 			 uint16_t partition, uint32_t goal, int *err)
 {
 	struct udf_part_map *map = &UDF_SB(sb)->s_partmaps[partition];
-	int block;
+	udf_pblk_t block;
 
 	if (map->s_partition_flags & UDF_PART_FLAG_UNALLOC_BITMAP)
 		block = udf_bitmap_new_block(sb,

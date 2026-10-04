@@ -1,18 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Driver for msm7k serial device and console
  *
  * Copyright (C) 2007 Google, Inc.
  * Author: Robert Love <rlove@google.com>
  * Copyright (c) 2011, Code Aurora Forum. All rights reserved.
- *
- * This software is licensed under the terms of the GNU General Public
- * License version 2, as published by the Free Software Foundation, and
- * may be copied, distributed, and modified under those terms.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #if defined(CONFIG_SERIAL_MSM_CONSOLE) && defined(CONFIG_MAGIC_SYSRQ)
@@ -1213,7 +1205,8 @@ static int msm_startup(struct uart_port *port)
 	data |= UART_MR1_AUTO_RFR_LEVEL0 & rfr_level;
 	msm_write(port, data, UART_MR1);
 
-	if (msm_port->is_uartdm) {
+	/* Disable DMA for console to prevent PIO/DMA collisions */
+	if (msm_port->is_uartdm && !uart_console(port)) {
 		msm_request_tx_dma(msm_port, msm_port->uart.mapbase);
 		msm_request_rx_dma(msm_port, msm_port->uart.mapbase);
 	}
@@ -1670,12 +1663,6 @@ static void __msm_console_write(struct uart_port *port, const char *s,
 	local_irq_restore(flags);
 }
 
-#ifdef CONFIG_SERIAL_RX_CONSOLE_ONLY
-static void msm_console_write(struct console *co, const char *s,
-			      unsigned int count)
-{
-}
-#else
 static void msm_console_write(struct console *co, const char *s,
 			      unsigned int count)
 {
@@ -1689,7 +1676,6 @@ static void msm_console_write(struct console *co, const char *s,
 
 	__msm_console_write(port, s, count, msm_port->is_uartdm);
 }
-#endif
 
 static int __init msm_console_setup(struct console *co, char *options)
 {
@@ -1869,8 +1855,7 @@ static const struct of_device_id msm_match_table[] = {
 };
 MODULE_DEVICE_TABLE(of, msm_match_table);
 
-#ifdef CONFIG_PM_SLEEP
-static int msm_serial_suspend(struct device *dev)
+static int __maybe_unused msm_serial_suspend(struct device *dev)
 {
 	struct msm_port *port = dev_get_drvdata(dev);
 
@@ -1879,7 +1864,7 @@ static int msm_serial_suspend(struct device *dev)
 	return 0;
 }
 
-static int msm_serial_resume(struct device *dev)
+static int __maybe_unused msm_serial_resume(struct device *dev)
 {
 	struct msm_port *port = dev_get_drvdata(dev);
 
@@ -1887,7 +1872,6 @@ static int msm_serial_resume(struct device *dev)
 
 	return 0;
 }
-#endif /* CONFIG_PM_SLEEP */
 
 static const struct dev_pm_ops msm_serial_dev_pm_ops = {
 	SET_SYSTEM_SLEEP_PM_OPS(msm_serial_suspend, msm_serial_resume)

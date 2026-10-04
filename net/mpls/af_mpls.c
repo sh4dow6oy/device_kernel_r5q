@@ -17,12 +17,13 @@
 #include <net/arp.h>
 #include <net/ip_fib.h>
 #include <net/netevent.h>
+#include <net/ip_tunnels.h>
 #include <net/netns/generic.h>
 #if IS_ENABLED(CONFIG_IPV6)
 #include <net/ipv6.h>
 #endif
 #include <net/ipv6_stubs.h>
-#include <net/nexthop.h>
+#include <net/rtnh.h>
 #include "internal.h"
 
 /* max memory we will use for mpls_route */
@@ -40,6 +41,36 @@ static int one = 1;
 static int label_limit = (1 << 20) - 1;
 static int ttl_max = 255;
 
+#if IS_ENABLED(CONFIG_NET_IP_TUNNEL)
+static size_t ipgre_mpls_encap_hlen(struct ip_tunnel_encap *e)
+{
+	return sizeof(struct mpls_shim_hdr);
+}
+
+static const struct ip_tunnel_encap_ops mpls_iptun_ops = {
+	.encap_hlen	= ipgre_mpls_encap_hlen,
+};
+
+static int ipgre_tunnel_encap_add_mpls_ops(void)
+{
+	return ip_tunnel_encap_add_ops(&mpls_iptun_ops, TUNNEL_ENCAP_MPLS);
+}
+
+static void ipgre_tunnel_encap_del_mpls_ops(void)
+{
+	ip_tunnel_encap_del_ops(&mpls_iptun_ops, TUNNEL_ENCAP_MPLS);
+}
+#else
+static int ipgre_tunnel_encap_add_mpls_ops(void)
+{
+	return 0;
+}
+
+static void ipgre_tunnel_encap_del_mpls_ops(void)
+{
+}
+#endif
+
 static void rtmsg_lfib(int event, u32 label, struct mpls_route *rt,
 		       struct nlmsghdr *nlh, struct net *net, u32 portid,
 		       unsigned int nlm_flags);
@@ -50,8 +81,8 @@ static struct mpls_route *mpls_route_input_rcu(struct net *net, unsigned index)
 
 	if (index < net->mpls.platform_labels) {
 		struct mpls_route __rcu **platform_label =
-			rcu_dereference(net->mpls.platform_label);
-		rt = rcu_dereference(platform_label[index]);
+			rcu_dereference_rtnl(net->mpls.platform_label);
+		rt = rcu_dereference_rtnl(platform_label[index]);
 	}
 	return rt;
 }
@@ -91,7 +122,7 @@ bool mpls_pkt_too_big(const struct sk_buff *skb, unsigned int mtu)
 	if (skb->len <= mtu)
 		return false;
 
-	if (skb_is_gso(skb) && skb_gso_validate_mtu(skb, mtu))
+	if (skb_is_gso(skb) && skb_gso_validate_network_len(skb, mtu))
 		return false;
 
 	return true;
@@ -1190,8 +1221,8 @@ static int mpls_netconf_get_devconf(struct sk_buff *in_skb,
 	int ifindex;
 	int err;
 
-	err = nlmsg_parse(nlh, sizeof(*ncm), tb, NETCONFA_MAX,
-			  devconf_mpls_policy, NULL);
+	err = nlmsg_parse_deprecated(nlh, sizeof(*ncm), tb, NETCONFA_MAX,
+				     devconf_mpls_policy, extack);
 	if (err < 0)
 		goto errout;
 
@@ -1533,10 +1564,14 @@ static int mpls_dev_notify(struct notifier_block *this, unsigned long event,
 	unsigned int flags;
 
 	if (event == NETDEV_REGISTER) {
-		/* For now just support Ethernet, IPGRE, SIT and IPIP devices */
+
+		/* For now just support Ethernet, IPGRE, IP6GRE, SIT and
+		 * IPIP devices
+		 */
 		if (dev->type == ARPHRD_ETHER ||
 		    dev->type == ARPHRD_LOOPBACK ||
 		    dev->type == ARPHRD_IPGRE ||
+		    dev->type == ARPHRD_IP6GRE ||
 		    dev->type == ARPHRD_SIT ||
 		    dev->type == ARPHRD_TUNNEL) {
 			mdev = mpls_add_dev(dev);
@@ -1739,8 +1774,8 @@ static int rtm_to_route_config(struct sk_buff *skb,
 	int index;
 	int err;
 
-	err = nlmsg_parse(nlh, sizeof(*rtm), tb, RTA_MAX, rtm_mpls_policy,
-			  extack);
+	err = nlmsg_parse_deprecated(nlh, sizeof(*rtm), tb, RTA_MAX,
+				     rtm_mpls_policy, extack);
 	if (err < 0)
 		goto errout;
 
@@ -1968,7 +2003,7 @@ static int mpls_dump_route(struct sk_buff *skb, u32 portid, u32 seq, int event,
 		u8 linkdown = 0;
 		u8 dead = 0;
 
-		mp = nla_nest_start(skb, RTA_MULTIPATH);
+		mp = nla_nest_start_noflag(skb, RTA_MULTIPATH);
 		if (!mp)
 			goto nla_put_failure;
 
@@ -2021,14 +2056,61 @@ nla_put_failure:
 	return -EMSGSIZE;
 }
 
+#if IS_ENABLED(CONFIG_INET)
+static int mpls_valid_fib_dump_req(struct net *net, const struct nlmsghdr *nlh,
+				   struct fib_dump_filter *filter,
+				   struct netlink_callback *cb)
+{
+	return ip_valid_fib_dump_req(net, nlh, filter, cb);
+}
+#else
+static int mpls_valid_fib_dump_req(struct net *net, const struct nlmsghdr *nlh,
+				   struct fib_dump_filter *filter,
+				   struct netlink_callback *cb)
+{
+	struct netlink_ext_ack *extack = cb->extack;
+	struct rtmsg *rtm;
+
+	if (nlh->nlmsg_len < nlmsg_msg_size(sizeof(*rtm))) {
+		NL_SET_ERR_MSG_MOD(extack, "Invalid header for FIB dump request");
+		return -EINVAL;
+	}
+
+	rtm = nlmsg_data(nlh);
+	if (rtm->rtm_dst_len || rtm->rtm_src_len  || rtm->rtm_tos   ||
+	    rtm->rtm_table   || rtm->rtm_protocol || rtm->rtm_scope ||
+	    rtm->rtm_type    || rtm->rtm_flags) {
+		NL_SET_ERR_MSG_MOD(extack, "Invalid values in header for FIB dump request");
+		return -EINVAL;
+	}
+
+	if (nlmsg_attrlen(nlh, sizeof(*rtm))) {
+		NL_SET_ERR_MSG_MOD(extack, "Invalid data after header in FIB dump request");
+		return -EINVAL;
+	}
+
+	return 0;
+}
+#endif
+
 static int mpls_dump_routes(struct sk_buff *skb, struct netlink_callback *cb)
 {
+	const struct nlmsghdr *nlh = cb->nlh;
 	struct net *net = sock_net(skb->sk);
 	struct mpls_route __rcu **platform_label;
+	struct fib_dump_filter filter = {};
 	size_t platform_labels;
 	unsigned int index;
 
 	ASSERT_RTNL();
+
+	if (cb->strict_check) {
+		int err;
+
+		err = mpls_valid_fib_dump_req(net, nlh, &filter, cb);
+		if (err < 0)
+			return err;
+	}
 
 	index = cb->args[0];
 	if (index < MPLS_LABEL_FIRST_UNRESERVED)
@@ -2135,8 +2217,8 @@ static int mpls_getroute(struct sk_buff *in_skb, struct nlmsghdr *in_nlh,
 	u8 n_labels;
 	int err;
 
-	err = nlmsg_parse(in_nlh, sizeof(*rtm), tb, RTA_MAX,
-			  rtm_mpls_policy, extack);
+	err = nlmsg_parse_deprecated(in_nlh, sizeof(*rtm), tb, RTA_MAX,
+				     rtm_mpls_policy, extack);
 	if (err < 0)
 		goto errout;
 
@@ -2244,6 +2326,7 @@ static int mpls_getroute(struct sk_buff *in_skb, struct nlmsghdr *in_nlh,
 	r->rtm_family	 = AF_MPLS;
 	r->rtm_dst_len	= 20;
 	r->rtm_src_len	= 0;
+	r->rtm_tos	= 0;
 	r->rtm_table	= RT_TABLE_MAIN;
 	r->rtm_type	= RTN_UNICAST;
 	r->rtm_scope	= RT_SCOPE_UNIVERSE;
@@ -2524,12 +2607,19 @@ static int __init mpls_init(void)
 
 	rtnl_af_register(&mpls_af_ops);
 
-	rtnl_register(PF_MPLS, RTM_NEWROUTE, mpls_rtm_newroute, NULL, 0);
-	rtnl_register(PF_MPLS, RTM_DELROUTE, mpls_rtm_delroute, NULL, 0);
-	rtnl_register(PF_MPLS, RTM_GETROUTE, mpls_getroute, mpls_dump_routes,
-		      0);
-	rtnl_register(PF_MPLS, RTM_GETNETCONF, mpls_netconf_get_devconf,
-		      mpls_netconf_dump_devconf, 0);
+	rtnl_register_module(THIS_MODULE, PF_MPLS, RTM_NEWROUTE,
+			     mpls_rtm_newroute, NULL, 0);
+	rtnl_register_module(THIS_MODULE, PF_MPLS, RTM_DELROUTE,
+			     mpls_rtm_delroute, NULL, 0);
+	rtnl_register_module(THIS_MODULE, PF_MPLS, RTM_GETROUTE,
+			     mpls_getroute, mpls_dump_routes, 0);
+	rtnl_register_module(THIS_MODULE, PF_MPLS, RTM_GETNETCONF,
+			     mpls_netconf_get_devconf,
+			     mpls_netconf_dump_devconf, 0);
+	err = ipgre_tunnel_encap_add_mpls_ops();
+	if (err)
+		pr_err("Can't add mpls over gre tunnel ops\n");
+
 	err = 0;
 out:
 	return err;
@@ -2547,6 +2637,7 @@ static void __exit mpls_exit(void)
 	dev_remove_pack(&mpls_packet_type);
 	unregister_netdevice_notifier(&mpls_dev_notifier);
 	unregister_pernet_subsys(&mpls_net_ops);
+	ipgre_tunnel_encap_del_mpls_ops();
 }
 module_exit(mpls_exit);
 

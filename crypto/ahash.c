@@ -87,11 +87,6 @@ int crypto_hash_walk_done(struct crypto_hash_walk *walk, int err)
 {
 	unsigned int alignmask = walk->alignmask;
 
-#ifdef CONFIG_CRYPTO_FIPS
-	if (unlikely(in_fips_err()))
-		return -EACCES;
-#endif
-
 	walk->data -= walk->offset;
 
 	if (walk->entrylen && (walk->offset & alignmask) && !err) {
@@ -139,12 +134,6 @@ EXPORT_SYMBOL_GPL(crypto_hash_walk_done);
 int crypto_hash_walk_first(struct ahash_request *req,
 			   struct crypto_hash_walk *walk)
 {
-
-#ifdef CONFIG_CRYPTO_FIPS
-	if (unlikely(in_fips_err()))
-		return -EACCES;
-#endif
-
 	walk->total = req->nbytes;
 
 	if (!walk->total) {
@@ -364,9 +353,7 @@ static int ahash_op_unaligned(struct ahash_request *req,
 		return err;
 
 	err = op(req);
-	if (err == -EINPROGRESS ||
-	    (err == -EBUSY && (ahash_request_flags(req) &
-			       CRYPTO_TFM_REQ_MAY_BACKLOG)))
+	if (err == -EINPROGRESS || err == -EBUSY)
 		return err;
 
 	ahash_restore_req(req, err);
@@ -379,11 +366,6 @@ static int crypto_ahash_op(struct ahash_request *req,
 {
 	struct crypto_ahash *tfm = crypto_ahash_reqtfm(req);
 	unsigned long alignmask = crypto_ahash_alignmask(tfm);
-
-#ifdef CONFIG_CRYPTO_FIPS
-	if (unlikely(in_fips_err()))
-		return -EACCES;
-#endif
 
 	if ((unsigned long)req->result & alignmask)
 		return ahash_op_unaligned(req, op);
@@ -434,9 +416,7 @@ static int ahash_def_finup_finish1(struct ahash_request *req, int err)
 	req->base.complete = ahash_def_finup_done2;
 
 	err = crypto_ahash_reqtfm(req)->final(req);
-	if (err == -EINPROGRESS ||
-	    (err == -EBUSY && (ahash_request_flags(req) &
-			       CRYPTO_TFM_REQ_MAY_BACKLOG)))
+	if (err == -EINPROGRESS || err == -EBUSY)
 		return err;
 
 out:
@@ -472,22 +452,10 @@ static int ahash_def_finup(struct ahash_request *req)
 		return err;
 
 	err = tfm->update(req);
-	if (err == -EINPROGRESS ||
-	    (err == -EBUSY && (ahash_request_flags(req) &
-			       CRYPTO_TFM_REQ_MAY_BACKLOG)))
+	if (err == -EINPROGRESS || err == -EBUSY)
 		return err;
 
 	return ahash_def_finup_finish1(req, err);
-}
-
-static int ahash_no_export(struct ahash_request *req, void *out)
-{
-	return -ENOSYS;
-}
-
-static int ahash_no_import(struct ahash_request *req, const void *in)
-{
-	return -ENOSYS;
 }
 
 static int crypto_ahash_init_tfm(struct crypto_tfm *tfm)
@@ -495,14 +463,7 @@ static int crypto_ahash_init_tfm(struct crypto_tfm *tfm)
 	struct crypto_ahash *hash = __crypto_ahash_cast(tfm);
 	struct ahash_alg *alg = crypto_ahash_alg(hash);
 
-#ifdef CONFIG_CRYPTO_FIPS
-	if (unlikely(in_fips_err()))
-		return -EACCES;
-#endif
-
 	hash->setkey = ahash_nosetkey;
-	hash->export = ahash_no_export;
-	hash->import = ahash_no_import;
 
 	if (tfm->__crt_alg->cra_type != &crypto_ahash_type)
 		return crypto_init_shash_ops_async(tfm);
@@ -512,15 +473,13 @@ static int crypto_ahash_init_tfm(struct crypto_tfm *tfm)
 	hash->final = alg->final;
 	hash->finup = alg->finup ?: ahash_def_finup;
 	hash->digest = alg->digest;
+	hash->export = alg->export;
+	hash->import = alg->import;
 
 	if (alg->setkey) {
 		hash->setkey = alg->setkey;
 		ahash_set_needkey(hash);
 	}
-	if (alg->export)
-		hash->export = alg->export;
-	if (alg->import)
-		hash->import = alg->import;
 
 	return 0;
 }
@@ -601,8 +560,8 @@ static int ahash_prepare_alg(struct ahash_alg *alg)
 {
 	struct crypto_alg *base = &alg->halg.base;
 
-	if (alg->halg.digestsize > PAGE_SIZE / 8 ||
-	    alg->halg.statesize > PAGE_SIZE / 8 ||
+	if (alg->halg.digestsize > HASH_MAX_DIGESTSIZE ||
+	    alg->halg.statesize > HASH_MAX_STATESIZE ||
 	    alg->halg.statesize == 0)
 		return -EINVAL;
 
@@ -665,11 +624,6 @@ int ahash_register_instance(struct crypto_template *tmpl,
 			    struct ahash_instance *inst)
 {
 	int err;
-
-#ifdef CONFIG_CRYPTO_FIPS
-	if (unlikely(in_fips_err()))
-		return -EACCES;
-#endif
 
 	err = ahash_prepare_alg(&inst->alg);
 	if (err)

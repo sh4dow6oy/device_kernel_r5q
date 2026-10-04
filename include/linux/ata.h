@@ -448,6 +448,8 @@ enum {
 	ATA_SET_MAX_LOCK	= 0x02,
 	ATA_SET_MAX_UNLOCK	= 0x03,
 	ATA_SET_MAX_FREEZE_LOCK	= 0x04,
+	ATA_SET_MAX_PASSWD_DMA	= 0x05,
+	ATA_SET_MAX_UNLOCK_DMA	= 0x06,
 
 	/* feature values for DEVICE CONFIGURATION OVERLAY */
 	ATA_DCO_RESTORE		= 0xC0,
@@ -571,6 +573,7 @@ struct ata_bmdma_prd {
 #define ata_id_has_ncq(id)	((id)[ATA_ID_SATA_CAPABILITY] & (1 << 8))
 #define ata_id_queue_depth(id)	(((id)[ATA_ID_QUEUE_DEPTH] & 0x1f) + 1)
 #define ata_id_removable(id)	((id)[ATA_ID_CONFIG] & (1 << 7))
+#define ata_id_is_locked(id)	(((id)[ATA_ID_DLF] & 0x7) == 0x7)
 #define ata_id_has_atapi_AN(id)	\
 	((((id)[ATA_ID_SATA_CAPABILITY] != 0x0000) && \
 	  ((id)[ATA_ID_SATA_CAPABILITY] != 0xffff)) && \

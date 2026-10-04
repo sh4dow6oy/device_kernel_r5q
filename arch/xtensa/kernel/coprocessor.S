@@ -21,7 +21,7 @@
 #include <asm/unistd.h>
 #include <asm/ptrace.h>
 #include <asm/current.h>
-#include <asm/pgtable.h>
+#include <linux/pgtable.h>
 #include <asm/page.h>
 #include <asm/signal.h>
 #include <asm/tlbflush.h>
@@ -212,8 +212,7 @@ ENDPROC(coprocessor_restore)
 ENTRY(fast_coprocessor_double)
 
 	wsr	a0, excsave1
-	movi	a0, unrecoverable_exception
-	callx0	a0
+	call0	unrecoverable_exception
 
 ENDPROC(fast_coprocessor_double)
 

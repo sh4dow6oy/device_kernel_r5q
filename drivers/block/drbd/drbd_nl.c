@@ -114,7 +114,7 @@ static int drbd_msg_put_info(struct sk_buff *skb, const char *info)
 	if (!info || !info[0])
 		return 0;
 
-	nla = nla_nest_start(skb, DRBD_NLA_CFG_REPLY);
+	nla = nla_nest_start_noflag(skb, DRBD_NLA_CFG_REPLY);
 	if (!nla)
 		return err;
 
@@ -1215,10 +1215,10 @@ static void decide_on_discard_support(struct drbd_device *device,
 		 * topology on all peers. */
 		blk_queue_discard_granularity(q, 512);
 		q->limits.max_discard_sectors = drbd_max_discard_sectors(connection);
-		queue_flag_set_unlocked(QUEUE_FLAG_DISCARD, q);
+		blk_queue_flag_set(QUEUE_FLAG_DISCARD, q);
 		q->limits.max_write_zeroes_sectors = drbd_max_discard_sectors(connection);
 	} else {
-		queue_flag_clear_unlocked(QUEUE_FLAG_DISCARD, q);
+		blk_queue_flag_clear(QUEUE_FLAG_DISCARD, q);
 		blk_queue_discard_granularity(q, 0);
 		q->limits.max_discard_sectors = 0;
 		q->limits.max_write_zeroes_sectors = 0;
@@ -2327,10 +2327,10 @@ check_net_options(struct drbd_connection *connection, struct net_conf *new_net_c
 }
 
 struct crypto {
-	struct crypto_ahash *verify_tfm;
-	struct crypto_ahash *csums_tfm;
+	struct crypto_shash *verify_tfm;
+	struct crypto_shash *csums_tfm;
 	struct crypto_shash *cram_hmac_tfm;
-	struct crypto_ahash *integrity_tfm;
+	struct crypto_shash *integrity_tfm;
 };
 
 static int
@@ -2348,36 +2348,21 @@ alloc_shash(struct crypto_shash **tfm, char *tfm_name, int err_alg)
 	return NO_ERROR;
 }
 
-static int
-alloc_ahash(struct crypto_ahash **tfm, char *tfm_name, int err_alg)
-{
-	if (!tfm_name[0])
-		return NO_ERROR;
-
-	*tfm = crypto_alloc_ahash(tfm_name, 0, CRYPTO_ALG_ASYNC);
-	if (IS_ERR(*tfm)) {
-		*tfm = NULL;
-		return err_alg;
-	}
-
-	return NO_ERROR;
-}
-
 static enum drbd_ret_code
 alloc_crypto(struct crypto *crypto, struct net_conf *new_net_conf)
 {
 	char hmac_name[CRYPTO_MAX_ALG_NAME];
 	enum drbd_ret_code rv;
 
-	rv = alloc_ahash(&crypto->csums_tfm, new_net_conf->csums_alg,
+	rv = alloc_shash(&crypto->csums_tfm, new_net_conf->csums_alg,
 			 ERR_CSUMS_ALG);
 	if (rv != NO_ERROR)
 		return rv;
-	rv = alloc_ahash(&crypto->verify_tfm, new_net_conf->verify_alg,
+	rv = alloc_shash(&crypto->verify_tfm, new_net_conf->verify_alg,
 			 ERR_VERIFY_ALG);
 	if (rv != NO_ERROR)
 		return rv;
-	rv = alloc_ahash(&crypto->integrity_tfm, new_net_conf->integrity_alg,
+	rv = alloc_shash(&crypto->integrity_tfm, new_net_conf->integrity_alg,
 			 ERR_INTEGRITY_ALG);
 	if (rv != NO_ERROR)
 		return rv;
@@ -2395,9 +2380,9 @@ alloc_crypto(struct crypto *crypto, struct net_conf *new_net_conf)
 static void free_crypto(struct crypto *crypto)
 {
 	crypto_free_shash(crypto->cram_hmac_tfm);
-	crypto_free_ahash(crypto->integrity_tfm);
-	crypto_free_ahash(crypto->csums_tfm);
-	crypto_free_ahash(crypto->verify_tfm);
+	crypto_free_shash(crypto->integrity_tfm);
+	crypto_free_shash(crypto->csums_tfm);
+	crypto_free_shash(crypto->verify_tfm);
 }
 
 int drbd_adm_net_opts(struct sk_buff *skb, struct genl_info *info)
@@ -2474,17 +2459,17 @@ int drbd_adm_net_opts(struct sk_buff *skb, struct genl_info *info)
 	rcu_assign_pointer(connection->net_conf, new_net_conf);
 
 	if (!rsr) {
-		crypto_free_ahash(connection->csums_tfm);
+		crypto_free_shash(connection->csums_tfm);
 		connection->csums_tfm = crypto.csums_tfm;
 		crypto.csums_tfm = NULL;
 	}
 	if (!ovr) {
-		crypto_free_ahash(connection->verify_tfm);
+		crypto_free_shash(connection->verify_tfm);
 		connection->verify_tfm = crypto.verify_tfm;
 		crypto.verify_tfm = NULL;
 	}
 
-	crypto_free_ahash(connection->integrity_tfm);
+	crypto_free_shash(connection->integrity_tfm);
 	connection->integrity_tfm = crypto.integrity_tfm;
 	if (connection->cstate >= C_WF_REPORT_PARAMS && connection->agreed_pro_version >= 100)
 		/* Do this without trying to take connection->data.mutex again.  */
@@ -3228,7 +3213,7 @@ static int nla_put_drbd_cfg_context(struct sk_buff *skb,
 				    struct drbd_device *device)
 {
 	struct nlattr *nla;
-	nla = nla_nest_start(skb, DRBD_NLA_CFG_CONTEXT);
+	nla = nla_nest_start_noflag(skb, DRBD_NLA_CFG_CONTEXT);
 	if (!nla)
 		goto nla_put_failure;
 	if (device &&
@@ -3407,8 +3392,10 @@ int drbd_adm_dump_devices(struct sk_buff *skb, struct netlink_callback *cb)
 		if (resource_filter) {
 			retcode = ERR_RES_NOT_KNOWN;
 			resource = drbd_find_resource(nla_data(resource_filter));
-			if (!resource)
+			if (!resource) {
+				rcu_read_lock();
 				goto put_result;
+			}
 			cb->args[0] = (long)resource;
 		}
 	}
@@ -3657,8 +3644,10 @@ int drbd_adm_dump_peer_devices(struct sk_buff *skb, struct netlink_callback *cb)
 		if (resource_filter) {
 			retcode = ERR_RES_NOT_KNOWN;
 			resource = drbd_find_resource(nla_data(resource_filter));
-			if (!resource)
+			if (!resource) {
+				rcu_read_lock();
 				goto put_result;
+			}
 		}
 		cb->args[0] = (long)resource;
 	}
@@ -3796,7 +3785,7 @@ static int nla_put_status_info(struct sk_buff *skb, struct drbd_device *device,
 	if (err)
 		goto nla_put_failure;
 
-	nla = nla_nest_start(skb, DRBD_NLA_STATE_INFO);
+	nla = nla_nest_start_noflag(skb, DRBD_NLA_STATE_INFO);
 	if (!nla)
 		goto nla_put_failure;
 	if (nla_put_u32(skb, T_sib_reason, sib ? sib->sib_reason : SIB_GET_STATUS_REPLY) ||

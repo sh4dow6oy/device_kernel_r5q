@@ -1,14 +1,8 @@
-/* Copyright (c) 2013-2018,2020 The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2013-2020, The Linux Foundation. All rights reserved.
  */
+
 #include <linux/atomic.h>
 #include <linux/errno.h>
 #include <linux/etherdevice.h>
@@ -191,6 +185,7 @@ enum rndis_ipa_operation {
  * @state_lock: used to protect the state variable.
  * @pm_hdl: handle for IPA PM framework
  * @is_vlan_mode: should driver work in vlan mode?
+ * @netif_rx_function: holds the correct network stack API, needed for NAPI
  */
 struct rndis_ipa_dev {
 	struct net_device *net;
@@ -221,6 +216,7 @@ struct rndis_ipa_dev {
 	spinlock_t state_lock; /* Spinlock for the state variable.*/
 	u32 pm_hdl;
 	bool is_vlan_mode;
+	int (*netif_rx_function)(struct sk_buff *skb);
 };
 
 /**
@@ -452,8 +448,10 @@ static struct ipa_ep_cfg usb_to_ipa_ep_cfg_deaggr_en = {
 	},
 	.deaggr = {
 		.deaggr_hdr_len = sizeof(struct rndis_pkt_hdr),
+		.syspipe_err_detection = true,
 		.packet_offset_valid = true,
 		.packet_offset_location = 8,
+		.ignore_min_pkt_err = true,
 		.max_packet_len = 8192, /* Will be overridden*/
 	},
 	.route = {
@@ -642,6 +640,14 @@ int rndis_ipa_init(struct ipa_usb_init_params *params)
 		("netdev:%s registration succeeded, index=%d\n",
 		net->name, net->ifindex);
 
+	if (ipa_get_lan_rx_napi()) {
+		rndis_ipa_ctx->netif_rx_function = netif_receive_skb;
+		RNDIS_IPA_DEBUG("LAN RX NAPI enabled = True");
+	} else {
+		rndis_ipa_ctx->netif_rx_function = netif_rx_ni;
+		RNDIS_IPA_DEBUG("LAN RX NAPI enabled = False");
+	}
+
 	rndis_ipa = rndis_ipa_ctx;
 	params->ipa_rx_notify = rndis_ipa_packet_receive_notify;
 	params->ipa_tx_notify = rndis_ipa_tx_complete_notify;
@@ -649,7 +655,7 @@ int rndis_ipa_init(struct ipa_usb_init_params *params)
 	params->skip_ep_cfg = false;
 	rndis_ipa_ctx->state = RNDIS_IPA_INITIALIZED;
 	RNDIS_IPA_STATE_DEBUG(rndis_ipa_ctx);
-	pr_info("RNDIS_IPA NetDev was initialized");
+	pr_info("RNDIS_IPA NetDev was initialized\n");
 
 	RNDIS_IPA_LOG_EXIT();
 
@@ -984,7 +990,7 @@ static netdev_tx_t rndis_ipa_start_xmit(struct sk_buff *skb,
 	skb = rndis_encapsulate_skb(skb, rndis_ipa_ctx);
 	trace_rndis_tx_dp(skb->protocol);
 	ret = ipa_tx_dp(IPA_TO_USB_CLIENT, skb, NULL);
-	if (ret) {
+	if (unlikely(ret)) {
 		RNDIS_IPA_ERROR("ipa transmit failed (%d)\n", ret);
 		goto fail_tx_packet;
 	}
@@ -1031,7 +1037,7 @@ static void rndis_ipa_tx_complete_notify(
 
 	ret = 0;
 	NULL_CHECK_RETVAL(private);
-	if (ret)
+	if (unlikely(ret))
 		return;
 
 	trace_rndis_status_rcvd(skb->protocol);
@@ -1179,6 +1185,12 @@ static void rndis_ipa_packet_receive_notify(
 		("packet Rx, len=%d\n",
 		skb->len);
 
+	if (unlikely(rndis_ipa_ctx == NULL)) {
+		RNDIS_IPA_DEBUG("Private context is NULL. Drop SKB.\n");
+		dev_kfree_skb_any(skb);
+		return;
+	}
+
 	if (unlikely(rndis_ipa_ctx->rx_dump_enable))
 		rndis_ipa_dump_skb(skb);
 
@@ -1186,11 +1198,15 @@ static void rndis_ipa_packet_receive_notify(
 		RNDIS_IPA_DEBUG("use connect()/up() before receive()\n");
 		RNDIS_IPA_DEBUG("packet dropped (length=%d)\n",
 				skb->len);
+		rndis_ipa_ctx->rx_dropped++;
+		dev_kfree_skb_any(skb);
 		return;
 	}
 
-	if (evt != IPA_RECEIVE)	{
+	if (unlikely(evt != IPA_RECEIVE)) {
 		RNDIS_IPA_ERROR("a none IPA_RECEIVE event in driver RX\n");
+		rndis_ipa_ctx->rx_dropped++;
+		dev_kfree_skb_any(skb);
 		return;
 	}
 
@@ -1208,9 +1224,9 @@ static void rndis_ipa_packet_receive_notify(
 	}
 
 	trace_rndis_netif_ni(skb->protocol);
-	result = netif_rx_ni(skb);
-	if (result)
-		RNDIS_IPA_ERROR("fail on netif_rx_ni\n");
+	result = rndis_ipa_ctx->netif_rx_function(skb);
+	if (unlikely(result))
+		RNDIS_IPA_ERROR("fail on netif_rx_function\n");
 	rndis_ipa_ctx->net->stats.rx_packets++;
 	rndis_ipa_ctx->net->stats.rx_bytes += packet_len;
 }
@@ -1439,8 +1455,9 @@ void rndis_ipa_cleanup(void *private)
 	rndis_ipa_debugfs_destroy(rndis_ipa_ctx);
 	RNDIS_IPA_DEBUG("debugfs remove was done\n");
 
+	RNDIS_IPA_DEBUG("RNDIS_IPA netdev unregistered started\n");
 	unregister_netdev(rndis_ipa_ctx->net);
-	RNDIS_IPA_DEBUG("netdev unregistered\n");
+	RNDIS_IPA_DEBUG("RNDIS_IPA netdev unregistered completed\n");
 
 	spin_lock_irqsave(&rndis_ipa_ctx->state_lock, flags);
 	next_state = rndis_ipa_next_state(rndis_ipa_ctx->state,
@@ -2050,8 +2067,6 @@ static void resource_release(struct rndis_ipa_dev *rndis_ipa_ctx)
 		ipa_pm_deferred_deactivate(rndis_ipa_ctx->pm_hdl);
 	else
 		ipa_rm_inactivity_timer_release_resource(DRV_RESOURCE_ID);
-
-	return;
 }
 
 /**
@@ -2074,7 +2089,7 @@ static struct sk_buff *rndis_encapsulate_skb(struct sk_buff *skb,
 	if (unlikely(skb_headroom(skb) < sizeof(rndis_template_hdr))) {
 		struct sk_buff *new_skb = skb_copy_expand(skb,
 			sizeof(rndis_template_hdr), 0, GFP_ATOMIC);
-		if (!new_skb) {
+		if (unlikely(!new_skb)) {
 			RNDIS_IPA_ERROR("no memory for skb expand\n");
 			return skb;
 		}
@@ -2693,7 +2708,7 @@ static int rndis_ipa_init_module(void)
 	if (ipa_rndis_logbuf == NULL)
 		RNDIS_IPA_DEBUG("failed to create IPC log, continue...\n");
 
-	pr_info("RNDIS_IPA module is loaded.");
+	pr_info("RNDIS_IPA module is loaded.\n");
 	return 0;
 }
 
@@ -2703,7 +2718,7 @@ static void rndis_ipa_cleanup_module(void)
 		ipc_log_context_destroy(ipa_rndis_logbuf);
 	ipa_rndis_logbuf = NULL;
 
-	pr_info("RNDIS_IPA module is unloaded.");
+	pr_info("RNDIS_IPA module is unloaded.\n");
 }
 
 MODULE_LICENSE("GPL v2");

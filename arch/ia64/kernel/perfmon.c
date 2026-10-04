@@ -38,6 +38,7 @@
 #include <linux/smp.h>
 #include <linux/pagemap.h>
 #include <linux/mount.h>
+#include <linux/pseudo_fs.h>
 #include <linux/bitops.h>
 #include <linux/capability.h>
 #include <linux/rcupdate.h>
@@ -610,17 +611,19 @@ pfm_unprotect_ctx_ctxsw(pfm_context_t *x, unsigned long f)
 /* forward declaration */
 static const struct dentry_operations pfmfs_dentry_operations;
 
-static struct dentry *
-pfmfs_mount(struct file_system_type *fs_type, int flags, const char *dev_name, void *data)
+static int pfmfs_init_fs_context(struct fs_context *fc)
 {
-	return mount_pseudo(fs_type, "pfm:", NULL, &pfmfs_dentry_operations,
-			PFMFS_MAGIC);
+	struct pseudo_fs_context *ctx = init_pseudo(fc, PFMFS_MAGIC);
+	if (!ctx)
+		return -ENOMEM;
+	ctx->dops = &pfmfs_dentry_operations;
+	return 0;
 }
 
 static struct file_system_type pfm_fs_type = {
-	.name     = "pfmfs",
-	.mount    = pfmfs_mount,
-	.kill_sb  = kill_anon_super,
+	.name			= "pfmfs",
+	.init_fs_context	= pfmfs_init_fs_context,
+	.kill_sb		= kill_anon_super,
 };
 MODULE_ALIAS_FS("pfmfs");
 
@@ -1644,12 +1647,12 @@ pfm_write(struct file *file, const char __user *ubuf,
 	return -EINVAL;
 }
 
-static unsigned int
+static __poll_t
 pfm_poll(struct file *filp, poll_table * wait)
 {
 	pfm_context_t *ctx;
 	unsigned long flags;
-	unsigned int mask = 0;
+	__poll_t mask = 0;
 
 	if (PFM_IS_FILE(filp) == 0) {
 		printk(KERN_ERR "perfmon: pfm_poll: bad magic [%d]\n", task_pid_nr(current));
@@ -1670,7 +1673,7 @@ pfm_poll(struct file *filp, poll_table * wait)
 	PROTECT_CTX(ctx, flags);
 
 	if (PFM_CTXQ_EMPTY(ctx) == 0)
-		mask =  POLLIN | POLLRDNORM;
+		mask =  EPOLLIN | EPOLLRDNORM;
 
 	UNPROTECT_CTX(ctx, flags);
 
@@ -2278,17 +2281,15 @@ pfm_smpl_buffer_alloc(struct task_struct *task, struct file *filp, pfm_context_t
 	DPRINT(("smpl_buf @%p\n", smpl_buf));
 
 	/* allocate vma */
-	vma = kmem_cache_zalloc(vm_area_cachep, GFP_KERNEL);
+	vma = vm_area_alloc(mm);
 	if (!vma) {
 		DPRINT(("Cannot allocate vma\n"));
 		goto error_kmem;
 	}
-	INIT_LIST_HEAD(&vma->anon_vma_chain);
 
 	/*
 	 * partially initialize the vma for the sampling buffer
 	 */
-	vma->vm_mm	     = mm;
 	vma->vm_file	     = get_file(filp);
 	vma->vm_flags	     = VM_READ|VM_MAYREAD|VM_DONTEXPAND|VM_DONTDUMP;
 	vma->vm_page_prot    = PAGE_READONLY; /* XXX may need to change */
@@ -2307,13 +2308,13 @@ pfm_smpl_buffer_alloc(struct task_struct *task, struct file *filp, pfm_context_t
 	 * now we atomically find some area in the address space and
 	 * remap the buffer in it.
 	 */
-	down_write(&task->mm->mmap_sem);
+	mmap_write_lock(task->mm);
 
 	/* find some free area in address space, must have mmap sem held */
 	vma->vm_start = get_unmapped_area(NULL, 0, size, 0, MAP_PRIVATE|MAP_ANONYMOUS);
 	if (IS_ERR_VALUE(vma->vm_start)) {
 		DPRINT(("Cannot find unmapped area for size %ld\n", size));
-		up_write(&task->mm->mmap_sem);
+		mmap_write_unlock(task->mm);
 		goto error;
 	}
 	vma->vm_end = vma->vm_start + size;
@@ -2324,7 +2325,7 @@ pfm_smpl_buffer_alloc(struct task_struct *task, struct file *filp, pfm_context_t
 	/* can only be applied to current task, need to have the mm semaphore held when called */
 	if (pfm_remap_buffer(vma, (unsigned long)smpl_buf, vma->vm_start, size)) {
 		DPRINT(("Can't remap buffer\n"));
-		up_write(&task->mm->mmap_sem);
+		mmap_write_unlock(task->mm);
 		goto error;
 	}
 
@@ -2335,7 +2336,7 @@ pfm_smpl_buffer_alloc(struct task_struct *task, struct file *filp, pfm_context_t
 	insert_vm_struct(mm, vma);
 
 	vm_stat_account(vma->vm_mm, vma->vm_flags, vma_pages(vma));
-	up_write(&task->mm->mmap_sem);
+	mmap_write_unlock(task->mm);
 
 	/*
 	 * keep track of user level virtual address
@@ -2346,7 +2347,7 @@ pfm_smpl_buffer_alloc(struct task_struct *task, struct file *filp, pfm_context_t
 	return 0;
 
 error:
-	kmem_cache_free(vm_area_cachep, vma);
+	vm_area_free(vma);
 error_kmem:
 	pfm_rvfree(smpl_buf, size);
 
@@ -2610,17 +2611,10 @@ pfm_get_task(pfm_context_t *ctx, pid_t pid, struct task_struct **task)
 	if (pid < 2) return -EPERM;
 
 	if (pid != task_pid_vnr(current)) {
-
-		read_lock(&tasklist_lock);
-
-		p = find_task_by_vpid(pid);
-
 		/* make sure task cannot go away while we operate on it */
-		if (p) get_task_struct(p);
-
-		read_unlock(&tasklist_lock);
-
-		if (p == NULL) return -ESRCH;
+		p = find_get_task_by_vpid(pid);
+		if (!p)
+			return -ESRCH;
 	}
 
 	ret = pfm_task_incompatible(ctx, p);
@@ -5715,13 +5709,6 @@ const struct seq_operations pfm_seq_ops = {
  	.show =		pfm_proc_show
 };
 
-static int
-pfm_proc_open(struct inode *inode, struct file *file)
-{
-	return seq_open(file, &pfm_seq_ops);
-}
-
-
 /*
  * we come here as soon as local_cpu_data->pfm_syst_wide is set. this happens
  * during pfm_enable() hence before pfm_start(). We cannot assume monitoring
@@ -6544,13 +6531,6 @@ found:
 	return 0;
 }
 
-static const struct file_operations pfm_proc_fops = {
-	.open		= pfm_proc_open,
-	.read		= seq_read,
-	.llseek		= seq_lseek,
-	.release	= seq_release,
-};
-
 int __init
 pfm_init(void)
 {
@@ -6622,7 +6602,7 @@ pfm_init(void)
 	/*
 	 * create /proc/perfmon (mostly for debugging purposes)
 	 */
-	perfmon_dir = proc_create("perfmon", S_IRUGO, NULL, &pfm_proc_fops);
+	perfmon_dir = proc_create_seq("perfmon", S_IRUGO, NULL, &pfm_seq_ops);
 	if (perfmon_dir == NULL) {
 		printk(KERN_ERR "perfmon: cannot create /proc entry, perfmon disabled\n");
 		pmu_conf = NULL;

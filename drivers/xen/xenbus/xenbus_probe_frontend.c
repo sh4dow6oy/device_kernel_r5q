@@ -18,7 +18,7 @@
 #include <linux/module.h>
 
 #include <asm/page.h>
-#include <asm/pgtable.h>
+#include <linux/pgtable.h>
 #include <asm/xen/hypervisor.h>
 #include <xen/xenbus.h>
 #include <xen/events.h>
@@ -126,11 +126,9 @@ static int xenbus_frontend_dev_probe(struct device *dev)
 }
 
 static const struct dev_pm_ops xenbus_pm_ops = {
-	.suspend	= xenbus_dev_suspend,
-	.resume		= xenbus_frontend_dev_resume,
 	.freeze		= xenbus_dev_suspend,
 	.thaw		= xenbus_dev_cancel,
-	.restore	= xenbus_dev_resume,
+	.restore	= xenbus_frontend_dev_resume,
 };
 
 static struct xen_bus_type xenbus_frontend = {
@@ -379,10 +377,12 @@ static void xenbus_reset_frontend(char *fe, char *be, int be_state)
 	case XenbusStateConnected:
 		xenbus_printf(XBT_NIL, fe, "state", "%d", XenbusStateClosing);
 		xenbus_reset_wait_for_backend(be, XenbusStateClosing);
+		/* fall through */
 
 	case XenbusStateClosing:
 		xenbus_printf(XBT_NIL, fe, "state", "%d", XenbusStateClosed);
 		xenbus_reset_wait_for_backend(be, XenbusStateClosed);
+		/* fall through */
 
 	case XenbusStateClosed:
 		xenbus_printf(XBT_NIL, fe, "state", "%d", XenbusStateInitialising);

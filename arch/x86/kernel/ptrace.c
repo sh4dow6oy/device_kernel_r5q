@@ -27,7 +27,7 @@
 #include <linux/nospec.h>
 
 #include <linux/uaccess.h>
-#include <asm/pgtable.h>
+#include <linux/pgtable.h>
 #include <asm/processor.h>
 #include <asm/fpu/internal.h>
 #include <asm/fpu/signal.h>
@@ -1421,7 +1421,6 @@ static void fill_sigtrap_info(struct task_struct *tsk,
 	tsk->thread.trap_nr = X86_TRAP_DB;
 	tsk->thread.error_code = error_code;
 
-	memset(info, 0, sizeof(*info));
 	info->si_signo = SIGTRAP;
 	info->si_code = si_code;
 	info->si_addr = user_mode(regs) ? (void __user *)regs->ip : NULL;
@@ -1439,6 +1438,7 @@ void send_sigtrap(struct task_struct *tsk, struct pt_regs *regs,
 {
 	struct siginfo info;
 
+	clear_siginfo(&info);
 	fill_sigtrap_info(tsk, regs, error_code, si_code, &info);
 	/* Send us the fake SIGTRAP */
 	force_sig_info(SIGTRAP, &info, tsk);

@@ -306,12 +306,13 @@ static inline int gred_change_table_def(struct Qdisc *sch, struct nlattr *dps)
 	struct tc_gred_sopt *sopt;
 	int i;
 
-	if (dps == NULL)
+	if (!dps)
 		return -EINVAL;
 
 	sopt = nla_data(dps);
 
-	if (sopt->DPs > MAX_DPs || sopt->DPs == 0 || sopt->def_DP >= sopt->DPs)
+	if (sopt->DPs > MAX_DPs || sopt->DPs == 0 ||
+	    sopt->def_DP >= sopt->DPs)
 		return -EINVAL;
 
 	sch_tree_lock(sch);
@@ -391,7 +392,8 @@ static const struct nla_policy gred_policy[TCA_GRED_MAX + 1] = {
 	[TCA_GRED_LIMIT]	= { .type = NLA_U32 },
 };
 
-static int gred_change(struct Qdisc *sch, struct nlattr *opt)
+static int gred_change(struct Qdisc *sch, struct nlattr *opt,
+		       struct netlink_ext_ack *extack)
 {
 	struct gred_sched *table = qdisc_priv(sch);
 	struct tc_gred_qopt *ctl;
@@ -404,7 +406,8 @@ static int gred_change(struct Qdisc *sch, struct nlattr *opt)
 	if (opt == NULL)
 		return -EINVAL;
 
-	err = nla_parse_nested(tb, TCA_GRED_MAX, opt, gred_policy, NULL);
+	err = nla_parse_nested_deprecated(tb, TCA_GRED_MAX, opt, gred_policy,
+					  NULL);
 	if (err < 0)
 		return err;
 
@@ -465,15 +468,17 @@ errout:
 	return err;
 }
 
-static int gred_init(struct Qdisc *sch, struct nlattr *opt)
+static int gred_init(struct Qdisc *sch, struct nlattr *opt,
+		     struct netlink_ext_ack *extack)
 {
 	struct nlattr *tb[TCA_GRED_MAX + 1];
 	int err;
 
-	if (opt == NULL)
+	if (!opt)
 		return -EINVAL;
 
-	err = nla_parse_nested(tb, TCA_GRED_MAX, opt, gred_policy, NULL);
+	err = nla_parse_nested_deprecated(tb, TCA_GRED_MAX, opt, gred_policy,
+					  NULL);
 	if (err < 0)
 		return err;
 
@@ -502,7 +507,7 @@ static int gred_dump(struct Qdisc *sch, struct sk_buff *skb)
 		.flags	= table->red_flags,
 	};
 
-	opts = nla_nest_start(skb, TCA_OPTIONS);
+	opts = nla_nest_start_noflag(skb, TCA_OPTIONS);
 	if (opts == NULL)
 		goto nla_put_failure;
 	if (nla_put(skb, TCA_GRED_DPS, sizeof(sopt), &sopt))
@@ -519,7 +524,7 @@ static int gred_dump(struct Qdisc *sch, struct sk_buff *skb)
 	if (nla_put_u32(skb, TCA_GRED_LIMIT, sch->limit))
 		goto nla_put_failure;
 
-	parms = nla_nest_start(skb, TCA_GRED_PARMS);
+	parms = nla_nest_start_noflag(skb, TCA_GRED_PARMS);
 	if (parms == NULL)
 		goto nla_put_failure;
 

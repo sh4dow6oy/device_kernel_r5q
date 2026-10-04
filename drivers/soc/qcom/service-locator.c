@@ -1,15 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2015-2018, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
  */
 
 #define pr_fmt(fmt) "servloc: %s: " fmt, __func__
@@ -363,9 +354,6 @@ static void pd_locator_work(struct work_struct *work)
 	if (rc) {
 		pr_err("Failed to get process domains for %s for client %s rc:%d\n",
 			data->service_name, data->client_name, rc);
-#ifdef CONFIG_SLIMBUS_DEBUG
-		panic("Failed to get process domains");
-#endif
 		pdqw->notifier->notifier_call(pdqw->notifier,
 			LOCATOR_DOWN, NULL);
 		goto err_servloc_send_msg;

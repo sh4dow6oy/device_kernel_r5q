@@ -70,6 +70,7 @@ static int ufshcd_parse_clock_info(struct ufs_hba *hba)
 	struct ufs_clk_info *clki;
 	int len = 0;
 	size_t sz = 0;
+	char *str = NULL;
 
 	if (!np)
 		goto out;
@@ -102,8 +103,8 @@ static int ufshcd_parse_clock_info(struct ufs_hba *hba)
 		goto out;
 	}
 
-	clkfreq = devm_kzalloc(dev, sz * sizeof(*clkfreq),
-			GFP_KERNEL);
+	clkfreq = devm_kcalloc(dev, sz, sizeof(*clkfreq),
+			       GFP_KERNEL);
 	if (!clkfreq) {
 		ret = -ENOMEM;
 		goto out;
@@ -131,7 +132,15 @@ static int ufshcd_parse_clock_info(struct ufs_hba *hba)
 
 		clki->min_freq = clkfreq[i];
 		clki->max_freq = clkfreq[i+1];
-		clki->name = kstrdup(name, GFP_KERNEL);
+		str = devm_kzalloc(dev, strlen(name) + 1, GFP_KERNEL);
+		if (!str) {
+			ret = -ENOMEM;
+			goto out;
+		}
+
+		memcpy(str, name, strlen(name) + 1);
+		clki->name = str;
+
 		dev_dbg(dev, "%s: min %u max %u name %s\n", "freq-table-hz",
 				clki->min_freq, clki->max_freq, clki->name);
 		list_add_tail(&clki->list, &hba->clk_list_head);
@@ -160,6 +169,7 @@ static int ufshcd_populate_vreg(struct device *dev, const char *name,
 	struct ufs_vreg *vreg = NULL;
 	struct device_node *np = dev->of_node;
 	const __be32 *prop;
+	char *str = NULL;
 
 	if (!np) {
 		dev_err(dev, "%s: non DT initialization\n", __func__);
@@ -177,7 +187,11 @@ static int ufshcd_populate_vreg(struct device *dev, const char *name,
 	if (!vreg)
 		return -ENOMEM;
 
-	vreg->name = kstrdup(name, GFP_KERNEL);
+	str = devm_kzalloc(dev, strlen(name) + 1, GFP_KERNEL);
+	if (!str)
+		return -ENOMEM;
+	memcpy(str, name, strlen(name) + 1);
+	vreg->name = str;
 
 	/* if fixed regulator no need further initialization */
 	snprintf(prop_name, MAX_PROP_SIZE, "%s-fixed-regulator", name);
@@ -192,7 +206,10 @@ static int ufshcd_populate_vreg(struct device *dev, const char *name,
 		goto out;
 	}
 
-	vreg->min_uA = 0;
+	snprintf(prop_name, MAX_PROP_SIZE, "%s-min-microamp", name);
+	if (of_property_read_u32(np, prop_name, &vreg->min_uA))
+		vreg->min_uA = UFS_VREG_LPM_LOAD_UA;
+
 	if (!strcmp(name, "vcc")) {
 		if (of_property_read_bool(np, "vcc-supply-1p8")) {
 			vreg->min_uV = UFS_VREG_VCC_1P8_MIN_UV;
@@ -208,13 +225,25 @@ static int ufshcd_populate_vreg(struct device *dev, const char *name,
 				vreg->min_uV = be32_to_cpup(&prop[0]);
 				vreg->max_uV = be32_to_cpup(&prop[1]);
 			}
-
 			if (of_property_read_bool(np, "vcc-low-voltage-sup"))
 				vreg->low_voltage_sup = true;
 		}
 	} else if (!strcmp(name, "vccq")) {
 		vreg->min_uV = UFS_VREG_VCCQ_MIN_UV;
 		vreg->max_uV = UFS_VREG_VCCQ_MAX_UV;
+		/**
+		 * Only if the SoC supports turning off VCCQ or VCCQ2 power
+		 * supply source during power collapse, set a flag to turn off
+		 * the specified power supply to reduce the system power
+		 * consumption during system suspend events. The tradeoffs are:
+		 *   - System resume time will increase due
+		 *     to UFS device full re-initialization time.
+		 *   - UFS device life may be affected due to multiple
+		 *     UFS power on/off events.
+		 * The benefits vs tradeoff should be considered carefully.
+		 */
+		if (of_property_read_bool(np, "vccq-pwr-collapse-sup"))
+			vreg->sys_suspend_pwr_off = true;
 	} else if (!strcmp(name, "vccq2")) {
 		prop = of_get_property(np, "vccq2-voltage-level", &len);
 		if (!prop || (len != (2 * sizeof(__be32)))) {
@@ -226,6 +255,8 @@ static int ufshcd_populate_vreg(struct device *dev, const char *name,
 			vreg->min_uV = be32_to_cpup(&prop[0]);
 			vreg->max_uV = be32_to_cpup(&prop[1]);
 		}
+		if (of_property_read_bool(np, "vccq2-pwr-collapse-sup"))
+			vreg->sys_suspend_pwr_off = true;
 	}
 
 	goto out;
@@ -293,20 +324,6 @@ static int ufshcd_parse_pinctrl_info(struct ufs_hba *hba)
 	}
 
 	return ret;
-}
-
-static int ufshcd_parse_extcon_info(struct ufs_hba *hba)
-{
-	struct extcon_dev *extcon;
-
-	extcon = extcon_get_edev_by_phandle(hba->dev, 0);
-	if (IS_ERR(extcon) && PTR_ERR(extcon) != -ENODEV)
-		return PTR_ERR(extcon);
-
-	if (!IS_ERR(extcon))
-		hba->extcon = extcon;
-
-	return 0;
 }
 
 static void ufshcd_parse_gear_limits(struct ufs_hba *hba)
@@ -381,45 +398,6 @@ static void ufshcd_parse_dev_ref_clk_freq(struct ufs_hba *hba)
 }
 
 #ifdef CONFIG_SMP
-/**
- * ufshcd_pltfrm_restore - restore power management function
- * @dev: pointer to device handle
- *
- * Returns 0 if successful
- * Returns non-zero otherwise
- */
-int ufshcd_pltfrm_restore(struct device *dev)
-{
-	return ufshcd_system_restore(dev_get_drvdata(dev));
-}
-EXPORT_SYMBOL(ufshcd_pltfrm_restore);
-
-/**
- * ufshcd_pltfrm_freeze - freeze power management function
- * @dev: pointer to device handle
- *
- * Returns 0 if successful
- * Returns non-zero otherwise
- */
-int ufshcd_pltfrm_freeze(struct device *dev)
-{
-	return ufshcd_system_freeze(dev_get_drvdata(dev));
-}
-EXPORT_SYMBOL(ufshcd_pltfrm_freeze);
-
-/**
- * ufshcd_pltfrm_thaw - freeze power management function
- * @dev: pointer to device handle
- *
- * Returns 0 if successful
- * Returns non-zero otherwise
- */
-int ufshcd_pltfrm_thaw(struct device *dev)
-{
-	return ufshcd_system_thaw(dev_get_drvdata(dev));
-}
-EXPORT_SYMBOL(ufshcd_pltfrm_thaw);
-
 /**
  * ufshcd_pltfrm_suspend - suspend power management function
  * @dev: pointer to device handle
@@ -499,9 +477,7 @@ int ufshcd_pltfrm_init(struct platform_device *pdev,
 {
 	struct ufs_hba *hba;
 	void __iomem *mmio_base;
-	void __iomem *phy_base;
 	struct resource *mem_res;
-	struct resource *phy_res;
 	int irq, err;
 	struct device *dev = &pdev->dev;
 
@@ -509,15 +485,6 @@ int ufshcd_pltfrm_init(struct platform_device *pdev,
 	mmio_base = devm_ioremap_resource(dev, mem_res);
 	if (IS_ERR(mmio_base)) {
 		err = PTR_ERR(mmio_base);
-		goto out;
-	}
-
-	phy_res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "ufs_phy");
-	phy_base = devm_ioremap(&pdev->dev,
-			phy_res->start,
-			resource_size(phy_res));
-	if (IS_ERR(*(void **)&phy_base)) {
-		err = PTR_ERR(*(void **)&phy_base);
 		goto out;
 	}
 
@@ -568,9 +535,6 @@ int ufshcd_pltfrm_init(struct platform_device *pdev,
 	ufshcd_parse_gear_limits(hba);
 	ufshcd_parse_cmd_timeout(hba);
 	ufshcd_parse_force_g4_flag(hba);
-	err = ufshcd_parse_extcon_info(hba);
-	if (err)
-		goto dealloc_host;
 
 	if (!dev->dma_mask)
 		dev->dma_mask = &dev->coherent_dma_mask;
@@ -581,14 +545,13 @@ int ufshcd_pltfrm_init(struct platform_device *pdev,
 	if (err) {
 		dev_err(dev, "Initialization failed\n");
 		goto dealloc_host;
-	} else {
-		hba->phy_base = phy_base;
 	}
 
 	pm_runtime_set_active(&pdev->dev);
 	pm_runtime_enable(&pdev->dev);
 
 	return 0;
+
 dealloc_host:
 	ufshcd_dealloc_host(hba);
 out:

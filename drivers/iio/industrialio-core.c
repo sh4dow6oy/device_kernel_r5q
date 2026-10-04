@@ -85,6 +85,8 @@ static const char * const iio_chan_type_name_spec[] = {
 	[IIO_COUNT] = "count",
 	[IIO_INDEX] = "index",
 	[IIO_GRAVITY]  = "gravity",
+	[IIO_POSITIONRELATIVE]  = "positionrelative",
+	[IIO_PHASE] = "phase",
 };
 
 static const char * const iio_modifier_names[] = {
@@ -108,6 +110,7 @@ static const char * const iio_modifier_names[] = {
 	[IIO_MOD_LIGHT_GREEN] = "green",
 	[IIO_MOD_LIGHT_BLUE] = "blue",
 	[IIO_MOD_LIGHT_UV] = "uv",
+	[IIO_MOD_LIGHT_DUV] = "duv",
 	[IIO_MOD_QUATERNION] = "quaternion",
 	[IIO_MOD_TEMP_AMBIENT] = "ambient",
 	[IIO_MOD_TEMP_OBJECT] = "object",
@@ -580,6 +583,7 @@ static ssize_t __iio_format_value(char *buf, size_t len, unsigned int type,
 		return snprintf(buf, len, "%d", vals[0]);
 	case IIO_VAL_INT_PLUS_MICRO_DB:
 		scale_db = true;
+		/* fall through */
 	case IIO_VAL_INT_PLUS_MICRO:
 		if (vals[1] < 0)
 			return snprintf(buf, len, "-%d.%06u%s", abs(vals[0]),
@@ -1626,7 +1630,7 @@ static const struct file_operations iio_buffer_fileops = {
 	.owner = THIS_MODULE,
 	.llseek = noop_llseek,
 	.unlocked_ioctl = iio_ioctl,
-	.compat_ioctl = iio_ioctl,
+	.compat_ioctl = compat_ptr_ioctl,
 };
 
 static int iio_check_unique_scan_index(struct iio_dev *indio_dev)
@@ -1654,14 +1658,11 @@ static int iio_check_unique_scan_index(struct iio_dev *indio_dev)
 
 static const struct iio_buffer_setup_ops noop_ring_setup_ops;
 
-/**
- * iio_device_register() - register a device with the IIO subsystem
- * @indio_dev:		Device structure filled by the device driver
- **/
-int iio_device_register(struct iio_dev *indio_dev)
+int __iio_device_register(struct iio_dev *indio_dev, struct module *this_mod)
 {
 	int ret;
 
+	indio_dev->driver_module = this_mod;
 	/* If the calling driver did not initialize of_node, do it here */
 	if (!indio_dev->dev.of_node && indio_dev->dev.parent)
 		indio_dev->dev.of_node = indio_dev->dev.parent->of_node;
@@ -1707,7 +1708,8 @@ int iio_device_register(struct iio_dev *indio_dev)
 		indio_dev->setup_ops = &noop_ring_setup_ops;
 
 	cdev_init(&indio_dev->chrdev, &iio_buffer_fileops);
-	indio_dev->chrdev.owner = indio_dev->info->driver_module;
+
+	indio_dev->chrdev.owner = this_mod;
 
 	ret = cdev_device_add(&indio_dev->chrdev, &indio_dev->dev);
 	if (ret < 0)
@@ -1725,7 +1727,7 @@ error_unreg_debugfs:
 	iio_device_unregister_debugfs(indio_dev);
 	return ret;
 }
-EXPORT_SYMBOL(iio_device_register);
+EXPORT_SYMBOL(__iio_device_register);
 
 /**
  * iio_device_unregister() - unregister a device from the IIO subsystem
@@ -1757,23 +1759,8 @@ static void devm_iio_device_unreg(struct device *dev, void *res)
 	iio_device_unregister(*(struct iio_dev **)res);
 }
 
-/**
- * devm_iio_device_register - Resource-managed iio_device_register()
- * @dev:	Device to allocate iio_dev for
- * @indio_dev:	Device structure filled by the device driver
- *
- * Managed iio_device_register.  The IIO device registered with this
- * function is automatically unregistered on driver detach. This function
- * calls iio_device_register() internally. Refer to that function for more
- * information.
- *
- * If an iio_dev registered with this function needs to be unregistered
- * separately, devm_iio_device_unregister() must be used.
- *
- * RETURNS:
- * 0 on success, negative error number on failure.
- */
-int devm_iio_device_register(struct device *dev, struct iio_dev *indio_dev)
+int __devm_iio_device_register(struct device *dev, struct iio_dev *indio_dev,
+			       struct module *this_mod)
 {
 	struct iio_dev **ptr;
 	int ret;
@@ -1783,7 +1770,7 @@ int devm_iio_device_register(struct device *dev, struct iio_dev *indio_dev)
 		return -ENOMEM;
 
 	*ptr = indio_dev;
-	ret = iio_device_register(indio_dev);
+	ret = __iio_device_register(indio_dev, this_mod);
 	if (!ret)
 		devres_add(dev, ptr);
 	else
@@ -1791,7 +1778,7 @@ int devm_iio_device_register(struct device *dev, struct iio_dev *indio_dev)
 
 	return ret;
 }
-EXPORT_SYMBOL_GPL(devm_iio_device_register);
+EXPORT_SYMBOL_GPL(__devm_iio_device_register);
 
 /**
  * devm_iio_device_unregister - Resource-managed iio_device_unregister()

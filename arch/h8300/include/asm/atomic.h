@@ -2,8 +2,10 @@
 #ifndef __ARCH_H8300_ATOMIC__
 #define __ARCH_H8300_ATOMIC__
 
+#include <linux/compiler.h>
 #include <linux/types.h>
 #include <asm/cmpxchg.h>
+#include <asm/irqflags.h>
 
 /*
  * Atomic operations that C can't guarantee us.  Useful for
@@ -14,8 +16,6 @@
 
 #define atomic_read(v)		READ_ONCE((v)->counter)
 #define atomic_set(v, i)	WRITE_ONCE(((v)->counter), (i))
-
-#include <linux/kernel.h>
 
 #define ATOMIC_OP_RETURN(op, c_op)				\
 static inline int atomic_##op##_return(int i, atomic_t *v)	\
@@ -68,18 +68,6 @@ ATOMIC_OPS(sub, -=)
 #undef ATOMIC_OPS
 #undef ATOMIC_OP_RETURN
 #undef ATOMIC_OP
-
-#define atomic_add_negative(a, v)	(atomic_add_return((a), (v)) < 0)
-#define atomic_sub_and_test(i, v)	(atomic_sub_return(i, v) == 0)
-
-#define atomic_inc_return(v)		atomic_add_return(1, v)
-#define atomic_dec_return(v)		atomic_sub_return(1, v)
-
-#define atomic_inc(v)			(void)atomic_inc_return(v)
-#define atomic_inc_and_test(v)		(atomic_inc_return(v) == 0)
-
-#define atomic_dec(v)			(void)atomic_dec_return(v)
-#define atomic_dec_and_test(v)		(atomic_dec_return(v) == 0)
 
 static inline int atomic_cmpxchg(atomic_t *v, int old, int new)
 {

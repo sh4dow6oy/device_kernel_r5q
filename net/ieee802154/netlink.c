@@ -89,7 +89,7 @@ int ieee802154_nl_reply(struct sk_buff *msg, struct genl_info *info)
 	return genlmsg_reply(msg, info);
 }
 
-static const struct genl_ops ieee8021154_ops[] = {
+static const struct genl_ops ieee802154_ops[] = {
 	/* see nl-phy.c */
 	IEEE802154_DUMP(IEEE802154_LIST_PHY, ieee802154_list_phy,
 			ieee802154_dump_phy),
@@ -106,20 +106,20 @@ static const struct genl_ops ieee8021154_ops[] = {
 	IEEE802154_OP(IEEE802154_SET_MACPARAMS, ieee802154_set_macparams),
 	IEEE802154_OP(IEEE802154_LLSEC_GETPARAMS, ieee802154_llsec_getparams),
 	IEEE802154_OP(IEEE802154_LLSEC_SETPARAMS, ieee802154_llsec_setparams),
-	IEEE802154_DUMP(IEEE802154_LLSEC_LIST_KEY, NULL,
-			ieee802154_llsec_dump_keys),
+	IEEE802154_DUMP_PRIV(IEEE802154_LLSEC_LIST_KEY, NULL,
+			     ieee802154_llsec_dump_keys),
 	IEEE802154_OP(IEEE802154_LLSEC_ADD_KEY, ieee802154_llsec_add_key),
 	IEEE802154_OP(IEEE802154_LLSEC_DEL_KEY, ieee802154_llsec_del_key),
-	IEEE802154_DUMP(IEEE802154_LLSEC_LIST_DEV, NULL,
-			ieee802154_llsec_dump_devs),
+	IEEE802154_DUMP_PRIV(IEEE802154_LLSEC_LIST_DEV, NULL,
+			     ieee802154_llsec_dump_devs),
 	IEEE802154_OP(IEEE802154_LLSEC_ADD_DEV, ieee802154_llsec_add_dev),
 	IEEE802154_OP(IEEE802154_LLSEC_DEL_DEV, ieee802154_llsec_del_dev),
-	IEEE802154_DUMP(IEEE802154_LLSEC_LIST_DEVKEY, NULL,
-			ieee802154_llsec_dump_devkeys),
+	IEEE802154_DUMP_PRIV(IEEE802154_LLSEC_LIST_DEVKEY, NULL,
+			     ieee802154_llsec_dump_devkeys),
 	IEEE802154_OP(IEEE802154_LLSEC_ADD_DEVKEY, ieee802154_llsec_add_devkey),
 	IEEE802154_OP(IEEE802154_LLSEC_DEL_DEVKEY, ieee802154_llsec_del_devkey),
-	IEEE802154_DUMP(IEEE802154_LLSEC_LIST_SECLEVEL, NULL,
-			ieee802154_llsec_dump_seclevels),
+	IEEE802154_DUMP_PRIV(IEEE802154_LLSEC_LIST_SECLEVEL, NULL,
+			     ieee802154_llsec_dump_seclevels),
 	IEEE802154_OP(IEEE802154_LLSEC_ADD_SECLEVEL,
 		      ieee802154_llsec_add_seclevel),
 	IEEE802154_OP(IEEE802154_LLSEC_DEL_SECLEVEL,
@@ -137,8 +137,8 @@ struct genl_family nl802154_family __ro_after_init = {
 	.version	= 1,
 	.maxattr	= IEEE802154_ATTR_MAX,
 	.module		= THIS_MODULE,
-	.ops		= ieee8021154_ops,
-	.n_ops		= ARRAY_SIZE(ieee8021154_ops),
+	.ops		= ieee802154_ops,
+	.n_ops		= ARRAY_SIZE(ieee802154_ops),
 	.mcgrps		= ieee802154_mcgrps,
 	.n_mcgrps	= ARRAY_SIZE(ieee802154_mcgrps),
 };

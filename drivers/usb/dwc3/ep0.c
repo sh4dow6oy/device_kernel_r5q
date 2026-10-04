@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * ep0.c - DesignWare USB3 DRD Controller Endpoint 0 Handling
  *
@@ -5,15 +6,6 @@
  *
  * Authors: Felipe Balbi <balbi@ti.com>,
  *	    Sebastian Andrzej Siewior <bigeasy@linutronix.de>
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2  of
- * the License as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #include <linux/module.h>
@@ -81,7 +73,7 @@ static int dwc3_ep0_start_trans(struct dwc3_ep *dep)
 	struct dwc3			*dwc;
 	int				ret;
 
-	if (dep->flags & DWC3_EP_BUSY)
+	if (dep->flags & DWC3_EP_TRANSFER_STARTED)
 		return 0;
 
 	dwc = dep->dwc;
@@ -94,8 +86,6 @@ static int dwc3_ep0_start_trans(struct dwc3_ep *dep)
 	if (ret < 0)
 		return ret;
 
-	dep->flags |= DWC3_EP_BUSY;
-	dep->resource_index = dwc3_gadget_ep_get_transfer_index(dep);
 	dwc->ep0_next_event = DWC3_EP0_COMPLETE;
 
 	return 0;
@@ -216,7 +206,7 @@ int dwc3_gadget_ep0_queue(struct usb_ep *ep, struct usb_request *request,
 	u32				reg;
 
 	spin_lock_irqsave(&dwc->lock, flags);
-	if (!dep->endpoint.desc || !dwc->softconnect ||
+	if (!dep->endpoint.desc || !dwc->pullups_connected ||
 		!dwc->vbus_active) {
 		dev_err(dwc->dev, "%s: can't queue to disabled endpoint\n",
 				dep->name);
@@ -429,23 +419,9 @@ static int dwc3_ep0_handle_u1(struct dwc3 *dwc, enum usb_device_state state,
 			(dwc->speed != DWC3_DSTS_SUPERSPEED_PLUS))
 		return -EINVAL;
 
-	/* Ignore all other checks if u1/u2 is enabled from user */
-	if (enable_dwc3_u1u2)
-		goto enable_u1;
-
-	/*
-	 * STAR: "9001276244: LFPS Handshake Interoperability Issues"
-	 * has two part workaround, first part is to disable u1/u2
-	 * in case of SSP to avoid interoperability issues.
-	 */
-	if (dwc->revision == DWC3_USB31_REVISION_170A &&
-		(dwc->speed == DWC3_DSTS_SUPERSPEED_PLUS))
+	if (dwc->usb3_u1u2_disable && !enable_dwc3_u1u2)
 		return -EINVAL;
 
-	if (dwc->usb3_u1u2_disable)
-		return -EINVAL;
-
-enable_u1:
 	reg = dwc3_readl(dwc->regs, DWC3_DCTL);
 	if (set)
 		reg |= DWC3_DCTL_INITU1ENA;
@@ -468,23 +444,9 @@ static int dwc3_ep0_handle_u2(struct dwc3 *dwc, enum usb_device_state state,
 			(dwc->speed != DWC3_DSTS_SUPERSPEED_PLUS))
 		return -EINVAL;
 
-	/* Ignore all other checks if u1/u2 is enabled from user */
-	if (enable_dwc3_u1u2)
-		goto enable_u2;
-
-	/*
-	 * STAR: "9001276244: LFPS Handshake Interoperability Issues"
-	 * has two part workaround, first part is to disable u1/u2
-	 * in case of SSP to avoid interoperability issues.
-	 */
-	if (dwc->revision == DWC3_USB31_REVISION_170A &&
-		(dwc->speed == DWC3_DSTS_SUPERSPEED_PLUS))
+	if (dwc->usb3_u1u2_disable && !enable_dwc3_u1u2)
 		return -EINVAL;
 
-	if (dwc->usb3_u1u2_disable)
-		return -EINVAL;
-
-enable_u2:
 	reg = dwc3_readl(dwc->regs, DWC3_DCTL);
 	if (set)
 		reg |= DWC3_DCTL_INITU2ENA;
@@ -563,14 +525,10 @@ static int dwc3_ep0_handle_device(struct dwc3 *dwc,
 static int dwc3_ep0_handle_intf(struct dwc3 *dwc,
 		struct usb_ctrlrequest *ctrl, int set)
 {
-	enum usb_device_state	state;
 	u32			wValue;
-	u32			wIndex;
 	int			ret = 0;
 
 	wValue = le16_to_cpu(ctrl->wValue);
-	wIndex = le16_to_cpu(ctrl->wIndex);
-	state = dwc->gadget.state;
 
 	switch (wValue) {
 	case USB_INTRF_FUNC_SUSPEND:
@@ -596,14 +554,10 @@ static int dwc3_ep0_handle_endpoint(struct dwc3 *dwc,
 		struct usb_ctrlrequest *ctrl, int set)
 {
 	struct dwc3_ep		*dep;
-	enum usb_device_state	state;
 	u32			wValue;
-	u32			wIndex;
 	int			ret;
 
 	wValue = le16_to_cpu(ctrl->wValue);
-	wIndex = le16_to_cpu(ctrl->wIndex);
-	state = dwc->gadget.state;
 
 	switch (wValue) {
 	case USB_ENDPOINT_HALT:
@@ -630,10 +584,8 @@ static int dwc3_ep0_handle_feature(struct dwc3 *dwc,
 {
 	u32			recip;
 	int			ret;
-	enum usb_device_state	state;
 
 	recip = ctrl->bRequestType & USB_RECIP_MASK;
-	state = dwc->gadget.state;
 
 	switch (recip) {
 	case USB_RECIP_DEVICE:
@@ -728,6 +680,12 @@ static int dwc3_ep0_set_config(struct dwc3 *dwc, struct usb_ctrlrequest *ctrl)
 						DWC3_ENDPOINTS_NUM); num += 2) {
 				dep = dwc->eps[num];
 				size = 0;
+				/* Don't change TXFRAMNUM on usb31 version */
+				if (dwc3_is_usb31(dwc))
+					size = dwc3_readl(dwc->regs,
+						DWC3_GTXFIFOSIZ(num >> 1)) &
+						DWC31_GTXFIFOSIZ_TXFRAMNUM;
+
 				dwc3_writel(dwc->regs,
 					DWC3_GTXFIFOSIZ(num >> 1), size);
 				dep->fifo_depth = 0;
@@ -752,33 +710,16 @@ static int dwc3_ep0_set_config(struct dwc3 *dwc, struct usb_ctrlrequest *ctrl)
 				usb_gadget_set_state(&dwc->gadget,
 						USB_STATE_CONFIGURED);
 
-			/*
-			 * Ignore all other checks if u1/u2 is enabled
-			 * from user
-			 */
-			if (enable_dwc3_u1u2)
-				goto enable_u1u2;
-			/*
-			 * STAR:"9001276244: LFPS Handshake Interoperability
-			 * Issues" has two part workaround, first part is to
-			 * disable u1/u2 in case of SSP to avoid
-			 * interoperability issues.
-			 */
-			if (dwc->revision == DWC3_USB31_REVISION_170A &&
-				(dwc->speed == DWC3_DSTS_SUPERSPEED_PLUS))
-				break;
-
-			if (dwc->usb3_u1u2_disable)
-				break;
-enable_u1u2:
-			/*
-			 * Enable transition to U1/U2 state when
-			 * nothing is pending from application.
-			 */
-			reg = dwc3_readl(dwc->regs, DWC3_DCTL);
-			reg |= (DWC3_DCTL_ACCEPTU1ENA |
-						DWC3_DCTL_ACCEPTU2ENA);
-			dwc3_writel(dwc->regs, DWC3_DCTL, reg);
+			if (!dwc->usb3_u1u2_disable || enable_dwc3_u1u2) {
+				/*
+				 * Enable transition to U1/U2 state when
+				 * nothing is pending from application.
+				 */
+				reg = dwc3_readl(dwc->regs, DWC3_DCTL);
+				reg |= (DWC3_DCTL_ACCEPTU1ENA |
+							DWC3_DCTL_ACCEPTU2ENA);
+				dwc3_writel(dwc->regs, DWC3_DCTL, reg);
+			}
 		}
 		break;
 
@@ -793,36 +734,7 @@ enable_u1u2:
 	}
 	return ret;
 }
-#ifdef CONFIG_USB_ANDROID_SAMSUNG_COMPOSITE
-static int dwc3_ep0_set_interface(struct dwc3 *dwc, struct usb_ctrlrequest *ctrl)
-{
-	u32 alt_setting;
-#if 0
-	enum usb_device_state state = dwc->gadget.state;
-#endif
-	int ret;
 
-	alt_setting = le16_to_cpu(ctrl->wValue);
-
-	ret = dwc3_ep0_delegate_req(dwc, ctrl);
-#if 0
-	switch (state) {
-
-	case USB_STATE_CONFIGURED:
-		/* if the alt_setting matches and the alt_setting is non zero */
-		if (alt_setting && (!ret || (ret == USB_GADGET_DELAYED_STATUS))) {
-			dwc->resize_fifos = true;
-			dev_dbg(dwc->dev, "resize fifos flag SET\n");
-		}
-		break;
-
-	default:
-		dev_err(dwc->dev, "default case\n");
-	}
-#endif
-	return ret;
-}
-#endif
 static void dwc3_ep0_set_sel_cmpl(struct usb_ep *ep, struct usb_request *req)
 {
 	struct dwc3_ep	*dep = to_dwc3_ep(ep);
@@ -873,12 +785,10 @@ static int dwc3_ep0_set_sel(struct dwc3 *dwc, struct usb_ctrlrequest *ctrl)
 	struct dwc3_ep	*dep;
 	enum usb_device_state state = dwc->gadget.state;
 	u16		wLength;
-	u16		wValue;
 
 	if (state == USB_STATE_DEFAULT)
 		return -EINVAL;
 
-	wValue = le16_to_cpu(ctrl->wValue);
 	wLength = le16_to_cpu(ctrl->wLength);
 
 	if (wLength != 6) {
@@ -917,11 +827,7 @@ static int dwc3_ep0_set_isoch_delay(struct dwc3 *dwc, struct usb_ctrlrequest *ct
 	if (wIndex || wLength)
 		return -EINVAL;
 
-	/*
-	 * REVISIT It's unclear from Databook what to do with this
-	 * value. For now, just cache it.
-	 */
-	dwc->isoch_delay = wValue;
+	dwc->gadget.isoch_delay = wValue;
 
 	return 0;
 }
@@ -945,15 +851,6 @@ static int dwc3_ep0_std_request(struct dwc3 *dwc, struct usb_ctrlrequest *ctrl)
 		break;
 	case USB_REQ_SET_CONFIGURATION:
 		ret = dwc3_ep0_set_config(dwc, ctrl);
-#ifdef CONFIG_USB_CHARGING_EVENT
-		if (ret < 0)
-			break;
-		if (dwc->gadget.speed == USB_SPEED_SUPER)
-			dwc->vbus_current = USB_CURRENT_SUPER_SPEED;
-		else
-			dwc->vbus_current = USB_CURRENT_HIGH_SPEED;
-		schedule_work(&dwc->set_vbus_current_work);
-#endif
 		break;
 	case USB_REQ_SET_SEL:
 		ret = dwc3_ep0_set_sel(dwc, ctrl);
@@ -961,12 +858,6 @@ static int dwc3_ep0_std_request(struct dwc3 *dwc, struct usb_ctrlrequest *ctrl)
 	case USB_REQ_SET_ISOCH_DELAY:
 		ret = dwc3_ep0_set_isoch_delay(dwc, ctrl);
 		break;
-#ifdef CONFIG_USB_ANDROID_SAMSUNG_COMPOSITE
-	case USB_REQ_SET_INTERFACE:
-		dev_vdbg(dwc->dev, "USB_REQ_SET_INTERFACE\n");
-		ret = dwc3_ep0_set_interface(dwc, ctrl);
-		break;
-#endif
 	default:
 		ret = dwc3_ep0_delegate_req(dwc, ctrl);
 		break;
@@ -984,19 +875,6 @@ static void dwc3_ep0_inspect_setup(struct dwc3 *dwc,
 
 	if (!dwc->gadget_driver)
 		goto out;
-
-	/*
-	 * A SETUP packet from previous session might get completed with delay
-	 * and get inspected before ConnectDone event for the new connection is
-	 * fired. This leads to controller not responding to fresh SETUP packets
-	 * anymore, even after fresh RESET from host.
-	 * Restart USB gadget if such delayed SETUP packet is inspected.
-	 */
-	if (!dwc->connected) {
-		dbg_event(0x0, "Setup_restart", 0);
-		dwc3_notify_event(dwc, DWC3_CONTROLLER_RESTART_USB_SESSION, 0);
-		return;
-	}
 
 	trace_dwc3_ctrl_req(ctrl);
 
@@ -1036,13 +914,10 @@ out:
 static void dwc3_ep0_complete_data(struct dwc3 *dwc,
 		const struct dwc3_event_depevt *event)
 {
-	struct dwc3_request	*r = NULL;
+	struct dwc3_request	*r;
 	struct usb_request	*ur;
 	struct dwc3_trb		*trb;
 	struct dwc3_ep		*ep0;
-	unsigned		maxp;
-	unsigned		remaining_ur_length;
-	void			*buf;
 	u32			transferred = 0;
 	u32			status;
 	u32			length;
@@ -1066,11 +941,8 @@ static void dwc3_ep0_complete_data(struct dwc3 *dwc,
 	}
 
 	ur = &r->request;
-	buf = ur->buf;
-	remaining_ur_length = ur->length;
 
 	length = trb->size & DWC3_TRB_SIZE_MASK;
-	maxp = ep0->endpoint.maxpacket;
 	transferred = ur->length - length;
 	ur->actual += transferred;
 
@@ -1143,7 +1015,7 @@ static void dwc3_ep0_xfer_complete(struct dwc3 *dwc,
 {
 	struct dwc3_ep		*dep = dwc->eps[event->endpoint_number];
 
-	dep->flags &= ~DWC3_EP_BUSY;
+	dep->flags &= ~DWC3_EP_TRANSFER_STARTED;
 	dep->resource_index = 0;
 	dwc->setup_packet_pending = false;
 
@@ -1192,6 +1064,7 @@ static void __dwc3_ep0_do_control_data(struct dwc3 *dwc,
 		maxpacket = dep->endpoint.maxpacket;
 		rem = req->request.length % maxpacket;
 		dwc->ep0_bounced = true;
+		dbg_ep_map(dep->number, req);
 
 		/* prepare normal TRB */
 		dwc3_ep0_prepare_one_trb(dep, req->request.dma,
@@ -1209,16 +1082,13 @@ static void __dwc3_ep0_do_control_data(struct dwc3 *dwc,
 		ret = dwc3_ep0_start_trans(dep);
 	} else if (IS_ALIGNED(req->request.length, dep->endpoint.maxpacket) &&
 		   req->request.length && req->request.zero) {
-		u32	maxpacket;
-		u32	rem;
 
 		ret = usb_gadget_map_request_by_dev(dwc->sysdev,
 				&req->request, dep->number);
 		if (ret)
 			return;
 
-		maxpacket = dep->endpoint.maxpacket;
-		rem = req->request.length % maxpacket;
+		dbg_ep_map(dep->number, req);
 
 		/* prepare normal TRB */
 		dwc3_ep0_prepare_one_trb(dep, req->request.dma,
@@ -1242,6 +1112,7 @@ static void __dwc3_ep0_do_control_data(struct dwc3 *dwc,
 		if (ret)
 			return;
 
+		dbg_ep_map(dep->number, req);
 		dwc3_ep0_prepare_one_trb(dep, req->request.dma,
 				req->request.length, DWC3_TRBCTL_CONTROL_DATA,
 				false);
@@ -1379,10 +1250,9 @@ static void dwc3_ep0_xfernotready(struct dwc3 *dwc,
 void dwc3_ep0_interrupt(struct dwc3 *dwc,
 		const struct dwc3_event_depevt *event)
 {
-	struct dwc3_ep	*dep;
-	u8 epnum = event->endpoint_number;
+	struct dwc3_ep	*dep = dwc->eps[event->endpoint_number];
+	u8		cmd;
 
-	dep = dwc->eps[epnum];
 	switch (event->endpoint_event) {
 	case DWC3_DEPEVT_XFERCOMPLETE:
 		dwc3_ep0_xfer_complete(dwc, event);
@@ -1404,6 +1274,10 @@ void dwc3_ep0_interrupt(struct dwc3 *dwc,
 		dep->dbg_ep_events.streamevent++;
 		break;
 	case DWC3_DEPEVT_EPCMDCMPLT:
+		cmd = DEPEVT_PARAMETER_CMD(event->parameters);
+
+		if (cmd == DWC3_DEPCMD_ENDTRANSFER)
+			dep->flags &= ~DWC3_EP_TRANSFER_STARTED;
 		dep->dbg_ep_events.epcmdcomplete++;
 		break;
 	}

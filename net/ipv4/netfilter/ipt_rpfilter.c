@@ -51,7 +51,7 @@ static bool rpfilter_lookup_reverse(struct net *net, struct flowi4 *fl4,
 	for (ret = 0; ret < res.fi->fib_nhs; ret++) {
 		struct fib_nh *nh = &res.fi->fib_nh[ret];
 
-		if (nh->fib_nh_dev == dev) {
+		if (nh->nh_dev == dev) {
 			dev_match = true;
 			break;
 		}
@@ -89,10 +89,10 @@ static bool rpfilter_mt(const struct sk_buff *skb, struct xt_action_param *par)
 			return true ^ invert;
 	}
 
+	memset(&flow, 0, sizeof(flow));
 	flow.flowi4_iif = LOOPBACK_IFINDEX;
 	flow.daddr = iph->saddr;
 	flow.saddr = rpfilter_get_saddr(iph->daddr);
-	flow.flowi4_oif = 0;
 	flow.flowi4_mark = info->flags & XT_RPFILTER_VALID_MARK ? skb->mark : 0;
 	flow.flowi4_tos = iph->tos & IPTOS_RT_MASK;
 	flow.flowi4_scope = RT_SCOPE_UNIVERSE;
@@ -112,8 +112,8 @@ static int rpfilter_check(const struct xt_mtchk_param *par)
 
 	if (strcmp(par->table, "mangle") != 0 &&
 	    strcmp(par->table, "raw") != 0) {
-		pr_info("match only valid in the \'raw\' "
-			"or \'mangle\' tables, not \'%s\'.\n", par->table);
+		pr_info_ratelimited("only valid in \'raw\' or \'mangle\' table, not \'%s\'\n",
+				    par->table);
 		return -EINVAL;
 	}
 

@@ -1,14 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2012-2014, 2016-2019 The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * Copyright (c) 2012-2014, 2016-2018 The Linux Foundation. All rights reserved.
  */
 
 #include <linux/gpio.h>
@@ -139,7 +131,6 @@ enum pmic_gpio_func_index {
  * @irq: IRQ number which this GPIO generate.
  * @gpio_idx: The index in GPIO's hardware number space (1-based)
  * @is_enabled: Set to false when GPIO should be put in high Z state.
- * @is_configured: Set to true if the GPIO is configured
  * @out_value: Cached pin output value
  * @have_buffer: Set to true if GPIO output could be configured in push-pull,
  *	open-drain or open-source mode.
@@ -161,7 +152,6 @@ struct pmic_gpio_pad {
 	int		irq;
 	int		gpio_idx;
 	bool		is_enabled;
-	bool		is_configured;
 	bool		out_value;
 	bool		have_buffer;
 	bool		output_enabled;
@@ -334,7 +324,6 @@ static int pmic_gpio_set_mux(struct pinctrl_dev *pctldev, unsigned function,
 	}
 
 	pad->function = function;
-	pad->is_configured = true;
 
 	if (pad->analog_pass)
 		val = PMIC_GPIO_MODE_ANALOG_PASS_THRU;
@@ -481,7 +470,6 @@ static int pmic_gpio_config_set(struct pinctrl_dev *pctldev, unsigned int pin,
 	pad = pctldev->desc->pins[pin].drv_data;
 
 	pad->is_enabled = true;
-	pad->is_configured = true;
 	for (i = 0; i < nconfs; i++) {
 		param = pinconf_to_config_param(configs[i]);
 		arg = pinconf_to_config_argument(configs[i]);
@@ -654,7 +642,7 @@ static void pmic_gpio_config_dbg_show(struct pinctrl_dev *pctldev,
 		"push-pull", "open-drain", "open-source"
 	};
 	static const char *const strengths[] = {
-		"no", "low", "medium", "high"
+		"no", "high", "medium", "low"
 	};
 
 	pad = pctldev->desc->pins[pin].drv_data;
@@ -699,123 +687,12 @@ static void pmic_gpio_config_dbg_show(struct pinctrl_dev *pctldev,
 		seq_printf(s, " dtest-%d", pad->dtest_buffer);
 	}
 }
-#if defined(CONFIG_SEC_PM)
-static void pmic_gpio_sec_dbg_show(struct pinctrl_dev *pctldev,
-				      struct seq_file *s)
-{
-	struct pmic_gpio_state *state = pinctrl_dev_get_drvdata(pctldev);
-	struct pmic_gpio_pad *pad;
-	int val, i, ret, function;
-
-	static const char *const biases[] = {
-		"PU30", "PU1.5", "PU31.5",
-		"PU_BST", "PD10", "NP"
-	};
-	static const char *const strengths[] = {
-		"no", "high", "medium", "low"
-	};
-
-	for (i = 0; i < state->chip.ngpio; i++) {
-		pad = pctldev->desc->pins[i].drv_data;
-		seq_printf(s, " gpio%-2d:", pad->gpio_idx);
-		val = pmic_gpio_read(state, pad, PMIC_GPIO_REG_EN_CTL);
-		if (val < 0 || !(val >> PMIC_GPIO_REG_MASTER_EN_SHIFT)) {
-			seq_puts(s, " ---");
-		} else {
-			if (pad->input_enabled) {
-				ret = pmic_gpio_read(state, pad, PMIC_MPP_REG_RT_STS);
-				if (ret < 0)
-					continue;
-
-				ret &= PMIC_MPP_REG_RT_STS_VAL_MASK;
-				pad->out_value = ret;
-			}
-
-			if (!pad->lv_mv_type &&
-				pad->function >= PMIC_GPIO_FUNC_INDEX_FUNC3) {
-				function = pad->function + (PMIC_GPIO_FUNC_INDEX_DTEST1
-											- PMIC_GPIO_FUNC_INDEX_FUNC3);
-			} else {
-				function = pad->function;
-			}
-
-			seq_printf(s, " %-7s %-4s vin-%d %-7s %-2s %-7s atest-%d dtest-%d",
-					pmic_gpio_functions[function],
-					pad->output_enabled ? "OUT" : "IN",
-					pad->power_source,
-					biases[pad->pullup],
-					pad->out_value ? "H" : "L",
-					strengths[pad->strength],
-					pad->atest,
-					pad->dtest_buffer
-			);
-		}
-		seq_puts(s, "\n");
-	}
-}
-
-static void pmic_gpio_sec_dbg_print(struct pinctrl_dev *pctldev)
-{
-	struct pmic_gpio_state *state = pinctrl_dev_get_drvdata(pctldev);
-	struct pmic_gpio_pad *pad;
-	int val, i, ret, function;
-
-	static const char *const biases[] = {
-		"PU30", "PU1.5", "PU31.5",
-		"PU_BST", "PD10", "NP"
-	};
-	static const char *const strengths[] = {
-		"no", "high", "medium", "low"
-	};
-
-	for (i = 0; i < state->chip.ngpio; i++) {
-		pad = pctldev->desc->pins[i].drv_data;
-		val = pmic_gpio_read(state, pad, PMIC_GPIO_REG_EN_CTL);
-		if (val < 0 || !(val >> PMIC_GPIO_REG_MASTER_EN_SHIFT)) {
-			pr_info(" gpio%-2d: ---\n", pad->gpio_idx);
-		} else {
-			if (pad->input_enabled) {
-				ret = pmic_gpio_read(state, pad, PMIC_MPP_REG_RT_STS);
-				if (ret < 0)
-					continue;
-
-				ret &= PMIC_MPP_REG_RT_STS_VAL_MASK;
-				pad->out_value = ret;
-			}
-
-			if (!pad->lv_mv_type &&
-				pad->function >= PMIC_GPIO_FUNC_INDEX_FUNC3) {
-				function = pad->function + (PMIC_GPIO_FUNC_INDEX_DTEST1
-											- PMIC_GPIO_FUNC_INDEX_FUNC3);
-			} else {
-				function = pad->function;
-			}
-
-			pr_info(" gpio%-2d: %-7s %-4s vin-%d %-7s %-2s %-7s atest-%d dtest-%d\n",
-					pad->gpio_idx,
-					pmic_gpio_functions[function],
-					pad->output_enabled ? "OUT" : "IN",
-					pad->power_source,
-					biases[pad->pullup],
-					pad->out_value ? "H" : "L",
-					strengths[pad->strength],
-					pad->atest,
-					pad->dtest_buffer
-			);
-		}
-	}
-}
-#endif
 
 static const struct pinconf_ops pmic_gpio_pinconf_ops = {
 	.is_generic			= true,
 	.pin_config_group_get		= pmic_gpio_config_get,
 	.pin_config_group_set		= pmic_gpio_config_set,
 	.pin_config_group_dbg_show	= pmic_gpio_config_dbg_show,
-#if defined(CONFIG_SEC_PM)
-	.pin_config_sec_dbg_show	= pmic_gpio_sec_dbg_show,
-	.pin_config_sec_dbg_print	= pmic_gpio_sec_dbg_print,
-#endif
 };
 
 static int pmic_gpio_direction_input(struct gpio_chip *chip, unsigned pin)
@@ -932,37 +809,6 @@ static const struct gpio_chip pmic_gpio_gpio_template = {
 	.to_irq			= pmic_gpio_to_irq,
 	.dbg_show		= pmic_gpio_dbg_show,
 };
-
-#ifdef CONFIG_PM
-static int pmic_gpio_restore(struct device *dev)
-{
-	struct pmic_gpio_state *state = dev_get_drvdata(dev);
-	struct pinctrl_dev *ctrl = state->ctrl;
-	struct pmic_gpio_pad *pad;
-	unsigned int i, npins = ctrl->desc->npins;
-	int ret = 0;
-
-	for (i = 0; i < npins; i++) {
-		pad = ctrl->desc->pins[i].drv_data;
-		if (pad->is_configured) {
-			ret = pmic_gpio_config_set(ctrl, i, NULL, 0);
-			if (ret < 0) {
-				dev_err(state->dev, "Failed to restore pin %s[%d] ret=%d\n",
-					ctrl->desc->pins[i].name, i, ret);
-				return ret;
-			}
-		}
-	}
-
-	return ret;
-}
-
-static const struct dev_pm_ops pmic_gpio_pm_ops = {
-	.restore = pmic_gpio_restore,
-};
-#else
-static const struct dev_pm_ops pmic_gpio_pm_ops = {};
-#endif
 
 static int pmic_gpio_populate(struct pmic_gpio_state *state,
 			      struct pmic_gpio_pad *pad)
@@ -1105,7 +951,6 @@ static int pmic_gpio_populate(struct pmic_gpio_state *state,
 
 	/* Pin could be disabled with PIN_CONFIG_BIAS_HIGH_IMPEDANCE */
 	pad->is_enabled = true;
-	pad->is_configured = false;
 	return 0;
 }
 
@@ -1321,7 +1166,7 @@ static int pmic_gpio_probe(struct platform_device *pdev)
 		ret = gpiochip_add_pin_range(&state->chip, dev_name(dev), 0, 0,
 					     npins);
 		if (ret) {
-			dev_err(dev, "failed to add pin range\n, ret=%d\n", ret);
+			dev_err(dev, "failed to add pin range\n");
 			gpiochip_remove(&state->chip);
 			goto err_free;
 		}
@@ -1345,6 +1190,7 @@ static const struct of_device_id pmic_gpio_of_match[] = {
 	{ .compatible = "qcom,pm8916-gpio" },	/* 4 GPIO's */
 	{ .compatible = "qcom,pm8941-gpio" },	/* 36 GPIO's */
 	{ .compatible = "qcom,pm8994-gpio" },	/* 22 GPIO's */
+	{ .compatible = "qcom,pmi8994-gpio" },  /* 10 GPIO's */
 	{ .compatible = "qcom,pma8084-gpio" },	/* 22 GPIO's */
 	{ .compatible = "qcom,spmi-gpio" }, /* Generic */
 	{ },
@@ -1356,7 +1202,6 @@ static struct platform_driver pmic_gpio_driver = {
 	.driver = {
 		   .name = "qcom-spmi-gpio",
 		   .of_match_table = pmic_gpio_of_match,
-		   .pm = &pmic_gpio_pm_ops,
 	},
 	.probe	= pmic_gpio_probe,
 	.remove = pmic_gpio_remove,

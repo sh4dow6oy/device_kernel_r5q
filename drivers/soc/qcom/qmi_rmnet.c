@@ -1,14 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2018-2020, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * Copyright (c) 2021-2022, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <soc/qcom/qmi_rmnet.h>
@@ -20,18 +13,15 @@
 #include <net/tcp.h>
 #include "qmi_rmnet_i.h"
 #include <trace/events/dfc.h>
-#include <linux/module.h>
-#include <linux/moduleparam.h>
 #include <linux/ip.h>
 #include <linux/ipv6.h>
-#include <linux/alarmtimer.h>
-#include <linux/netlog.h>
-#include <linux/rtc.h>
 
 #define NLMSG_FLOW_ACTIVATE 1
 #define NLMSG_FLOW_DEACTIVATE 2
 #define NLMSG_CLIENT_SETUP 4
 #define NLMSG_CLIENT_DELETE 5
+#define NLMSG_SCALE_FACTOR 6
+#define NLMSG_WQ_FREQUENCY 7
 
 #define FLAG_DFC_MASK 0x000F
 #define FLAG_POWERSAVE_MASK 0x0010
@@ -50,14 +40,13 @@ int dfc_qmap;
 #define IS_ANCILLARY(type) ((type) != AF_INET && (type) != AF_INET6)
 
 unsigned int rmnet_wq_frequency __read_mostly = 1000;
-module_param(rmnet_wq_frequency, uint, 0644);
-MODULE_PARM_DESC(rmnet_wq_frequency, "Frequency of PS check in ms");
 
 #define PS_WORK_ACTIVE_BIT 0
 #define PS_INTERVAL (((!rmnet_wq_frequency) ?                             \
 					1 : rmnet_wq_frequency/10) * (HZ/100))
 #define NO_DELAY (0x0000 * HZ)
-#define PS_INTERVAL_KT (ms_to_ktime(1000))
+#define PS_INTERVAL_MS (1000)
+#define PS_INTERVAL_KT (ms_to_ktime(PS_INTERVAL_MS))
 #define WATCHDOG_EXPIRE_JF (msecs_to_jiffies(50))
 
 #ifdef CONFIG_QCOM_QMI_DFC
@@ -74,7 +63,7 @@ struct qmi_elem_info data_ep_id_type_v01_ei[] = {
 		.data_type	= QMI_SIGNED_4_BYTE_ENUM,
 		.elem_len	= 1,
 		.elem_size	= sizeof(enum data_ep_type_enum_v01),
-		.is_array	= NO_ARRAY,
+		.array_type	= NO_ARRAY,
 		.tlv_type	= QMI_COMMON_TLV_TYPE,
 		.offset		= offsetof(struct data_ep_id_type_v01,
 					   ep_type),
@@ -84,7 +73,7 @@ struct qmi_elem_info data_ep_id_type_v01_ei[] = {
 		.data_type	= QMI_UNSIGNED_4_BYTE,
 		.elem_len	= 1,
 		.elem_size	= sizeof(u32),
-		.is_array	= NO_ARRAY,
+		.array_type	= NO_ARRAY,
 		.tlv_type	= QMI_COMMON_TLV_TYPE,
 		.offset		= offsetof(struct data_ep_id_type_v01,
 					   iface_id),
@@ -94,7 +83,7 @@ struct qmi_elem_info data_ep_id_type_v01_ei[] = {
 		.data_type	= QMI_EOTI,
 		.elem_len	= 0,
 		.elem_size	= 0,
-		.is_array	= NO_ARRAY,
+		.array_type	= NO_ARRAY,
 		.tlv_type	= QMI_COMMON_TLV_TYPE,
 		.offset		= 0,
 		.ei_array	= NULL,
@@ -206,23 +195,14 @@ static void qmi_rmnet_update_flow_map(struct rmnet_flow_map *itm,
 int qmi_rmnet_flow_control(struct net_device *dev, u32 mq_idx, int enable)
 {
 	struct netdev_queue *q;
-	struct timespec ts;
-	struct rtc_time tm;
-	
+
 	if (unlikely(mq_idx >= dev->num_tx_queues))
 		return 0;
 
 	q = netdev_get_tx_queue(dev, mq_idx);
 	if (unlikely(!q))
 		return 0;
-	
-	getnstimeofday(&ts);
-	rtc_time_to_tm(ts.tv_sec, &tm);
-	net_log("%d-%02d-%02d %02d:%02d:%02d.%06lu, %s[%d] %s_queue\n", 
-				tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-				tm.tm_hour, tm.tm_min, tm.tm_sec, ts.tv_nsec/1000,
-				dev->name, mq_idx, enable ? "wake" : "stop");
-				
+
 	if (enable)
 		netif_tx_wake_queue(q);
 	else
@@ -231,21 +211,6 @@ int qmi_rmnet_flow_control(struct net_device *dev, u32 mq_idx, int enable)
 	trace_dfc_qmi_tc(dev->name, mq_idx, enable);
 
 	return 0;
-}
-
-static void qmi_rmnet_reset_txq(struct net_device *dev, unsigned int txq)
-{
-	struct Qdisc *qdisc;
-
-	if (unlikely(txq >= dev->num_tx_queues))
-		return;
-
-	qdisc = rtnl_dereference(netdev_get_tx_queue(dev, txq)->qdisc);
-	if (qdisc) {
-		spin_lock_bh(qdisc_lock(qdisc));
-		qdisc_reset(qdisc);
-		spin_unlock_bh(qdisc_lock(qdisc));
-	}
 }
 
 /**
@@ -271,7 +236,7 @@ static void qmi_rmnet_watchdog_fn(struct timer_list *t)
 	bearer->watchdog_expire_cnt++;
 	bearer->bytes_in_flight = 0;
 	if (!bearer->grant_size) {
-		bearer->grant_size = DEFAULT_GRANT;
+		bearer->grant_size = DEFAULT_CALL_GRANT;
 		bearer->grant_thresh = qmi_rmnet_grant_per(bearer->grant_size);
 		dfc_bearer_flow_ctl(bearer->qos->vnd_dev, bearer, bearer->qos);
 	} else {
@@ -346,7 +311,7 @@ static struct rmnet_bearer_map *__qmi_rmnet_bearer_get(
 
 		bearer->bearer_id = bearer_id;
 		bearer->flow_ref = 1;
-		bearer->grant_size = DEFAULT_GRANT;
+		bearer->grant_size = DEFAULT_CALL_GRANT;
 		bearer->grant_thresh = qmi_rmnet_grant_per(bearer->grant_size);
 		bearer->mq_idx = INVALID_MQ;
 		bearer->ack_mq_idx = INVALID_MQ;
@@ -373,15 +338,16 @@ static void __qmi_rmnet_bearer_put(struct net_device *dev,
 				continue;
 
 			mq->bearer = NULL;
-			if (reset) {
-				qmi_rmnet_reset_txq(dev, i);
-				qmi_rmnet_flow_control(dev, i, 1);
+			mq->drop_on_remove = reset;
+			/* Let other CPU's see this update so that packets are
+			 * dropped, instead of further processing packets
+			 */
+			smp_mb();
 
-				if (dfc_mode == DFC_MODE_SA) {
-					j = i + ACK_MQ_OFFSET;
-					qmi_rmnet_reset_txq(dev, j);
-					qmi_rmnet_flow_control(dev, j, 1);
-				}
+			qmi_rmnet_flow_control(dev, i, 1);
+			if (dfc_mode == DFC_MODE_SA) {
+				j = i + ACK_MQ_OFFSET;
+				qmi_rmnet_flow_control(dev, j, 1);
 			}
 		}
 
@@ -405,6 +371,11 @@ static void __qmi_rmnet_update_mq(struct net_device *dev,
 	mq = &qos_info->mq[itm->mq_idx];
 	if (!mq->bearer) {
 		mq->bearer = bearer;
+		mq->drop_on_remove = false;
+		/* Let other CPU's see this update so that packets are
+		 * dropped, instead of further processing packets
+		 */
+		smp_mb();
 
 		if (dfc_mode == DFC_MODE_SA) {
 			bearer->mq_idx = itm->mq_idx;
@@ -416,12 +387,16 @@ static void __qmi_rmnet_update_mq(struct net_device *dev,
 				bearer->mq_idx = itm->mq_idx;
 		}
 
-		qmi_rmnet_flow_control(dev, itm->mq_idx,
-				       bearer->grant_size > 0 ? 1 : 0);
+		/* Always enable flow for the newly associated bearer */
+		if (!bearer->grant_size) {
+			bearer->grant_size = DEFAULT_GRANT;
+			bearer->grant_thresh =
+				qmi_rmnet_grant_per(DEFAULT_GRANT);
+		}
+		qmi_rmnet_flow_control(dev, itm->mq_idx, 1);
 
 		if (dfc_mode == DFC_MODE_SA)
-			qmi_rmnet_flow_control(dev, bearer->ack_mq_idx,
-					bearer->grant_size > 0 ? 1 : 0);
+			qmi_rmnet_flow_control(dev, bearer->ack_mq_idx, 1);
 	}
 }
 
@@ -471,10 +446,7 @@ static int qmi_rmnet_add_flow(struct net_device *dev, struct tcmsg *tcm,
 	new_map.mq_idx = tcm->tcm_handle;
 	trace_dfc_flow_info(dev->name, new_map.bearer_id, new_map.flow_id,
 			    new_map.ip_type, new_map.mq_idx, 1);
-	net_log("add flow: %s m=%d b=%d f=%d ip=%d q=%d\n",
-			dev->name, qos_info->mux_id, new_map.bearer_id,
-			new_map.flow_id,
-			new_map.ip_type, new_map.mq_idx);
+
 again:
 	spin_lock_bh(&qos_info->qos_lock);
 
@@ -555,10 +527,7 @@ qmi_rmnet_del_flow(struct net_device *dev, struct tcmsg *tcm,
 		trace_dfc_flow_info(dev->name, new_map.bearer_id,
 				    new_map.flow_id, new_map.ip_type,
 				    itm->mq_idx, 0);
-		net_log("delete flow: %s m=%d b=%d f=%d ip=%d q=%d\n",
-			dev->name, qos_info->mux_id, new_map.bearer_id,
-			new_map.flow_id,
-			new_map.ip_type, itm->mq_idx);
+
 		__qmi_rmnet_bearer_put(dev, qos_info, itm->bearer, true);
 
 		/* Remove from flow map */
@@ -566,11 +535,8 @@ qmi_rmnet_del_flow(struct net_device *dev, struct tcmsg *tcm,
 		kfree(itm);
 	}
 
-	if (list_empty(&qos_info->flow_head)) {
+	if (list_empty(&qos_info->flow_head))
 		netif_tx_wake_all_queues(dev);
-		net_log("no action: %s m=%d b=%u gr=%u f=%u q=%d en",
-			dev->name, qos_info->mux_id, 0xff, DEFAULT_GRANT, 0, 0);
-	}
 
 	spin_unlock_bh(&qos_info->qos_lock);
 
@@ -589,27 +555,6 @@ static void qmi_rmnet_query_flows(struct qmi_info *qmi)
 			dfc_qmi_query_flow(qmi->dfc_clients[i]);
 	}
 }
-
-static int qmi_rmnet_set_scale_factor(const char *val,
-				      const struct kernel_param *kp)
-{
-	int ret;
-	unsigned int num = 0;
-
-	ret = kstrtouint(val, 10, &num);
-	if (ret != 0 || num == 0)
-		return -EINVAL;
-
-	return param_set_uint(val, kp);
-}
-
-static const struct kernel_param_ops qmi_rmnet_scale_ops = {
-	.set	= qmi_rmnet_set_scale_factor,
-	.get	= param_get_uint,
-};
-
-module_param_cb(qmi_rmnet_scale_factor, &qmi_rmnet_scale_ops,
-		&qmi_rmnet_scale_factor, 0664);
 
 struct rmnet_bearer_map *qmi_rmnet_get_bearer_noref(struct qos_info *qos_info,
 						    u8 bearer_id)
@@ -800,6 +745,14 @@ void qmi_rmnet_change_link(struct net_device *dev, void *port, void *tcm_pt)
 		}
 		qmi_rmnet_delete_client(port, qmi, tcm);
 		break;
+	case NLMSG_SCALE_FACTOR:
+		if (!tcm->tcm_ifindex)
+			return;
+		qmi_rmnet_scale_factor = tcm->tcm_ifindex;
+		break;
+	case NLMSG_WQ_FREQUENCY:
+		rmnet_wq_frequency = tcm->tcm_ifindex;
+		break;
 	default:
 		pr_debug("%s(): No handler\n", __func__);
 		break;
@@ -900,6 +853,27 @@ bool qmi_rmnet_all_flows_enabled(struct net_device *dev)
 EXPORT_SYMBOL(qmi_rmnet_all_flows_enabled);
 
 #ifdef CONFIG_QCOM_QMI_DFC
+bool qmi_rmnet_get_flow_state(struct net_device *dev, struct sk_buff *skb,
+			      bool *drop)
+{
+	struct qos_info *qos = rmnet_get_qos_pt(dev);
+	int txq = skb->queue_mapping;
+
+	if (txq > ACK_MQ_OFFSET)
+		txq -= ACK_MQ_OFFSET;
+
+	if (unlikely(!qos || txq >= MAX_MQ_NUM))
+		return false;
+
+	/* If the bearer is gone, packets may need to be dropped */
+	*drop = (txq != DEFAULT_MQ_NUM && !READ_ONCE(qos->mq[txq].bearer) &&
+		 READ_ONCE(qos->mq[txq].drop_on_remove));
+
+	return true;
+}
+EXPORT_SYMBOL(qmi_rmnet_get_flow_state);
+
+
 void qmi_rmnet_burst_fc_check(struct net_device *dev,
 			      int ip_type, u32 mark, unsigned int len)
 {
@@ -1094,7 +1068,6 @@ static LIST_HEAD(ps_list);
 
 struct rmnet_powersave_work {
 	struct delayed_work work;
-	struct alarm atimer;
 	void *port;
 	u64 old_rx_pkts;
 	u64 old_tx_pkts;
@@ -1179,16 +1152,6 @@ static void qmi_rmnet_work_restart(void *port)
 	rcu_read_unlock();
 }
 
-static enum alarmtimer_restart qmi_rmnet_work_alarm(struct alarm *atimer,
-						    ktime_t now)
-{
-	struct rmnet_powersave_work *real_work;
-
-	real_work = container_of(atimer, struct rmnet_powersave_work, atimer);
-	qmi_rmnet_work_restart(real_work->port);
-	return ALARMTIMER_NORESTART;
-}
-
 static void qmi_rmnet_check_stats(struct work_struct *work)
 {
 	struct rmnet_powersave_work *real_work;
@@ -1196,7 +1159,6 @@ static void qmi_rmnet_check_stats(struct work_struct *work)
 	u64 rxd, txd;
 	u64 rx, tx;
 	bool dl_msg_active;
-	bool use_alarm_timer = true;
 
 	real_work = container_of(to_delayed_work(work),
 				 struct rmnet_powersave_work, work);
@@ -1207,6 +1169,15 @@ static void qmi_rmnet_check_stats(struct work_struct *work)
 	qmi = (struct qmi_info *)rmnet_get_qmi_pt(real_work->port);
 	if (unlikely(!qmi))
 		return;
+
+	rmnet_get_packets(real_work->port, &rx, &tx);
+	rxd = rx - real_work->old_rx_pkts;
+	txd = tx - real_work->old_tx_pkts;
+	real_work->old_rx_pkts = rx;
+	real_work->old_tx_pkts = tx;
+
+	dl_msg_active = qmi->dl_msg_active;
+	qmi->dl_msg_active = false;
 
 	if (qmi->ps_enabled) {
 
@@ -1228,24 +1199,13 @@ static void qmi_rmnet_check_stats(struct work_struct *work)
 		goto end;
 	}
 
-	rmnet_get_packets(real_work->port, &rx, &tx);
-	rxd = rx - real_work->old_rx_pkts;
-	txd = tx - real_work->old_tx_pkts;
-	real_work->old_rx_pkts = rx;
-	real_work->old_tx_pkts = tx;
-
-	dl_msg_active = qmi->dl_msg_active;
-	qmi->dl_msg_active = false;
-
 	if (!rxd && !txd) {
 		/* If no DL msg received and there is a flow disabled,
 		 * (likely in RLF), no need to enter powersave
 		 */
 		if (!dl_msg_active &&
-		    !rmnet_all_flows_enabled(real_work->port)) {
-			use_alarm_timer = false;
+		    !rmnet_all_flows_enabled(real_work->port))
 			goto end;
-		}
 
 		/* Deregister to suppress QMI DFC and DL marker */
 		if (qmi_rmnet_set_powersave_mode(real_work->port, 1) < 0)
@@ -1269,14 +1229,9 @@ static void qmi_rmnet_check_stats(struct work_struct *work)
 	}
 end:
 	rcu_read_lock();
-	if (!rmnet_work_quit) {
-		if (use_alarm_timer)
-			alarm_start_relative(&real_work->atimer,
-					     PS_INTERVAL_KT);
-		else
-			queue_delayed_work(rmnet_ps_wq, &real_work->work,
-					   PS_INTERVAL);
-	}
+	if (!rmnet_work_quit)
+		queue_delayed_work(rmnet_ps_wq, &real_work->work,
+				   PS_INTERVAL);
 	rcu_read_unlock();
 }
 
@@ -1311,8 +1266,7 @@ void qmi_rmnet_work_init(void *port)
 		rmnet_ps_wq = NULL;
 		return;
 	}
-	INIT_DEFERRABLE_WORK(&rmnet_work->work, qmi_rmnet_check_stats);
-	alarm_init(&rmnet_work->atimer, ALARM_BOOTTIME, qmi_rmnet_work_alarm);
+	INIT_DELAYED_WORK(&rmnet_work->work, qmi_rmnet_check_stats);
 	rmnet_work->port = port;
 	rmnet_get_packets(rmnet_work->port, &rmnet_work->old_rx_pkts,
 			  &rmnet_work->old_tx_pkts);
@@ -1346,7 +1300,6 @@ void qmi_rmnet_work_exit(void *port)
 	synchronize_rcu();
 
 	rmnet_work_inited = false;
-	alarm_cancel(&rmnet_work->atimer);
 	cancel_delayed_work_sync(&rmnet_work->work);
 	destroy_workqueue(rmnet_ps_wq);
 	qmi_rmnet_work_set_active(port, 0);
@@ -1385,5 +1338,4 @@ bool qmi_rmnet_ignore_grant(void *port)
 	return qmi->ps_ignore_grant;
 }
 EXPORT_SYMBOL(qmi_rmnet_ignore_grant);
-
 #endif

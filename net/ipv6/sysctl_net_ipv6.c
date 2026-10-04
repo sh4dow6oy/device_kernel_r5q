@@ -23,6 +23,7 @@
 
 static int zero;
 static int one = 1;
+static int two = 2;
 static int auto_flowlabels_min;
 static int auto_flowlabels_max = IP6_AUTO_FLOW_LABEL_MAX;
 
@@ -149,7 +150,23 @@ static struct ctl_table ipv6_table_template[] = {
 		.mode		= 0644,
 		.proc_handler   = proc_rt6_multipath_hash_policy,
 		.extra1		= &zero,
-		.extra2		= &one,
+		.extra2		= &two,
+	},
+	{
+		.procname	= "seg6_flowlabel",
+		.data		= &init_net.ipv6.sysctl.seg6_flowlabel,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec
+	},
+	{
+		.procname	= "fib_notify_on_flag_change",
+		.data		= &init_net.ipv6.sysctl.fib_notify_on_flag_change,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1         = &zero,
+		.extra2         = &two,
 	},
 	{ }
 };
@@ -216,6 +233,7 @@ static int __net_init ipv6_sysctl_net_init(struct net *net)
 	ipv6_table[12].data = &net->ipv6.sysctl.max_dst_opts_len;
 	ipv6_table[13].data = &net->ipv6.sysctl.max_hbh_opts_len;
 	ipv6_table[14].data = &net->ipv6.sysctl.multipath_hash_policy,
+	ipv6_table[15].data = &net->ipv6.sysctl.seg6_flowlabel;
 
 	ipv6_route_table = ipv6_route_sysctl_init(net);
 	if (!ipv6_route_table)

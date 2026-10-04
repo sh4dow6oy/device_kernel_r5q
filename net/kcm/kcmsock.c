@@ -386,8 +386,12 @@ static int kcm_parse_func_strparser(struct strparser *strp, struct sk_buff *skb)
 {
 	struct kcm_psock *psock = container_of(strp, struct kcm_psock, strp);
 	struct bpf_prog *prog = psock->bpf_prog;
+	int res;
 
-	return BPF_PROG_RUN(prog, skb);
+	preempt_disable();
+	res = BPF_PROG_RUN(prog, skb);
+	preempt_enable();
+	return res;
 }
 
 static int kcm_read_sock_done(struct strparser *strp, int err)
@@ -401,8 +405,8 @@ static int kcm_read_sock_done(struct strparser *strp, int err)
 
 static void psock_state_change(struct sock *sk)
 {
-	/* TCP only does a POLLIN for a half close. Do a POLLHUP here
-	 * since application will normally not poll with POLLIN
+	/* TCP only does a EPOLLIN for a half close. Do a EPOLLHUP here
+	 * since application will normally not poll with EPOLLIN
 	 * on the TCP sockets.
 	 */
 
@@ -1307,7 +1311,7 @@ static void init_kcm_sock(struct kcm_sock *kcm, struct kcm_mux *mux)
 
 	/* For SOCK_SEQPACKET sock type, datagram_poll checks the sk_state, so
 	 * we set sk_state, otherwise epoll_wait always returns right away with
-	 * POLLHUP
+	 * EPOLLHUP
 	 */
 	kcm->sk.sk_state = TCP_ESTABLISHED;
 
@@ -1405,8 +1409,8 @@ static int kcm_attach(struct socket *sock, struct socket *csock,
 	psock->save_write_space = csk->sk_write_space;
 	psock->save_state_change = csk->sk_state_change;
 	csk->sk_user_data = psock;
-	csk->sk_data_ready = psock_data_ready;
-	csk->sk_write_space = psock_write_space;
+	WRITE_ONCE(csk->sk_data_ready, psock_data_ready);
+	WRITE_ONCE(csk->sk_write_space, psock_write_space);
 	csk->sk_state_change = psock_state_change;
 
 	write_unlock_bh(&csk->sk_callback_lock);
@@ -1482,8 +1486,8 @@ static void kcm_unattach(struct kcm_psock *psock)
 	 */
 	write_lock_bh(&csk->sk_callback_lock);
 	csk->sk_user_data = NULL;
-	csk->sk_data_ready = psock->save_data_ready;
-	csk->sk_write_space = psock->save_write_space;
+	WRITE_ONCE(csk->sk_data_ready, psock->save_data_ready);
+	WRITE_ONCE(csk->sk_write_space, psock->save_write_space);
 	csk->sk_state_change = psock->save_state_change;
 	strp_stop(&psock->strp);
 
@@ -1629,7 +1633,6 @@ static struct file *kcm_clone(struct socket *osock)
 {
 	struct socket *newsock;
 	struct sock *newsk;
-	struct file *file;
 
 	newsock = sock_alloc();
 	if (!newsock)
@@ -1649,11 +1652,7 @@ static struct file *kcm_clone(struct socket *osock)
 	sock_init_data(newsock, newsk);
 	init_kcm_sock(kcm_sk(newsk), kcm_sk(osock->sk)->mux);
 
-	file = sock_alloc_file(newsock, 0, osock->sk->sk_prot_creator->name);
-	if (IS_ERR(file))
-		sock_release(newsock);
-
-	return file;
+	return sock_alloc_file(newsock, 0, osock->sk->sk_prot_creator->name);
 }
 
 static int kcm_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
@@ -2081,4 +2080,3 @@ module_exit(kcm_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_ALIAS_NETPROTO(PF_KCM);
-

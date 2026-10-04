@@ -206,7 +206,7 @@ enum bpf_prog_type {
 	BPF_PROG_TYPE_EXT,
 	BPF_PROG_TYPE_LSM,
 	BPF_PROG_TYPE_SK_LOOKUP,
-	BPF_PROG_TYPE_SYSCALL, /* a program that can execute syscalls */
+	BPF_PROG_TYPE_FUSE,
 };
 
 enum bpf_attach_type {
@@ -248,10 +248,6 @@ enum bpf_attach_type {
 	BPF_XDP_CPUMAP,
 	BPF_SK_LOOKUP,
 	BPF_XDP,
-	BPF_SK_SKB_VERDICT,
-	BPF_SK_REUSEPORT_SELECT,
-	BPF_SK_REUSEPORT_SELECT_OR_MIGRATE,
-	BPF_PERF_EVENT,
 	__MAX_BPF_ATTACH_TYPE
 };
 
@@ -265,7 +261,6 @@ enum bpf_link_type {
 	BPF_LINK_TYPE_ITER = 4,
 	BPF_LINK_TYPE_NETNS = 5,
 	BPF_LINK_TYPE_XDP = 6,
-	BPF_LINK_TYPE_PERF_EVENT = 7,
 
 	MAX_BPF_LINK_TYPE,
 };
@@ -399,15 +394,6 @@ enum bpf_link_type {
  *                   is struct/union.
  */
 #define BPF_PSEUDO_BTF_ID	3
-/* insn[0].src_reg:  BPF_PSEUDO_FUNC
- * insn[0].imm:      insn offset to the func
- * insn[1].imm:      subprog number, filled in by the verifier
- * insn[0].off:      0
- * insn[1].off:      0
- * ldimm64 rewrite:  address of the function
- * verifier type:    PTR_TO_FUNC.
- */
-#define BPF_PSEUDO_FUNC		4
 
 /* when bpf_call->src_reg == BPF_PSEUDO_CALL, bpf_call->imm == pc-relative
  * offset to another bpf function
@@ -581,11 +567,9 @@ union bpf_attr {
 		union {
 			/* valid prog_fd to attach to bpf prog */
 			__u32		attach_prog_fd;
-			/* valid kernel BTF object fd or 0 to attach to vmlinux */
+			/* or valid module BTF object fd or 0 to attach to vmlinux */
 			__u32		attach_btf_obj_fd;
 		};
-		__u32		:32;		/* pad */
-		__aligned_u64	fd_array;
 	};
 
 	struct { /* anonymous struct used by BPF_OBJ_* commands */
@@ -698,10 +682,6 @@ union bpf_attr {
 				__aligned_u64	iter_info;	/* extra bpf_iter_link_info */
 				__u32		iter_info_len;	/* iter_info length */
 			};
-			struct {
-				/* user-provided value passed to the BPF program */
-				__u64		bpf_cookie;
-			} perf_event;
 		};
 	} link_create;
 
@@ -942,6 +922,7 @@ union bpf_attr {
  * 		for updates resulting in a null checksum the value is set to
  * 		**CSUM_MANGLED_0** instead. Flag **BPF_F_PSEUDO_HDR** indicates
  * 		the checksum is to be computed against a pseudo-header.
+ * 		Flag **BPF_F_IPV6** should be set for IPv6 packets.
  *
  * 		This helper works in combination with **bpf_csum_diff**\ (),
  * 		which does not update the checksum in-place, but offers more
@@ -1679,22 +1660,30 @@ union bpf_attr {
  * 		networking traffic statistics as it provides a global socket
  * 		identifier that can be assumed unique.
  * 	Return
- * 		A 8-byte long non-decreasing number on success, or 0 if the
- * 		socket field is missing inside *skb*.
+ * 		A 8-byte long unique number on success, or 0 if the socket
+ * 		field is missing inside *skb*.
  *
  * u64 bpf_get_socket_cookie(struct bpf_sock_addr *ctx)
  * 	Description
  * 		Equivalent to bpf_get_socket_cookie() helper that accepts
  * 		*skb*, but gets socket from **struct bpf_sock_addr** context.
  * 	Return
- * 		A 8-byte long non-decreasing number.
+ * 		A 8-byte long unique number.
  *
  * u64 bpf_get_socket_cookie(struct bpf_sock_ops *ctx)
  * 	Description
  * 		Equivalent to **bpf_get_socket_cookie**\ () helper that accepts
  * 		*skb*, but gets socket from **struct bpf_sock_ops** context.
  * 	Return
- * 		A 8-byte long non-decreasing number.
+ * 		A 8-byte long unique number.
+ *
+ * u64 bpf_get_socket_cookie(struct sock *sk)
+ * 	Description
+ * 		Equivalent to **bpf_get_socket_cookie**\ () helper that accepts
+ * 		*sk*, but gets socket from a BTF **struct sock**. This helper
+ * 		also works for sleepable programs.
+ * 	Return
+ * 		A 8-byte long unique number or 0 if *sk* is NULL.
  *
  * u32 bpf_get_socket_uid(struct sk_buff *skb)
  * 	Return
@@ -2254,6 +2243,9 @@ union bpf_attr {
  *		* > 0 one of **BPF_FIB_LKUP_RET_** codes explaining why the
  *		  packet is not forwarded or needs assist from full stack
  *
+ *		If lookup fails with BPF_FIB_LKUP_RET_FRAG_NEEDED, then the MTU
+ *		was exceeded and output params->mtu_result contains the MTU.
+ *
  * long bpf_sock_hash_update(struct bpf_sock_ops *skops, struct bpf_map *map, void *key, u64 flags)
  *	Description
  *		Add an entry to, or update a sockhash *map* referencing sockets.
@@ -2477,7 +2469,7 @@ union bpf_attr {
  *		running simultaneously.
  *
  *		A user should care about the synchronization by himself.
- *		For example, by using the **BPF_STX_XADD** instruction to alter
+ *		For example, by using the **BPF_ATOMIC** instructions to alter
  *		the shared data.
  *	Return
  *		A pointer to the local storage area.
@@ -2975,14 +2967,6 @@ union bpf_attr {
  *
  *		**-EPROTONOSUPPORT** IP packet version is not 4 or 6
  *
- * u64 bpf_ktime_get_boot_ns(void)
- * 	Description
- * 		Return the time elapsed since system boot, in nanoseconds.
- * 		Does include the time the system was suspended.
- * 		See: **clock_gettime**\ (**CLOCK_BOOTTIME**)
- * 	Return
- * 		Current *ktime*.
- *
  * long bpf_skb_output(void *ctx, struct bpf_map *map, u64 flags, void *data, u64 size)
  * 	Description
  * 		Write raw *data* blob into a special BPF perf event held by
@@ -3030,10 +3014,10 @@ union bpf_attr {
  * 		string length is larger than *size*, just *size*-1 bytes are
  * 		copied and the last byte is set to NUL.
  *
- * 		On success, the length of the copied string is returned. This
- * 		makes this helper useful in tracing programs for reading
- * 		strings, and more importantly to get its length at runtime. See
- * 		the following snippet:
+ * 		On success, returns the number of bytes that were written,
+ * 		including the terminal NUL. This makes this helper useful in
+ * 		tracing programs for reading strings, and more importantly to
+ * 		get its length at runtime. See the following snippet:
  *
  * 		::
  *
@@ -3061,7 +3045,7 @@ union bpf_attr {
  * 		**->mm->env_start**: using this helper and the return value,
  * 		one can quickly iterate at the right offset of the memory area.
  * 	Return
- * 		On success, the strictly positive length of the string,
+ * 		On success, the strictly positive length of the output string,
  * 		including the trailing NUL character. On error, a negative
  * 		value.
  *
@@ -3272,16 +3256,6 @@ union bpf_attr {
  * 		Return the time elapsed since system boot, in nanoseconds.
  * 		Does include the time the system was suspended.
  * 		See: **clock_gettime**\ (**CLOCK_BOOTTIME**)
- * 	Return
- * 		Current *ktime*.
- *
- * u64 bpf_ktime_get_coarse_ns(void)
- * 	Description
- * 		Return a coarse-grained version of the time elapsed since
- * 		system boot, in nanoseconds. Does not include time the system
- * 		was suspended.
- *
- * 		See: **clock_gettime**\ (**CLOCK_MONOTONIC_COARSE**)
  * 	Return
  * 		Current *ktime*.
  *
@@ -3680,28 +3654,6 @@ union bpf_attr {
  * 	Return
  * 		0 on success, or a negative error in case of failure.
  *
- * long bpf_snprintf(char *str, u32 str_size, const char *fmt, u64 *data, u32 data_len)
- *	Description
- *		Outputs a string into the **str** buffer of size **str_size**
- *		based on a format string stored in a read-only map pointed by
- *		**fmt**.
- *
- *		Each format specifier in **fmt** corresponds to one u64 element
- *		in the **data** array. For strings and pointers where pointees
- *		are accessed, only the pointer values are stored in the *data*
- *		array. The *data_len* is the size of *data* in bytes.
- *
- *		Formats **%s** and **%p{i,I}{4,6}** require kernel memory reads.
- *		A failed read produces an empty string or a zero IP address.
- *
- *	Return
- *		The strictly positive length of the formatted string, including
- *		the trailing zero character. If the return value is greater than
- *		**str_size**, **str** contains a truncated string, guaranteed to
- *		be zero-terminated except when **str_size** is 0.
- *
- *		Or **-EBUSY** if the per-CPU memory copy buffer is busy.
- *
  * long bpf_snprintf_btf(char *str, u32 str_size, struct btf_ptr *ptr, u32 btf_ptr_size, u64 flags)
  *	Description
  *		Use BTF to store a string representation of *ptr*->ptr in *str*,
@@ -3867,59 +3819,109 @@ union bpf_attr {
  *
  * long bpf_bprm_opts_set(struct linux_binprm *bprm, u64 flags)
  *	Description
- *		Set or clear options on *bprm*. The
- *		**BPF_F_BPRM_SECUREEXEC** flag sets the secureexec bit and
- *		therefore the **AT_SECURE** auxiliary vector for glibc.
+ *		Set or clear certain options on *bprm*:
+ *
+ *		**BPF_F_BPRM_SECUREEXEC** Set the secureexec bit
+ *		which sets the **AT_SECURE** auxv for glibc. The bit
+ *		is cleared if the flag is not specified.
  *	Return
- *		0 on success, or **-EINVAL** for unsupported flags.
+ *		**-EINVAL** if invalid *flags* are passed, zero otherwise.
+ *
+ * u64 bpf_ktime_get_coarse_ns(void)
+ * 	Description
+ * 		Return a coarse-grained version of the time elapsed since
+ * 		system boot, in nanoseconds. Does not include time the system
+ * 		was suspended.
+ *
+ * 		See: **clock_gettime**\ (**CLOCK_MONOTONIC_COARSE**)
+ * 	Return
+ * 		Current *ktime*.
+ *
+ * long bpf_ima_inode_hash(struct inode *inode, void *dst, u32 size)
+ *	Description
+ *		Returns the stored IMA hash of the *inode* (if it's avaialable).
+ *		If the hash is larger than *size*, then only *size*
+ *		bytes will be copied to *dst*
+ *	Return
+ *		The **hash_algo** is returned on success,
+ *		**-EOPNOTSUP** if IMA is disabled or **-EINVAL** if
+ *		invalid arguments are passed.
  *
  * struct socket *bpf_sock_from_file(struct file *file)
  *	Description
- *		If *file* represents a socket, return the associated socket.
+ *		If the given file represents a socket, returns the associated
+ *		socket.
  *	Return
- *		A pointer to a struct socket, or NULL if *file* is not a socket.
+ *		A pointer to a struct socket on success or NULL if the file is
+ *		not a socket.
  *
  * long bpf_check_mtu(void *ctx, u32 ifindex, u32 *mtu_len, s32 len_diff, u64 flags)
  *	Description
- *		Check packet size against the MTU of the network device selected
- *		by *ifindex*.  The helper is intended to be used before helpers
- *		that adjust the packet size.  *len_diff* describes the planned
- *		size change and may be negative.
+ *		Check packet size against exceeding MTU of net device (based
+ *		on *ifindex*).  This helper will likely be used in combination
+ *		with helpers that adjust/change the packet size.
  *
- *		An *ifindex* of zero uses the current device.  The input value of
- *		*mtu_len*, when non-zero, is treated as an L3 packet length;
- *		otherwise the packet context length is used.  On return *mtu_len*
- *		contains the device MTU.
+ *		The argument *len_diff* can be used for querying with a planned
+ *		size change. This allows to check MTU prior to changing packet
+ *		ctx. Providing an *len_diff* adjustment that is larger than the
+ *		actual packet size (resulting in negative packet size) will in
+ *		principle not exceed the MTU, why it is not considered a
+ *		failure.  Other BPF-helpers are needed for performing the
+ *		planned size change, why the responsability for catch a negative
+ *		packet size belong in those helpers.
  *
- *		For **struct sk_buff** contexts, **BPF_MTU_CHK_SEGS** also checks
- *		GSO segments and rejects a segment that still exceeds the MTU.
- *		This flag cannot be combined with a non-zero *len_diff* or input
- *		length.  The context is **struct xdp_md** for XDP programs and
- *		**struct sk_buff** for TC cls_act programs.
+ *		Specifying *ifindex* zero means the MTU check is performed
+ *		against the current net device.  This is practical if this isn't
+ *		used prior to redirect.
+ *
+ *		On input *mtu_len* must be a valid pointer, else verifier will
+ *		reject BPF program.  If the value *mtu_len* is initialized to
+ *		zero then the ctx packet size is use.  When value *mtu_len* is
+ *		provided as input this specify the L3 length that the MTU check
+ *		is done against. Remember XDP and TC length operate at L2, but
+ *		this value is L3 as this correlate to MTU and IP-header tot_len
+ *		values which are L3 (similar behavior as bpf_fib_lookup).
+ *
+ *		The Linux kernel route table can configure MTUs on a more
+ *		specific per route level, which is not provided by this helper.
+ *		For route level MTU checks use the **bpf_fib_lookup**\ ()
+ *		helper.
+ *
+ *		*ctx* is either **struct xdp_md** for XDP programs or
+ *		**struct sk_buff** for tc cls_act programs.
+ *
+ *		The *flags* argument can be a combination of one or more of the
+ *		following values:
+ *
+ *		**BPF_MTU_CHK_SEGS**
+ *			This flag will only works for *ctx* **struct sk_buff**.
+ *			If packet context contains extra packet segment buffers
+ *			(often knows as GSO skb), then MTU check is harder to
+ *			check at this point, because in transmit path it is
+ *			possible for the skb packet to get re-segmented
+ *			(depending on net device features).  This could still be
+ *			a MTU violation, so this flag enables performing MTU
+ *			check against segments, with a different violation
+ *			return code to tell it apart. Check cannot use len_diff.
+ *
+ *		On return *mtu_len* pointer contains the MTU value of the net
+ *		device.  Remember the net device configured MTU is the L3 size,
+ *		which is returned here and XDP and TC length operate at L2.
+ *		Helper take this into account for you, but remember when using
+ *		MTU value in your BPF-code.
+ *
  *	Return
- *		0 on success, **BPF_MTU_CHK_RET_FRAG_NEEDED** when the packet
- *		exceeds the MTU, or **BPF_MTU_CHK_RET_SEGS_TOOBIG** for an
- *		exceeding GSO segment.  Invalid arguments return a negative errno.
+ *		* 0 on success, and populate MTU value in *mtu_len* pointer.
  *
- * u64 bpf_get_func_ip(void *ctx)
- *	Description
- *		Get address of the traced function (for tracing and kprobe programs).
- *	Return
- *		Address of the traced function.
+ *		* < 0 if any input argument is invalid (*mtu_len* not updated)
  *
- * u64 bpf_get_attach_cookie(void *ctx)
- *	Description
- *		Get the user-provided bpf_cookie associated with this attachment.
- *		The value can be different for each attachment of the same program.
- *		Supported for kprobe/uprobe, tracepoint, and perf_event programs.
- *	Return
- *		The attachment cookie, or 0 if none was specified.
+ *		MTU violations return positive values, but also populate MTU
+ *		value in *mtu_len* pointer, as this can be needed for
+ *		implementing PMTU handing:
  *
- * long bpf_task_pt_regs(struct task_struct *task)
- *	Description
- *		Get the struct pt_regs associated with **task**.
- *	Return
- *		A pointer to struct pt_regs.
+ *		* **BPF_MTU_CHK_RET_FRAG_NEEDED**
+ *		* **BPF_MTU_CHK_RET_SEGS_TOOBIG**
+ *
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -4086,18 +4088,6 @@ union bpf_attr {
 	FN(ima_inode_hash),		\
 	FN(sock_from_file),		\
 	FN(check_mtu),			\
-	FN(for_each_map_elem),		\
-	FN(snprintf),			\
-	FN(sys_bpf),			\
-	FN(btf_find_by_name_kind),	\
-	FN(sys_close),			\
-	FN(timer_init),			\
-	FN(timer_set_callback),	\
-	FN(timer_start),		\
-	FN(timer_cancel),		\
-	FN(get_func_ip),		\
-	FN(get_attach_cookie),	\
-	FN(task_pt_regs),		\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
@@ -4111,22 +4101,6 @@ enum bpf_func_id {
 #undef __BPF_ENUM_FN
 
 /* All flags used by eBPF helper functions, placed here. */
-
-/* Flags for BPF_FUNC_bprm_opts_set helper. */
-enum {
-	BPF_F_BPRM_SECUREEXEC	= (1ULL << 0),
-};
-
-/* Flags and return values for BPF_FUNC_check_mtu helper. */
-enum bpf_check_mtu_flags {
-	BPF_MTU_CHK_SEGS = (1U << 0),
-};
-
-enum bpf_check_mtu_ret {
-	BPF_MTU_CHK_RET_SUCCESS,
-	BPF_MTU_CHK_RET_FRAG_NEEDED,
-	BPF_MTU_CHK_RET_SEGS_TOOBIG,
-};
 
 /* BPF_FUNC_skb_store_bytes flags. */
 enum {
@@ -4146,6 +4120,7 @@ enum {
 	BPF_F_PSEUDO_HDR		= (1ULL << 4),
 	BPF_F_MARK_MANGLED_0		= (1ULL << 5),
 	BPF_F_MARK_ENFORCE		= (1ULL << 6),
+	BPF_F_IPV6			= (1ULL << 7),
 };
 
 /* BPF_FUNC_clone_redirect and BPF_FUNC_redirect flags. */
@@ -4285,6 +4260,11 @@ enum bpf_lwt_encap_mode {
 	BPF_LWT_ENCAP_IP,
 };
 
+/* Flags for bpf_bprm_opts_set helper */
+enum {
+	BPF_F_BPRM_SECUREEXEC	= (1ULL << 0),
+};
+
 #define __bpf_md_ptr(type, name)	\
 union {					\
 	type name;			\
@@ -4394,8 +4374,8 @@ struct bpf_sock {
 	__u32 src_ip4;
 	__u32 src_ip6[4];
 	__u32 src_port;		/* host byte order */
-	__be16 dst_port;    /* network byte order */
-	__u16 :16;      /* zero padding */
+	__be16 dst_port;	/* network byte order */
+	__u16 :16;		/* zero padding */
 	__u32 dst_ip4;
 	__u32 dst_ip6[4];
 	__u32 state;
@@ -4610,6 +4590,7 @@ struct bpf_prog_info {
 	__aligned_u64 prog_tags;
 	__u64 run_time_ns;
 	__u64 run_cnt;
+	__u64 recursion_misses;
 } __attribute__((aligned(8)));
 
 struct bpf_map_info {
@@ -4649,8 +4630,6 @@ struct bpf_link_info {
 		} raw_tracepoint;
 		struct {
 			__u32 attach_type;
-			__u32 target_obj_id;
-			__u32 target_btf_id;
 		} tracing;
 		struct {
 			__u64 cgroup_id;
@@ -5092,9 +5071,13 @@ struct bpf_fib_lookup {
 	__be16	sport;
 	__be16	dport;
 
-	/* total length of packet from network header - used for MTU check */
-	__u16	tot_len;
+	union {	/* used for MTU check */
+		/* input to lookup */
+		__u16	tot_len; /* L3 length from network hdr (iph->tot_len) */
 
+		/* output: MTU value */
+		__u16	mtu_result;
+	};
 	/* input: L3 device index for lookup
 	 * output: device index from FIB lookup
 	 */
@@ -5138,6 +5121,17 @@ struct bpf_redir_neigh {
 		__be32		ipv4_nh;
 		__u32		ipv6_nh[4];  /* in6_addr; network order */
 	};
+};
+
+/* bpf_check_mtu flags*/
+enum  bpf_check_mtu_flags {
+	BPF_MTU_CHK_SEGS  = (1U << 0),
+};
+
+enum bpf_check_mtu_ret {
+	BPF_MTU_CHK_RET_SUCCESS,      /* check and lookup successful */
+	BPF_MTU_CHK_RET_FRAG_NEEDED,  /* fragmentation required to fwd */
+	BPF_MTU_CHK_RET_SEGS_TOOBIG,  /* GSO re-segmentation needed to fwd */
 };
 
 enum bpf_task_fd_type {
@@ -5199,11 +5193,6 @@ struct bpf_spin_lock {
 	__u32	val;
 };
 
-struct bpf_timer {
-	__u64 :64;
-	__u64 :64;
-} __attribute__((aligned(8)));
-
 struct bpf_sysctl {
 	__u32	write;		/* Sysctl is being read (= 0) or written (= 1).
 				 * Allows 1,2,4-byte read, but no write.
@@ -5231,7 +5220,10 @@ struct bpf_pidns_info {
 
 /* User accessible data for SK_LOOKUP programs. Add new fields at the end. */
 struct bpf_sk_lookup {
-	__bpf_md_ptr(struct bpf_sock *, sk); /* Selected socket */
+	union {
+		__bpf_md_ptr(struct bpf_sock *, sk); /* Selected socket */
+		__u64 cookie; /* Non-zero if socket was selected in PROG_TEST_RUN */
+	};
 
 	__u32 family;		/* Protocol family (AF_INET, AF_INET6) */
 	__u32 protocol;		/* IP protocol (IPPROTO_TCP, IPPROTO_UDP) */

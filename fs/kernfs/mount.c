@@ -1,11 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * fs/kernfs/mount.c - kernfs mount implementation
  *
  * Copyright (c) 2001-3 Patrick Mochel
  * Copyright (c) 2007 SUSE Linux Products GmbH
  * Copyright (c) 2007, 2013 Tejun Heo <tj@kernel.org>
- *
- * This file is released under the GPLv2.
  */
 
 #include <linux/fs.h>
@@ -211,7 +210,7 @@ struct dentry *kernfs_node_dentry(struct kernfs_node *kn,
 			dput(dentry);
 			return ERR_PTR(-EINVAL);
 		}
-		dtmp = lookup_one_len_unlocked(kntmp->name, dentry,
+		dtmp = lookup_positive_unlocked(kntmp->name, dentry,
 					       strlen(kntmp->name));
 		dput(dentry);
 		if (IS_ERR(dtmp))
@@ -238,6 +237,9 @@ static int kernfs_fill_super(struct super_block *sb, unsigned long magic)
 	if (info->root->flags & KERNFS_ROOT_SUPPORT_EXPORTOP)
 		sb->s_export_op = &kernfs_export_ops;
 	sb->s_time_gran = 1;
+
+	/* sysfs dentries and inodes don't require IO to create */
+	sb->s_shrink.seeks = 0;
 
 	/* get root inode, initialize and unlock it */
 	mutex_lock(&kernfs_mutex);
@@ -339,7 +341,7 @@ struct dentry *kernfs_mount_ns(struct file_system_type *fs_type, int flags,
 			deactivate_locked_super(sb);
 			return ERR_PTR(error);
 		}
-		sb->s_flags |= MS_ACTIVE;
+		sb->s_flags |= SB_ACTIVE;
 
 		mutex_lock(&kernfs_mutex);
 		list_add(&info->node, &root->supers);

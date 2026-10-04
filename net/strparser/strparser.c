@@ -47,6 +47,14 @@ static void strp_abort_strp(struct strparser *strp, int err)
 
 	strp->stopped = 1;
 
+	if (strp->skb_head) {
+		kfree_skb(strp->skb_head);
+		strp->skb_head = NULL;
+	}
+
+	strp->skb_nextp = NULL;
+	strp->need_bytes = 0;
+
 	if (strp->sk) {
 		struct sock *sk = strp->sk;
 
@@ -193,14 +201,16 @@ static int __strp_recv(read_descriptor_t *desc, struct sk_buff *orig_skb,
 			memset(stm, 0, sizeof(*stm));
 			stm->strp.offset = orig_offset + eaten;
 		} else {
-			/* Unclone since we may be appending to an skb that we
+			/* Unclone if we are appending to an skb that we
 			 * already share a frag_list with.
 			 */
-			err = skb_unclone(skb, GFP_ATOMIC);
-			if (err) {
-				STRP_STATS_INCR(strp->stats.mem_fail);
-				desc->error = err;
-				break;
+			if (skb_has_frag_list(skb)) {
+				err = skb_unclone(skb, GFP_ATOMIC);
+				if (err) {
+					STRP_STATS_INCR(strp->stats.mem_fail);
+					desc->error = err;
+					break;
+				}
 			}
 
 			stm = _strp_msg(head);
@@ -242,7 +252,7 @@ static int __strp_recv(read_descriptor_t *desc, struct sk_buff *orig_skb,
 				strp_parser_err(strp, -EMSGSIZE, desc);
 				break;
 			} else if (len <= (ssize_t)head->len -
-					  skb->len - stm->strp.offset) {
+					  (ssize_t)skb->len - stm->strp.offset) {
 				/* Length must be into new skb (and also
 				 * greater than zero)
 				 */
@@ -369,7 +379,7 @@ static int strp_read_sock(struct strparser *strp)
 /* Lower sock lock held */
 void strp_data_ready(struct strparser *strp)
 {
-	if (unlikely(strp->stopped))
+	if (unlikely(strp->stopped) || strp->paused)
 		return;
 
 	/* This check is needed to synchronize with do_strp_work.
@@ -379,13 +389,10 @@ void strp_data_ready(struct strparser *strp)
 	 * allows a thread in BH context to safely check if the process
 	 * lock is held. In this case, if the lock is held, queue work.
 	 */
-	if (sock_owned_by_user(strp->sk)) {
+	if (sock_owned_by_user_nocheck(strp->sk)) {
 		queue_work(strp_wq, &strp->work);
 		return;
 	}
-
-	if (strp->paused)
-		return;
 
 	if (strp->need_bytes) {
 		if (strp_peek_len(strp) < strp->need_bytes)
@@ -399,8 +406,6 @@ EXPORT_SYMBOL_GPL(strp_data_ready);
 
 static void do_strp_work(struct strparser *strp)
 {
-	read_descriptor_t rd_desc;
-
 	/* We need the read lock to synchronize with strp_data_ready. We
 	 * need the socket lock for calling strp_read_sock.
 	 */
@@ -411,8 +416,6 @@ static void do_strp_work(struct strparser *strp)
 
 	if (strp->paused)
 		goto out;
-
-	rd_desc.arg.data = strp;
 
 	if (strp_read_sock(strp) == -ENOMEM)
 		queue_work(strp_wq, &strp->work);

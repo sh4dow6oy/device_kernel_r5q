@@ -1,9 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * pm_runtime.h - Device run-time power management helper functions.
  *
  * Copyright (C) 2009 Rafael J. Wysocki <rjw@sisk.pl>
- *
- * This file is released under the GPLv2.
  */
 
 #ifndef _LINUX_PM_RUNTIME_H
@@ -105,7 +104,7 @@ static inline bool pm_runtime_callbacks_present(struct device *dev)
 
 static inline void pm_runtime_mark_last_busy(struct device *dev)
 {
-	ACCESS_ONCE(dev->power.last_busy) = jiffies;
+	WRITE_ONCE(dev->power.last_busy, jiffies);
 }
 
 static inline bool pm_runtime_is_irq_safe(struct device *dev)

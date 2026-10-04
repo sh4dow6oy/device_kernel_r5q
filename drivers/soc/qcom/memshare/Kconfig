@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# Shared Heap for external processors
+#
 config MEM_SHARE_QMI_SERVICE
        depends on QCOM_QMI_HELPERS
        bool "Shared Heap for external processors"
@@ -7,9 +11,3 @@ config MEM_SHARE_QMI_SERVICE
 		for heap alloc/free from Application Processor
 		Sub System and send a response back to client with
 		proper handle/address.
-
-config CP_DYNAMIC_MEM_RESERVE
-	bool "CP dynamic memory reservation"
-	default n
-	help
-	  Reserve CP memory for RAM logging function.

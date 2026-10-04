@@ -39,7 +39,7 @@
 #include <asm/processor.h>
 #include <asm/oplib.h>
 #include <asm/page.h>
-#include <asm/pgtable.h>
+#include <linux/pgtable.h>
 #include <asm/traps.h>
 #include <asm/vaddrs.h>
 #include <asm/mbus.h>
@@ -86,7 +86,7 @@ static void prom_sync_me(void)
 	show_free_areas(0, NULL);
 	if (!is_idle_task(current)) {
 		local_irq_enable();
-		sys_sync();
+		ksys_sync();
 		local_irq_disable();
 	}
 	prom_printf("Returning to prom\n");

@@ -1,14 +1,6 @@
-/* Copyright (c) 2018-2020, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2018-2020,2021 The Linux Foundation. All rights reserved.
  */
 
 #define pr_fmt(fmt) "%s:%s " fmt, KBUILD_MODNAME, __func__
@@ -64,11 +56,9 @@ enum qmi_ts_sensor {
 	QMI_SYS_THERM1,
 	QMI_SYS_THERM2,
 	QMI_TS_TSENS_1,
-	QMI_TS_RET_PA_0_FR1,
-	QMI_TS_WTR_PA_0_FR1,
-	QMI_TS_WTR_PA_1_FR1,
-	QMI_TS_WTR_PA_2_FR1,
-	QMI_TS_WTR_PA_3_FR1,
+	QMI_TS_BEAMER_W_THERM,
+	QMI_TS_BEAMER_N_THERM,
+	QMI_TS_BEAMER_E_THERM,
 	QMI_TS_MAX_NR
 };
 
@@ -84,7 +74,6 @@ struct qmi_sensor {
 	struct qmi_ts_instance		*ts;
 	enum qmi_ts_sensor		sens_type;
 	struct work_struct		therm_notify_work;
-	struct completion complete;
 };
 
 struct qmi_ts_instance {
@@ -127,17 +116,15 @@ static char sensor_clients[QMI_TS_MAX_NR][QMI_CLIENT_NAME_LENGTH] = {
 	{"sys_therm1"},
 	{"sys_therm2"},
 	{"modem_tsens1"},
-	{"qfe_ret_pa0_fr1"},
-	{"qfe_wtr_pa0_fr1"},
-	{"qfe_wtr_pa1_fr1"},
-	{"qfe_wtr_pa2_fr1"},
-	{"qfe_wtr_pa3_fr1"},
+	{"BEAMER_W_THERM"},
+	{"BEAMER_N_THERM"},
+	{"BEAMER_E_THERM"},
 };
 
 static int32_t encode_qmi(int32_t val)
 {
 	uint32_t shift = 0, local_val = 0;
-	int32_t temp_val = 0;
+	unsigned long temp_val = 0;
 
 	if (val == INT_MAX || val == INT_MIN)
 		return 0;
@@ -147,8 +134,7 @@ static int32_t encode_qmi(int32_t val)
 		temp_val *= -1;
 		local_val |= 1 << QMI_FL_SIGN_BIT;
 	}
-	shift = find_last_bit((const unsigned long *)&temp_val,
-			sizeof(temp_val) * 8);
+	shift = find_last_bit(&temp_val, sizeof(temp_val) * 8);
 	local_val |= ((shift + 127) << QMI_MANTISSA_MSB);
 	temp_val &= ~(1 << shift);
 
@@ -224,7 +210,6 @@ static void qmi_ts_update_temperature(struct qmi_ts_instance *ts,
 			decode_qmi(ind_msg->temp) * 1000;
 		pr_debug("sensor:%s temperature:%d\n",
 				qmi_sens->qmi_name, qmi_sens->last_reading);
-		complete(&qmi_sens->complete);
 		if (!qmi_sens->tz_dev)
 			return;
 		if (notify &&
@@ -262,7 +247,7 @@ void qmi_ts_ind_cb(struct qmi_handle *qmi, struct sockaddr_qrtr *sq,
 	if (ind_msg->temp_valid)
 		qmi_ts_update_temperature(ts, ind_msg, notify);
 	else
-		pr_err("Error invalid temperature field.");
+		pr_err("Error invalid temperature field.\n");
 }
 
 static int qmi_ts_request(struct qmi_sensor *qmi_sens,
@@ -293,6 +278,13 @@ static int qmi_ts_request(struct qmi_sensor *qmi_sens,
 			qmi_sens->low_thresh != INT_MIN;
 		req.temp_threshold_low =
 			encode_qmi(qmi_sens->low_thresh);
+
+		pr_debug("Sensor:%s set high_trip:%d, low_trip:%d, high_valid:%d, low_valid:%d\n",
+			qmi_sens->qmi_name,
+			qmi_sens->high_thresh,
+			qmi_sens->low_thresh,
+			req.temp_threshold_high_valid,
+			req.temp_threshold_low_valid);
 	}
 
 	mutex_lock(&ts->mutex);
@@ -338,11 +330,9 @@ qmi_send_exit:
 static int qmi_sensor_read(void *data, int *temp)
 {
 	struct qmi_sensor *qmi_sens = (struct qmi_sensor *)data;
-	reinit_completion(&qmi_sens->complete);
 
 	if (qmi_sens->connection_active && !atomic_read(&in_suspend))
 		qmi_ts_request(qmi_sens, true);
-	wait_for_completion_timeout(&qmi_sens->complete, msecs_to_jiffies(100));
 	*temp = qmi_sens->last_reading;
 
 	return 0;
@@ -398,7 +388,7 @@ static int qmi_register_sensor_device(struct qmi_sensor *qmi_sens)
 	if (IS_ERR(qmi_sens->tz_dev)) {
 		ret = PTR_ERR(qmi_sens->tz_dev);
 		if (ret != -ENODEV)
-			pr_err("sensor register failed for %s, ret:%ld\n",
+			pr_err("sensor register failed for %s, ret:%d\n",
 				qmi_sens->qmi_name, ret);
 		qmi_sens->tz_dev = NULL;
 		return ret;
@@ -660,7 +650,6 @@ static int of_get_qmi_ts_platform_data(struct device *dev)
 			qmi_sens->low_thresh = INT_MIN;
 			INIT_WORK(&qmi_sens->therm_notify_work,
 					qmi_ts_thresh_notify);
-			init_completion(&qmi_sens->complete);
 			list_add(&qmi_sens->ts_node, &ts[idx].ts_sensor_list);
 		}
 		idx++;

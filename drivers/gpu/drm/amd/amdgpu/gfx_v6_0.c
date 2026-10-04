@@ -38,35 +38,36 @@
 #include "dce/dce_6_0_sh_mask.h"
 #include "gca/gfx_7_2_enum.h"
 #include "si_enums.h"
+#include "si.h"
 
 static void gfx_v6_0_set_ring_funcs(struct amdgpu_device *adev);
 static void gfx_v6_0_set_irq_funcs(struct amdgpu_device *adev);
 static void gfx_v6_0_get_cu_info(struct amdgpu_device *adev);
 
-MODULE_FIRMWARE("radeon/tahiti_pfp.bin");
-MODULE_FIRMWARE("radeon/tahiti_me.bin");
-MODULE_FIRMWARE("radeon/tahiti_ce.bin");
-MODULE_FIRMWARE("radeon/tahiti_rlc.bin");
+MODULE_FIRMWARE("amdgpu/tahiti_pfp.bin");
+MODULE_FIRMWARE("amdgpu/tahiti_me.bin");
+MODULE_FIRMWARE("amdgpu/tahiti_ce.bin");
+MODULE_FIRMWARE("amdgpu/tahiti_rlc.bin");
 
-MODULE_FIRMWARE("radeon/pitcairn_pfp.bin");
-MODULE_FIRMWARE("radeon/pitcairn_me.bin");
-MODULE_FIRMWARE("radeon/pitcairn_ce.bin");
-MODULE_FIRMWARE("radeon/pitcairn_rlc.bin");
+MODULE_FIRMWARE("amdgpu/pitcairn_pfp.bin");
+MODULE_FIRMWARE("amdgpu/pitcairn_me.bin");
+MODULE_FIRMWARE("amdgpu/pitcairn_ce.bin");
+MODULE_FIRMWARE("amdgpu/pitcairn_rlc.bin");
 
-MODULE_FIRMWARE("radeon/verde_pfp.bin");
-MODULE_FIRMWARE("radeon/verde_me.bin");
-MODULE_FIRMWARE("radeon/verde_ce.bin");
-MODULE_FIRMWARE("radeon/verde_rlc.bin");
+MODULE_FIRMWARE("amdgpu/verde_pfp.bin");
+MODULE_FIRMWARE("amdgpu/verde_me.bin");
+MODULE_FIRMWARE("amdgpu/verde_ce.bin");
+MODULE_FIRMWARE("amdgpu/verde_rlc.bin");
 
-MODULE_FIRMWARE("radeon/oland_pfp.bin");
-MODULE_FIRMWARE("radeon/oland_me.bin");
-MODULE_FIRMWARE("radeon/oland_ce.bin");
-MODULE_FIRMWARE("radeon/oland_rlc.bin");
+MODULE_FIRMWARE("amdgpu/oland_pfp.bin");
+MODULE_FIRMWARE("amdgpu/oland_me.bin");
+MODULE_FIRMWARE("amdgpu/oland_ce.bin");
+MODULE_FIRMWARE("amdgpu/oland_rlc.bin");
 
-MODULE_FIRMWARE("radeon/hainan_pfp.bin");
-MODULE_FIRMWARE("radeon/hainan_me.bin");
-MODULE_FIRMWARE("radeon/hainan_ce.bin");
-MODULE_FIRMWARE("radeon/hainan_rlc.bin");
+MODULE_FIRMWARE("amdgpu/hainan_pfp.bin");
+MODULE_FIRMWARE("amdgpu/hainan_me.bin");
+MODULE_FIRMWARE("amdgpu/hainan_ce.bin");
+MODULE_FIRMWARE("amdgpu/hainan_rlc.bin");
 
 static u32 gfx_v6_0_get_csb_size(struct amdgpu_device *adev);
 static void gfx_v6_0_get_csb_buffer(struct amdgpu_device *adev, volatile u32 *buffer);
@@ -334,7 +335,7 @@ static int gfx_v6_0_init_microcode(struct amdgpu_device *adev)
 	default: BUG();
 	}
 
-	snprintf(fw_name, sizeof(fw_name), "radeon/%s_pfp.bin", chip_name);
+	snprintf(fw_name, sizeof(fw_name), "amdgpu/%s_pfp.bin", chip_name);
 	err = request_firmware(&adev->gfx.pfp_fw, fw_name, adev->dev);
 	if (err)
 		goto out;
@@ -345,7 +346,7 @@ static int gfx_v6_0_init_microcode(struct amdgpu_device *adev)
 	adev->gfx.pfp_fw_version = le32_to_cpu(cp_hdr->header.ucode_version);
 	adev->gfx.pfp_feature_version = le32_to_cpu(cp_hdr->ucode_feature_version);
 
-	snprintf(fw_name, sizeof(fw_name), "radeon/%s_me.bin", chip_name);
+	snprintf(fw_name, sizeof(fw_name), "amdgpu/%s_me.bin", chip_name);
 	err = request_firmware(&adev->gfx.me_fw, fw_name, adev->dev);
 	if (err)
 		goto out;
@@ -356,7 +357,7 @@ static int gfx_v6_0_init_microcode(struct amdgpu_device *adev)
 	adev->gfx.me_fw_version = le32_to_cpu(cp_hdr->header.ucode_version);
 	adev->gfx.me_feature_version = le32_to_cpu(cp_hdr->ucode_feature_version);
 
-	snprintf(fw_name, sizeof(fw_name), "radeon/%s_ce.bin", chip_name);
+	snprintf(fw_name, sizeof(fw_name), "amdgpu/%s_ce.bin", chip_name);
 	err = request_firmware(&adev->gfx.ce_fw, fw_name, adev->dev);
 	if (err)
 		goto out;
@@ -367,7 +368,7 @@ static int gfx_v6_0_init_microcode(struct amdgpu_device *adev)
 	adev->gfx.ce_fw_version = le32_to_cpu(cp_hdr->header.ucode_version);
 	adev->gfx.ce_feature_version = le32_to_cpu(cp_hdr->ucode_feature_version);
 
-	snprintf(fw_name, sizeof(fw_name), "radeon/%s_rlc.bin", chip_name);
+	snprintf(fw_name, sizeof(fw_name), "amdgpu/%s_rlc.bin", chip_name);
 	err = request_firmware(&adev->gfx.rlc_fw, fw_name, adev->dev);
 	if (err)
 		goto out;
@@ -1546,6 +1547,71 @@ static void gfx_v6_0_setup_spi(struct amdgpu_device *adev)
 	mutex_unlock(&adev->grbm_idx_mutex);
 }
 
+/**
+ * gfx_v6_0_setup_tcc() - setup which TCCs are used
+ *
+ * @adev: amdgpu_device pointer
+ *
+ * Verify whether the current GPU has any TCCs disabled,
+ * which can happen when the GPU is harvested and some
+ * memory channels are disabled, reducing the memory bus width.
+ * For example, on the Radeon HD 7870 XT (Tahiti LE).
+ *
+ * If some TCCs are disabled, we need to make sure that
+ * the disabled TCCs are not used, and the remaining TCCs
+ * are used optimally.
+ *
+ * TCP_CHAN_STEER_LO/HI control which TCC is used by TCP channels.
+ * TCP_ADDR_CONFIG.NUM_TCC_BANKS controls how many channels are used.
+ *
+ * For optimal performance:
+ * - Rely on the CHAN_STEER from the golden registers table,
+ *   only skip disabled TCCs but keep the mapping order.
+ * - Limit NUM_TCC_BANKS to number of active TCCs to avoid thrashing,
+ *   which performs better than using the same TCC twice.
+ */
+static void gfx_v6_0_setup_tcc(struct amdgpu_device *adev)
+{
+	u32 i, tcc, tcp_addr_config, num_active_tcc = 0;
+	u64 chan_steer, patched_chan_steer = 0;
+	const u32 num_max_tcc = adev->gfx.config.max_texture_channel_caches;
+	const u32 dis_tcc_mask =
+		amdgpu_gfx_create_bitmask(num_max_tcc) &
+		(REG_GET_FIELD(RREG32(mmCGTS_TCC_DISABLE),
+			       CGTS_TCC_DISABLE, TCC_DISABLE) |
+		 REG_GET_FIELD(RREG32(mmCGTS_USER_TCC_DISABLE),
+			       CGTS_USER_TCC_DISABLE, TCC_DISABLE));
+
+	/* When no TCC is disabled, the golden registers table already has optimal TCC setup */
+	if (!dis_tcc_mask)
+		return;
+
+	/* Each 4-bit nibble contains the index of a TCC used by all TCPs */
+	chan_steer = RREG32(mmTCP_CHAN_STEER_LO) | ((u64)RREG32(mmTCP_CHAN_STEER_HI) << 32ull);
+
+	/* Patch the TCP to TCC mapping to skip disabled TCCs */
+	for (i = 0; i < num_max_tcc; ++i) {
+		tcc = (chan_steer >> (u64)(4 * i)) & 0xf;
+
+		if (!((1 << tcc) & dis_tcc_mask)) {
+			/* Copy enabled TCC indices to the patched register value. */
+			patched_chan_steer |= (u64)tcc << (u64)(4 * num_active_tcc);
+			++num_active_tcc;
+		}
+	}
+
+	WARN_ON(num_active_tcc != num_max_tcc - hweight32(dis_tcc_mask));
+
+	/* Patch number of TCCs used by TCPs */
+	tcp_addr_config = REG_SET_FIELD(RREG32(mmTCP_ADDR_CONFIG),
+					TCP_ADDR_CONFIG, NUM_TCC_BANKS,
+					num_active_tcc - 1);
+
+	WREG32(mmTCP_ADDR_CONFIG, tcp_addr_config);
+	WREG32(mmTCP_CHAN_STEER_HI, upper_32_bits(patched_chan_steer));
+	WREG32(mmTCP_CHAN_STEER_LO, lower_32_bits(patched_chan_steer));
+}
+
 static void gfx_v6_0_config_init(struct amdgpu_device *adev)
 {
 	adev->gfx.config.double_offchip_lds_buf = 0;
@@ -1705,6 +1771,7 @@ static void gfx_v6_0_gpu_init(struct amdgpu_device *adev)
 	gfx_v6_0_tiling_mode_table_init(adev);
 
 	gfx_v6_0_setup_rb(adev);
+	gfx_v6_0_setup_tcc(adev);
 
 	gfx_v6_0_setup_spi(adev);
 
@@ -1798,7 +1865,7 @@ static int gfx_v6_0_ring_test_ring(struct amdgpu_ring *ring)
 		DRM_UDELAY(1);
 	}
 	if (i < adev->usec_timeout) {
-		DRM_INFO("ring test on %d succeeded in %d usecs\n", ring->idx, i);
+		DRM_DEBUG("ring test on %d succeeded in %d usecs\n", ring->idx, i);
 	} else {
 		DRM_ERROR("amdgpu: ring %d test failed (scratch(0x%04X)=0x%08X)\n",
 			  ring->idx, scratch, tmp);
@@ -1808,40 +1875,11 @@ static int gfx_v6_0_ring_test_ring(struct amdgpu_ring *ring)
 	return r;
 }
 
-static void gfx_v6_0_ring_emit_hdp_flush(struct amdgpu_ring *ring)
-{
-	/* flush hdp cache */
-	amdgpu_ring_write(ring, PACKET3(PACKET3_WRITE_DATA, 3));
-	amdgpu_ring_write(ring, (WRITE_DATA_ENGINE_SEL(1) |
-				 WRITE_DATA_DST_SEL(0)));
-	amdgpu_ring_write(ring, mmHDP_MEM_COHERENCY_FLUSH_CNTL);
-	amdgpu_ring_write(ring, 0);
-	amdgpu_ring_write(ring, 0x1);
-}
-
 static void gfx_v6_0_ring_emit_vgt_flush(struct amdgpu_ring *ring)
 {
 	amdgpu_ring_write(ring, PACKET3(PACKET3_EVENT_WRITE, 0));
 	amdgpu_ring_write(ring, EVENT_TYPE(VGT_FLUSH) |
 		EVENT_INDEX(0));
-}
-
-/**
- * gfx_v6_0_ring_emit_hdp_invalidate - emit an hdp invalidate on the cp
- *
- * @adev: amdgpu_device pointer
- * @ridx: amdgpu ring index
- *
- * Emits an hdp invalidate on the cp.
- */
-static void gfx_v6_0_ring_emit_hdp_invalidate(struct amdgpu_ring *ring)
-{
-	amdgpu_ring_write(ring, PACKET3(PACKET3_WRITE_DATA, 3));
-	amdgpu_ring_write(ring, (WRITE_DATA_ENGINE_SEL(1) |
-				 WRITE_DATA_DST_SEL(0)));
-	amdgpu_ring_write(ring, mmHDP_DEBUG0);
-	amdgpu_ring_write(ring, 0);
-	amdgpu_ring_write(ring, 0x1);
 }
 
 static void gfx_v6_0_ring_emit_fence(struct amdgpu_ring *ring, u64 addr,
@@ -1874,7 +1912,7 @@ static void gfx_v6_0_ring_emit_fence(struct amdgpu_ring *ring, u64 addr,
 
 static void gfx_v6_0_ring_emit_ib(struct amdgpu_ring *ring,
 				  struct amdgpu_ib *ib,
-				  unsigned vm_id, bool ctx_switch)
+				  unsigned vmid, bool ctx_switch)
 {
 	u32 header, control = 0;
 
@@ -1889,7 +1927,7 @@ static void gfx_v6_0_ring_emit_ib(struct amdgpu_ring *ring,
 	else
 		header = PACKET3(PACKET3_INDIRECT_BUFFER, 2);
 
-	control |= ib->length_dw | (vm_id << 24);
+	control |= ib->length_dw | (vmid << 24);
 
 	amdgpu_ring_write(ring, header);
 	amdgpu_ring_write(ring,
@@ -1951,7 +1989,7 @@ static int gfx_v6_0_ring_test_ib(struct amdgpu_ring *ring, long timeout)
 	}
 	tmp = RREG32(scratch);
 	if (tmp == 0xDEADBEEF) {
-		DRM_INFO("ib test on ring %d succeeded\n", ring->idx);
+		DRM_DEBUG("ib test on ring %d succeeded\n", ring->idx);
 		r = 0;
 	} else {
 		DRM_ERROR("amdgpu: ib test failed (scratch(0x%04X)=0x%08X)\n",
@@ -2354,29 +2392,11 @@ static void gfx_v6_0_ring_emit_pipeline_sync(struct amdgpu_ring *ring)
 }
 
 static void gfx_v6_0_ring_emit_vm_flush(struct amdgpu_ring *ring,
-					unsigned vm_id, uint64_t pd_addr)
+					unsigned vmid, uint64_t pd_addr)
 {
 	int usepfp = (ring->funcs->type == AMDGPU_RING_TYPE_GFX);
 
-	/* write new base address */
-	amdgpu_ring_write(ring, PACKET3(PACKET3_WRITE_DATA, 3));
-	amdgpu_ring_write(ring, (WRITE_DATA_ENGINE_SEL(1) |
-				 WRITE_DATA_DST_SEL(0)));
-	if (vm_id < 8) {
-		amdgpu_ring_write(ring, (mmVM_CONTEXT0_PAGE_TABLE_BASE_ADDR + vm_id ));
-	} else {
-		amdgpu_ring_write(ring, (mmVM_CONTEXT8_PAGE_TABLE_BASE_ADDR + (vm_id - 8)));
-	}
-	amdgpu_ring_write(ring, 0);
-	amdgpu_ring_write(ring, pd_addr >> 12);
-
-	/* bits 0-15 are the VM contexts0-15 */
-	amdgpu_ring_write(ring, PACKET3(PACKET3_WRITE_DATA, 3));
-	amdgpu_ring_write(ring, (WRITE_DATA_ENGINE_SEL(1) |
-				 WRITE_DATA_DST_SEL(0)));
-	amdgpu_ring_write(ring, mmVM_INVALIDATE_REQUEST);
-	amdgpu_ring_write(ring, 0);
-	amdgpu_ring_write(ring, 1 << vm_id);
+	amdgpu_gmc_emit_flush_gpu_tlb(ring, vmid, pd_addr);
 
 	/* wait for the invalidate to complete */
 	amdgpu_ring_write(ring, PACKET3(PACKET3_WAIT_REG_MEM, 5));
@@ -2401,6 +2421,18 @@ static void gfx_v6_0_ring_emit_vm_flush(struct amdgpu_ring *ring,
 	}
 }
 
+static void gfx_v6_0_ring_emit_wreg(struct amdgpu_ring *ring,
+				    uint32_t reg, uint32_t val)
+{
+	int usepfp = (ring->funcs->type == AMDGPU_RING_TYPE_GFX);
+
+	amdgpu_ring_write(ring, PACKET3(PACKET3_WRITE_DATA, 3));
+	amdgpu_ring_write(ring, (WRITE_DATA_ENGINE_SEL(usepfp) |
+				 WRITE_DATA_DST_SEL(0)));
+	amdgpu_ring_write(ring, reg);
+	amdgpu_ring_write(ring, 0);
+	amdgpu_ring_write(ring, val);
+}
 
 static void gfx_v6_0_rlc_fini(struct amdgpu_device *adev)
 {
@@ -2954,33 +2986,13 @@ static void gfx_v6_0_get_csb_buffer(struct amdgpu_device *adev,
 				buffer[count++] = cpu_to_le32(ext->reg_index - 0xa000);
 				for (i = 0; i < ext->reg_count; i++)
 					buffer[count++] = cpu_to_le32(ext->extent[i]);
-			} else {
-				return;
 			}
 		}
 	}
 
 	buffer[count++] = cpu_to_le32(PACKET3(PACKET3_SET_CONTEXT_REG, 1));
 	buffer[count++] = cpu_to_le32(mmPA_SC_RASTER_CONFIG - PACKET3_SET_CONTEXT_REG_START);
-
-	switch (adev->asic_type) {
-	case CHIP_TAHITI:
-	case CHIP_PITCAIRN:
-		buffer[count++] = cpu_to_le32(0x2a00126a);
-		break;
-	case CHIP_VERDE:
-		buffer[count++] = cpu_to_le32(0x0000124a);
-		break;
-	case CHIP_OLAND:
-		buffer[count++] = cpu_to_le32(0x00000082);
-		break;
-	case CHIP_HAINAN:
-		buffer[count++] = cpu_to_le32(0x00000000);
-		break;
-	default:
-		buffer[count++] = cpu_to_le32(0x00000000);
-		break;
-	}
+	buffer[count++] = cpu_to_le32(adev->gfx.config.rb_config[0][0].raster_config);
 
 	buffer[count++] = cpu_to_le32(PACKET3(PACKET3_PREAMBLE_CNTL, 0));
 	buffer[count++] = cpu_to_le32(PACKET3_PREAMBLE_END_CLEAR_STATE);
@@ -3113,11 +3125,18 @@ static void gfx_v6_0_read_wave_sgprs(struct amdgpu_device *adev, uint32_t simd,
 		start + SQIND_WAVE_SGPRS_OFFSET, size, dst);
 }
 
+static void gfx_v6_0_select_me_pipe_q(struct amdgpu_device *adev,
+				  u32 me, u32 pipe, u32 q)
+{
+	DRM_INFO("Not implemented\n");
+}
+
 static const struct amdgpu_gfx_funcs gfx_v6_0_gfx_funcs = {
 	.get_gpu_clock_counter = &gfx_v6_0_get_gpu_clock_counter,
 	.select_se_sh = &gfx_v6_0_select_se_sh,
 	.read_wave_data = &gfx_v6_0_read_wave_data,
 	.read_wave_sgprs = &gfx_v6_0_read_wave_sgprs,
+	.select_me_pipe_q = &gfx_v6_0_select_me_pipe_q
 };
 
 static int gfx_v6_0_early_init(void *handle)
@@ -3529,23 +3548,21 @@ static const struct amdgpu_ring_funcs gfx_v6_0_ring_funcs_gfx = {
 	.get_wptr = gfx_v6_0_ring_get_wptr,
 	.set_wptr = gfx_v6_0_ring_set_wptr_gfx,
 	.emit_frame_size =
-		5 + /* gfx_v6_0_ring_emit_hdp_flush */
-		5 + /* gfx_v6_0_ring_emit_hdp_invalidate */
+		5 + 5 + /* hdp flush / invalidate */
 		14 + 14 + 14 + /* gfx_v6_0_ring_emit_fence x3 for user fence, vm fence */
 		7 + 4 + /* gfx_v6_0_ring_emit_pipeline_sync */
-		17 + 6 + /* gfx_v6_0_ring_emit_vm_flush */
+		SI_FLUSH_GPU_TLB_NUM_WREG * 5 + 7 + 6 + /* gfx_v6_0_ring_emit_vm_flush */
 		3 + 2, /* gfx_v6_ring_emit_cntxcntl including vgt flush */
 	.emit_ib_size = 6, /* gfx_v6_0_ring_emit_ib */
 	.emit_ib = gfx_v6_0_ring_emit_ib,
 	.emit_fence = gfx_v6_0_ring_emit_fence,
 	.emit_pipeline_sync = gfx_v6_0_ring_emit_pipeline_sync,
 	.emit_vm_flush = gfx_v6_0_ring_emit_vm_flush,
-	.emit_hdp_flush = gfx_v6_0_ring_emit_hdp_flush,
-	.emit_hdp_invalidate = gfx_v6_0_ring_emit_hdp_invalidate,
 	.test_ring = gfx_v6_0_ring_test_ring,
 	.test_ib = gfx_v6_0_ring_test_ib,
 	.insert_nop = amdgpu_ring_insert_nop,
 	.emit_cntxcntl = gfx_v6_ring_emit_cntxcntl,
+	.emit_wreg = gfx_v6_0_ring_emit_wreg,
 };
 
 static const struct amdgpu_ring_funcs gfx_v6_0_ring_funcs_compute = {
@@ -3556,21 +3573,19 @@ static const struct amdgpu_ring_funcs gfx_v6_0_ring_funcs_compute = {
 	.get_wptr = gfx_v6_0_ring_get_wptr,
 	.set_wptr = gfx_v6_0_ring_set_wptr_compute,
 	.emit_frame_size =
-		5 + /* gfx_v6_0_ring_emit_hdp_flush */
-		5 + /* gfx_v6_0_ring_emit_hdp_invalidate */
+		5 + 5 + /* hdp flush / invalidate */
 		7 + /* gfx_v6_0_ring_emit_pipeline_sync */
-		17 + /* gfx_v6_0_ring_emit_vm_flush */
+		SI_FLUSH_GPU_TLB_NUM_WREG * 5 + 7 + /* gfx_v6_0_ring_emit_vm_flush */
 		14 + 14 + 14, /* gfx_v6_0_ring_emit_fence x3 for user fence, vm fence */
 	.emit_ib_size = 6, /* gfx_v6_0_ring_emit_ib */
 	.emit_ib = gfx_v6_0_ring_emit_ib,
 	.emit_fence = gfx_v6_0_ring_emit_fence,
 	.emit_pipeline_sync = gfx_v6_0_ring_emit_pipeline_sync,
 	.emit_vm_flush = gfx_v6_0_ring_emit_vm_flush,
-	.emit_hdp_flush = gfx_v6_0_ring_emit_hdp_flush,
-	.emit_hdp_invalidate = gfx_v6_0_ring_emit_hdp_invalidate,
 	.test_ring = gfx_v6_0_ring_test_ring,
 	.test_ib = gfx_v6_0_ring_test_ib,
 	.insert_nop = amdgpu_ring_insert_nop,
+	.emit_wreg = gfx_v6_0_ring_emit_wreg,
 };
 
 static void gfx_v6_0_set_ring_funcs(struct amdgpu_device *adev)

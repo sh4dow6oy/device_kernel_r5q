@@ -64,7 +64,9 @@ static __init pteval_t create_mapping_protection(efi_memory_desc_t *md)
 		return pgprot_val(PAGE_KERNEL_ROX);
 
 	/* RW- */
-	if (attr & EFI_MEMORY_XP || type != EFI_RUNTIME_SERVICES_CODE)
+	if (((attr & (EFI_MEMORY_RP | EFI_MEMORY_WP | EFI_MEMORY_XP)) ==
+	     EFI_MEMORY_XP) ||
+	    type != EFI_RUNTIME_SERVICES_CODE)
 		return pgprot_val(PAGE_KERNEL);
 
 	/* RWX */
@@ -101,7 +103,7 @@ static int __init set_permissions(pte_t *ptep, pgtable_t token,
 				  unsigned long addr, void *data)
 {
 	efi_memory_desc_t *md = data;
-	pte_t pte = *ptep;
+	pte_t pte = READ_ONCE(*ptep);
 
 	if (md->attribute & EFI_MEMORY_RO)
 		pte = set_pte_bit(pte, __pgprot(PTE_RDONLY));
@@ -140,3 +142,37 @@ bool efi_poweroff_required(void)
 {
 	return efi_enabled(EFI_RUNTIME_SERVICES);
 }
+
+asmlinkage efi_status_t efi_handle_corrupted_x18(efi_status_t s, const char *f)
+{
+	pr_err_ratelimited(FW_BUG "register x18 corrupted by EFI %s\n", f);
+	return s;
+}
+
+DEFINE_RAW_SPINLOCK(efi_rt_lock);
+
+asmlinkage u64 *efi_rt_stack_top __ro_after_init;
+
+/* EFI requires 8 KiB of stack space for runtime services */
+static_assert(THREAD_SIZE >= SZ_8K);
+
+static int __init arm64_efi_rt_init(void)
+{
+	void *p;
+
+	if (!efi_enabled(EFI_RUNTIME_SERVICES))
+		return 0;
+
+	p = __vmalloc_node_range(THREAD_SIZE, THREAD_ALIGN, VMALLOC_START,
+				 VMALLOC_END, GFP_KERNEL, PAGE_KERNEL, 0,
+				 NUMA_NO_NODE, &&l);
+l:	if (!p) {
+		pr_warn("Failed to allocate EFI runtime stack\n");
+		clear_bit(EFI_RUNTIME_SERVICES, &efi.flags);
+		return -ENOMEM;
+	}
+
+	efi_rt_stack_top = p + THREAD_SIZE;
+	return 0;
+}
+core_initcall(arm64_efi_rt_init);

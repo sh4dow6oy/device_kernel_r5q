@@ -137,12 +137,14 @@ static int au1100fb_fb_blank(int blank_mode, struct fb_info *fbi)
 	 */
 int au1100fb_setmode(struct au1100fb_device *fbdev)
 {
-	struct fb_info *info = &fbdev->info;
+	struct fb_info *info;
 	u32 words;
 	int index;
 
 	if (!fbdev)
 		return -EINVAL;
+
+	info = &fbdev->info;
 
 	/* Update var-dependent FB info */
 	if (panel_is_active(fbdev->panel) || panel_is_color(fbdev->panel)) {
@@ -410,18 +412,15 @@ static int au1100fb_setup(struct au1100fb_device *fbdev)
 
 static int au1100fb_drv_probe(struct platform_device *dev)
 {
-	struct au1100fb_device *fbdev = NULL;
+	struct au1100fb_device *fbdev;
 	struct resource *regs_res;
 	unsigned long page;
 	struct clk *c;
 
 	/* Allocate new device private */
-	fbdev = devm_kzalloc(&dev->dev, sizeof(struct au1100fb_device),
-			     GFP_KERNEL);
-	if (!fbdev) {
-		print_err("fail to allocate device private record");
+	fbdev = devm_kzalloc(&dev->dev, sizeof(*fbdev), GFP_KERNEL);
+	if (!fbdev)
 		return -ENOMEM;
-	}
 
 	if (au1100fb_setup(fbdev))
 		goto failed;
@@ -467,7 +466,7 @@ static int au1100fb_drv_probe(struct platform_device *dev)
 					    PAGE_ALIGN(fbdev->fb_len),
 					    &fbdev->fb_phys, GFP_KERNEL);
 	if (!fbdev->fb_mem) {
-		print_err("fail to allocate frambuffer (size: %dK))",
+		print_err("fail to allocate framebuffer (size: %dK))",
 			  fbdev->fb_len / 1024);
 		return -ENOMEM;
 	}
@@ -504,7 +503,7 @@ static int au1100fb_drv_probe(struct platform_device *dev)
 	fbdev->info.fix = au1100fb_fix;
 
 	fbdev->info.pseudo_palette =
-		devm_kzalloc(&dev->dev, sizeof(u32) * 16, GFP_KERNEL);
+		devm_kcalloc(&dev->dev, 16, sizeof(u32), GFP_KERNEL);
 	if (!fbdev->info.pseudo_palette)
 		return -ENOMEM;
 

@@ -53,7 +53,7 @@ config AD525X_DPOT_SPI
 
 config ATMEL_TCLIB
 	bool "Atmel AT32/AT91 Timer/Counter Library"
-	depends on (AVR32 || ARCH_AT91)
+	depends on ARCH_AT91
 	help
 	  Select this if you want a library to allocate the Timer/Counter
 	  blocks found on many Atmel processors.  This facilitates using
@@ -75,7 +75,6 @@ config ATMEL_TCB_CLKSRC
 config ATMEL_TCB_CLKSRC_BLOCK
 	int
 	depends on ATMEL_TCB_CLKSRC
-	prompt "TC Block" if CPU_AT32AP700X
 	default 0
 	range 0 1
 	help
@@ -87,7 +86,7 @@ config ATMEL_TCB_CLKSRC_BLOCK
 config DUMMY_IRQ
 	tristate "Dummy IRQ handler"
 	default n
-	---help---
+	help
 	  This module accepts a single 'irq' parameter, which it should register for.
 	  The sole purpose of this module is to help with debugging of systems on
 	  which spurious IRQs would happen on disabled IRQ vector.
@@ -96,7 +95,7 @@ config IBM_ASM
 	tristate "Device driver for IBM RSA service processor"
 	depends on X86 && PCI && INPUT
 	depends on SERIAL_8250 || SERIAL_8250=n
-	---help---
+	help
 	  This option enables device driver support for in-band access to the
 	  IBM RSA (Condor) service processor in eServer xSeries systems.
 	  The ibmasm device driver allows user space application to access
@@ -113,6 +112,20 @@ config IBM_ASM
 	  website <http://www-03.ibm.com/systems/info/x86servers/serverproven/compat/us/>
 	  for information on the specific driver level and support statement
 	  for your IBM server.
+
+config IBMVMC
+	tristate "IBM Virtual Management Channel support"
+	depends on PPC_PSERIES
+	help
+	  This is the IBM POWER Virtual Management Channel
+
+	  This driver is to be used for the POWER Virtual
+	  Management Channel virtual adapter on the PowerVM
+	  platform. It provides both request/response and
+	  async message support through the /dev/ibmvmc node.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called ibmvmc.
 
 config PHANTOM
 	tristate "Sensable PHANToM (PCI)"
@@ -142,7 +155,7 @@ config INTEL_MID_PTI
 config SGI_IOC4
 	tristate "SGI IOC4 Base IO support"
 	depends on PCI
-	---help---
+	help
 	  This option enables basic support for the IOC4 chip on certain
 	  SGI IO controller cards (IO9, IO10, and PCI-RT).  This option
 	  does not enable any specific functions on such a card, but provides
@@ -192,8 +205,8 @@ config ICS932S401
 
 config ATMEL_SSC
 	tristate "Device driver for Atmel SSC peripheral"
-	depends on HAS_IOMEM && (AVR32 || ARCH_AT91 || COMPILE_TEST)
-	---help---
+	depends on HAS_IOMEM && (ARCH_AT91 || COMPILE_TEST)
+	help
 	  This option enables device driver support for Atmel Synchronized
 	  Serial Communication peripheral (SSC).
 
@@ -218,7 +231,7 @@ config SGI_XP
 	select IA64_UNCACHED_ALLOCATOR if IA64_GENERIC || IA64_SGI_SN2
 	select GENERIC_ALLOCATOR if IA64_GENERIC || IA64_SGI_SN2
 	select SGI_GRU if X86_64 && SMP
-	---help---
+	help
 	  An SGI machine can be divided into multiple Single System
 	  Images which act independently of each other and have
 	  hardware based memory protection from the others.  Enabling
@@ -287,7 +300,7 @@ config SGI_GRU
 	depends on X86_UV && SMP
 	default n
 	select MMU_NOTIFIER
-	---help---
+	help
 	The GRU is a hardware resource located in the system chipset. The GRU
 	contains memory that can be mmapped into the user address space. This memory is
 	used to communicate with the GRU to perform functions such as load/store,
@@ -301,7 +314,7 @@ config SGI_GRU_DEBUG
 	bool  "SGI GRU driver debug"
 	depends on SGI_GRU
 	default n
-	---help---
+	help
 	This option enables additional debugging code for the SGI GRU driver.
 	If you are unsure, say N.
 
@@ -348,7 +361,7 @@ config SENSORS_TSL2550
 config SENSORS_BH1770
          tristate "BH1770GLC / SFH7770 combined ALS - Proximity sensor"
          depends on I2C
-         ---help---
+	help
            Say Y here if you want to build a driver for BH1770GLC (ROHM) or
 	   SFH7770 (Osram) combined ambient light and proximity sensor chip.
 
@@ -359,7 +372,7 @@ config SENSORS_APDS990X
 	 tristate "APDS990X combined als and proximity sensors"
 	 depends on I2C
 	 default n
-	 ---help---
+	help
 	   Say Y here if you want to build a driver for Avago APDS990x
 	   combined ambient light and proximity sensor chip.
 
@@ -392,16 +405,6 @@ config SPEAR13XX_PCIE_GADGET
 	 board file defines any controller as PCIe endpoint then a sysfs
 	 entry will be created for that controller. User can use these
 	 sysfs node to configure PCIe EP as per his requirements.
-
-config TI_DAC7512
-	tristate "Texas Instruments DAC7512"
-	depends on SPI && SYSFS
-	help
-	  If you say yes here you get support for the Texas Instruments
-	  DAC7512 16-bit digital-to-analog converter.
-
-	  This driver can also be built as a module. If so, the module
-	  will be called ti_dac7512.
 
 config VMWARE_BALLOON
 	tristate "VMware Balloon Driver"
@@ -476,27 +479,19 @@ config SRAM_EXEC
 config HDCP_QSEECOM
 	tristate "QTI High-Bandwidth Digital Content Protection Module"
 	help
-	  This module implements HDCP 2.2 features over external interfaces
-	  such as the DisplayPort interface. It exposes APIs for the interface
-	  driver to communicate with QTI Secure Execution Environment (QSEE)
-	  via the QSEECOM Driver and also communicates with the Receiver via
-	  APIs exposed by the interface driver.
+	This module implements HDCP 2.2 features over external interfaces
+	such as the DisplayPort interface. It exposes APIs for the interface
+	driver to communicate with QTI Secure Execution Environment (QSEE)
+	via the QSEECOM Driver and also communicates with the Receiver via
+	APIs exposed by the interface driver.
 
 config QSEECOM
-        tristate "QTI Secure Execution Communicator driver"
-        help
-          Provides a communication interface between userspace and
-          QTI Secure Execution Environment (QSEE) using Secure Channel
-          Manager (SCM) interface. It exposes APIs for both userspace and
-          kernel clients.
-
-config PROFILER
-       tristate "Qualcomm Technologies, Inc. trustzone Communicator driver"
-       help
-         Provides a communication interface between userspace and
-         trustzone using Secure Channel Manager (SCM) interface.
-         It exposes APIs for userspace to get system profiling
-         information.
+	tristate "QTI Secure Execution Communicator driver"
+	help
+	  Provides a communication interface between userspace and
+	  QTI Secure Execution Environment (QSEE) using Secure Channel
+	  Manager (SCM) interface. It exposes APIs for both userspace and
+	  kernel clients.
 
 config VEXPRESS_SYSCFG
 	bool "Versatile Express System Configuration driver"
@@ -510,7 +505,7 @@ config VEXPRESS_SYSCFG
 config ASPEED_LPC_CTRL
 	depends on (ARCH_ASPEED || COMPILE_TEST) && REGMAP && MFD_SYSCON
 	tristate "Aspeed ast2400/2500 HOST LPC to BMC bridge control"
-	---help---
+	help
 	  Control Aspeed ast2400/2500 HOST LPC to BMC mappings through
 	  ioctl()s, the driver also provides a read/write interface to a BMC ram
 	  region where the host LPC read/write region can be buffered.
@@ -527,9 +522,13 @@ config PCI_ENDPOINT_TEST
 	depends on PCI
 	select CRC32
 	tristate "PCI Endpoint Test driver"
-	---help---
+	help
            Enable this configuration option to enable the host side test driver
            for PCI Endpoint.
+
+config MISC_RTSX
+	tristate
+	default MISC_RTSX_PCI || MISC_RTSX_USB
 
 config UID_SYS_STATS
 	bool "Per-UID statistics"
@@ -545,14 +544,6 @@ config UID_SYS_STATS_DEBUG
 	default n
 	help
 	  Per TASK based io statistics exported to /proc/uid_io
-
-config UID_STAT_JBD_SUBMIT_BH
-	bool "Export amount of submit_bh performed by JBD thread"
-	depends on SUBMIT_BH_IO_ACCOUNTING
-	default n
-	help
-	  Export amount of submit_bh performed by JBD thread
-	  (Exported to Background I/O amount)
 
 config MEMORY_STATE_TIME
 	tristate "Memory freq/bandwidth time statistics"
@@ -603,6 +594,43 @@ config TEST_IRQ_REQUESTER
 
 	  If in doubt, say N.
 
+config WIGIG_SENSING_SPI
+	tristate "Sensing over 60GHz using wil6210 / SPI bus"
+	depends on SPI && WIL6210
+	default n
+	help
+	  This module adds support for various sensing use cases, like gesture
+	  detection, face recognition, proximity detection and more. The sensor
+	  operates over 60GHz frequency band, using low power SPI interface.
+	  The output of the driver is CIRs (Channel Impulse Response) which
+	  must be processed in user space in order to get meaningful results.
+
+config QTI_XR_SMRTVWR_MISC
+	tristate "QTI XR Reference device Misc driver support"
+	help
+	  This driver supports the misc chips in XR Reference devices
+	  such as NDI controller chip, Power up Sensor rails etc. Note: This
+	  driver initializes gpios, enables/disables LDOs that are part of
+	  XR standalone reference device.
+
+config QTI_MAXIM_FAN_CONTROLLER
+	tristate "QTI MAXIM fan controller  driver support"
+	help
+	  This driver supports the Maxim(MAX31760) fan controller.
+	  This driver exposes i2c control to control registers for
+	  setting different PWM, different temperature settings etc.
+	  Also, this driver initializes the power for the fan controller
+	  and exposes sysfs node to control different speeds of fan.
+
+config KINECTICS_XR_NORDIC
+	tristate "Nordic Misc driver support in XR Reference devices"
+	help
+	  This driver supports Nordic Chip in XR Reference devices.
+	  This driver interfaces with SoC to Nordic chip over SPI and contains
+	  code to power up the Nordic chip and initializes SPI interface. Also,
+	  this also parses the gpios and interrupts from device tree and sets
+	  the gpios and interrupt handler for handling the interrupt.
+
 source "drivers/misc/c2port/Kconfig"
 source "drivers/misc/eeprom/Kconfig"
 source "drivers/misc/cb710/Kconfig"
@@ -615,8 +643,10 @@ source "drivers/misc/mic/Kconfig"
 source "drivers/misc/genwqe/Kconfig"
 source "drivers/misc/echo/Kconfig"
 source "drivers/misc/cxl/Kconfig"
+source "drivers/misc/ocxl/Kconfig"
+source "drivers/misc/cardreader/Kconfig"
 source "drivers/misc/fpr_FingerprintCard/Kconfig"
-source "drivers/misc/dev_ril_bridge/Kconfig"
+source "drivers/misc/qrc/Kconfig"
 endmenu
 
 config OKL4_USER_VIPC

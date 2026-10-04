@@ -259,7 +259,7 @@ static int link_shbuf_mmap(struct file *file, struct vm_area_struct *vma)
 	pgprot_t prot;
 
 	/* Our caller should have taken the MM semaphore. */
-	if (WARN_ON(!rwsem_is_locked(&vma->vm_mm->mmap_sem)))
+	if (WARN_ON(!rwsem_is_locked(&vma->vm_mm->mmap_lock)))
 		return -EINVAL;
 
 	/*
@@ -608,7 +608,6 @@ static int link_shbuf_remove(struct platform_device *pdev)
 static struct platform_driver of_plat_link_shbuf_driver = {
 	.driver = {
 		.name = "okl4-shbuf",
-		.owner = THIS_MODULE,
 		.of_match_table = okl4_link_shbuf_match,
 	},
 	.probe = link_shbuf_probe,

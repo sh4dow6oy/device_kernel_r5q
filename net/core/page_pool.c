@@ -26,11 +26,7 @@ static int page_pool_init(struct page_pool *pool,
 		return -EINVAL;
 
 	if (pool->p.pool_size)
-		ring_qsize = pool->p.pool_size;
-
-	/* Sanity limit mem that can be pinned down */
-	if (ring_qsize > 32768)
-		return -E2BIG;
+		ring_qsize = min(pool->p.pool_size, 16384);
 
 	/* DMA direction is either DMA_FROM_DEVICE or DMA_BIDIRECTIONAL.
 	 * DMA_BIDIRECTIONAL is for allowing page used for DMA sending,
@@ -269,7 +265,7 @@ static void __page_pool_empty_ring(struct page_pool *pool)
 	struct page *page;
 
 	/* Empty recycle ring */
-	while ((page = ptr_ring_consume(&pool->ring))) {
+	while ((page = ptr_ring_consume_bh(&pool->ring))) {
 		/* Verify the refcnt invariant of cached pages */
 		if (!(page_ref_count(page) == 1))
 			pr_crit("%s() page_pool refcnt %d violation\n",

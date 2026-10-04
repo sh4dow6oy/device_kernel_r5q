@@ -5,10 +5,13 @@
 #include <linux/jiffies.h>
 #include <linux/ktime.h>
 #include <linux/if_vlan.h>
+#include <linux/netdevice.h>
 #include <net/sch_generic.h>
+#include <net/net_namespace.h>
 #include <uapi/linux/pkt_sched.h>
 
 #define DEFAULT_TX_QUEUE_LEN	1000
+#define STAB_SIZE_LOG_MAX	30
 
 struct qdisc_walker {
 	int	stop;
@@ -70,6 +73,8 @@ struct qdisc_watchdog {
 	struct Qdisc	*qdisc;
 };
 
+void qdisc_watchdog_init_clockid(struct qdisc_watchdog *wd, struct Qdisc *qdisc,
+				 clockid_t clockid);
 void qdisc_watchdog_init(struct qdisc_watchdog *wd, struct Qdisc *qdisc);
 void qdisc_watchdog_schedule_ns(struct qdisc_watchdog *wd, u64 expires);
 
@@ -87,7 +92,8 @@ extern struct Qdisc_ops pfifo_head_drop_qdisc_ops;
 
 int fifo_set_limit(struct Qdisc *q, unsigned int limit);
 struct Qdisc *fifo_create_dflt(struct Qdisc *sch, struct Qdisc_ops *ops,
-			       unsigned int limit);
+			       unsigned int limit,
+			       struct netlink_ext_ack *extack);
 
 int register_qdisc(struct Qdisc_ops *qops);
 int unregister_qdisc(struct Qdisc_ops *qops);
@@ -97,22 +103,30 @@ int qdisc_set_default(const char *id);
 void qdisc_hash_add(struct Qdisc *q, bool invisible);
 void qdisc_hash_del(struct Qdisc *q);
 struct Qdisc *qdisc_lookup(struct net_device *dev, u32 handle);
-struct Qdisc *qdisc_lookup_class(struct net_device *dev, u32 handle);
+struct Qdisc *qdisc_lookup_rcu(struct net_device *dev, u32 handle);
 struct qdisc_rate_table *qdisc_get_rtab(struct tc_ratespec *r,
-					struct nlattr *tab);
+					struct nlattr *tab,
+					struct netlink_ext_ack *extack);
 void qdisc_put_rtab(struct qdisc_rate_table *tab);
 void qdisc_put_stab(struct qdisc_size_table *tab);
-void qdisc_warn_nonwc(const char *txt, struct Qdisc *qdisc);
-int sch_direct_xmit(struct sk_buff *skb, struct Qdisc *q,
-		    struct net_device *dev, struct netdev_queue *txq,
-		    spinlock_t *root_lock, bool validate);
+bool sch_direct_xmit(struct sk_buff *skb, struct Qdisc *q,
+		     struct net_device *dev, struct netdev_queue *txq,
+		     spinlock_t *root_lock, bool validate);
 
 void __qdisc_run(struct Qdisc *q);
 
 static inline void qdisc_run(struct Qdisc *q)
 {
-	if (qdisc_run_begin(q))
-		__qdisc_run(q);
+	if (qdisc_run_begin(q)) {
+		/* NOLOCK qdisc must check 'state' under the qdisc seqlock
+		 * to avoid racing with dev_qdisc_reset()
+		 */
+		if (!(q->flags & TCQ_F_NOLOCK) ||
+		    likely(!test_bit(__QDISC_STATE_DEACTIVATED, &q->state)))
+			__qdisc_run(q);
+
+		qdisc_run_end(q);
+	}
 }
 
 extern const struct nla_policy rtm_tca_policy[TCA_MAX + 1];
@@ -127,17 +141,47 @@ static inline unsigned int psched_mtu(const struct net_device *dev)
 	return READ_ONCE(dev->mtu) + dev->hard_header_len;
 }
 
-static inline bool is_classid_clsact_ingress(u32 classid)
+static inline struct net *qdisc_net(struct Qdisc *q)
 {
-	/* This also returns true for ingress qdisc */
-	return TC_H_MAJ(classid) == TC_H_MAJ(TC_H_CLSACT) &&
-	       TC_H_MIN(classid) != TC_H_MIN(TC_H_MIN_EGRESS);
+	return dev_net(q->dev_queue->dev);
 }
 
-static inline bool is_classid_clsact_egress(u32 classid)
+struct tc_cbs_qopt_offload {
+	u8 enable;
+	s32 queue;
+	s32 hicredit;
+	s32 locredit;
+	s32 idleslope;
+	s32 sendslope;
+};
+
+struct tc_etf_qopt_offload {
+	u8 enable;
+	s32 queue;
+};
+
+static inline void qdisc_warn_nonwc(const char *txt, struct Qdisc *qdisc)
 {
-	return TC_H_MAJ(classid) == TC_H_MAJ(TC_H_CLSACT) &&
-	       TC_H_MIN(classid) == TC_H_MIN(TC_H_MIN_EGRESS);
+	if (!(qdisc->flags & TCQ_F_WARN_NONWC)) {
+		pr_warn("%s: %s qdisc %X: is non-work-conserving?\n",
+			txt, qdisc->ops->id, qdisc->handle >> 16);
+		qdisc->flags |= TCQ_F_WARN_NONWC;
+	}
+}
+
+static inline unsigned int qdisc_peek_len(struct Qdisc *sch)
+{
+	struct sk_buff *skb;
+	unsigned int len;
+
+	skb = sch->ops->peek(sch);
+	if (unlikely(skb == NULL)) {
+		qdisc_warn_nonwc("qdisc_peek_len", sch);
+		return 0;
+	}
+	len = qdisc_pkt_len(skb);
+
+	return len;
 }
 
 #endif

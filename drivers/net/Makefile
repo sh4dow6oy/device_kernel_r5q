@@ -22,7 +22,6 @@ obj-$(CONFIG_NET) += Space.o loopback.o
 obj-$(CONFIG_NETCONSOLE) += netconsole.o
 obj-y += phy/
 obj-$(CONFIG_RIONET) += rionet.o
-obj-$(CONFIG_RMNET_IPLO) += rmnet_iplo.o
 obj-$(CONFIG_NET_TEAM) += team/
 obj-$(CONFIG_TUN) += tun.o
 obj-$(CONFIG_TAP) += tap.o
@@ -42,7 +41,6 @@ obj-$(CONFIG_ARCNET) += arcnet/
 obj-$(CONFIG_DEV_APPLETALK) += appletalk/
 obj-$(CONFIG_CAIF) += caif/
 obj-$(CONFIG_CAN) += can/
-obj-$(CONFIG_ETRAX_ETHERNET) += cris/
 obj-y += dsa/
 obj-$(CONFIG_ETHERNET) += ethernet/
 obj-$(CONFIG_FDDI) += fddi/
@@ -77,3 +75,8 @@ obj-$(CONFIG_HYPERV_NET) += hyperv/
 obj-$(CONFIG_NTB_NETDEV) += ntb_netdev.o
 
 obj-$(CONFIG_FUJITSU_ES) += fjes/
+
+thunderbolt-net-y += thunderbolt.o
+obj-$(CONFIG_THUNDERBOLT_NET) += thunderbolt-net.o
+obj-$(CONFIG_NETDEVSIM) += netdevsim/
+obj-$(CONFIG_NET_FAILOVER) += net_failover.o

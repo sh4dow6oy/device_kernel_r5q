@@ -17,7 +17,7 @@
 #include <asm/pdc.h>
 	
 #include <asm/assembly.h>
-#include <asm/pgtable.h>
+#include <linux/pgtable.h>
 
 #include <linux/linkage.h>
 #include <linux/init.h>
@@ -55,6 +55,7 @@ ENTRY(parisc_kernel_start)
 
 	.import __bss_start,data
 	.import __bss_stop,data
+	.import __end,data
 
 	load32		PA(__bss_start),%r3
 	load32		PA(__bss_stop),%r4
@@ -83,7 +84,7 @@ $bss_loop:
 $iodc_panic:
 	copy		%arg0, %r10
 	copy		%arg1, %r11
-	load32		PA(__bss_stop),%sp
+	load32		PA(init_stack),%sp
 #define MEM_CONS 0x3A0
 	ldw		MEM_CONS+32(%r0),%arg0	// HPA
 	ldi		ENTRY_IO_COUT,%arg1
@@ -148,7 +149,11 @@ $cpu_ok:
 	 * everything ... it will get remapped correctly later */
 	ldo		0+_PAGE_KERNEL_RWX(%r0),%r3 /* Hardwired 0 phys addr start */
 	load32		(1<<(KERNEL_INITIAL_ORDER-PAGE_SHIFT)),%r11 /* PFN count */
-	load32		PA(pg0),%r1
+	load32		PA(_end),%r1
+	SHRREG		%r1,PAGE_SHIFT,%r1  /* %r1 is PFN count for _end symbol */
+	cmpb,<<,n	%r11,%r1,1f
+	copy		%r1,%r11	/* %r1 PFN count smaller than %r11 */
+1:	load32		PA(pg0),%r1
 
 $pgt_fill_loop:
 	STREGM          %r3,ASM_PTE_ENTRY_SIZE(%r1)
@@ -177,6 +182,16 @@ $pgt_fill_loop:
 	load32		PA(_mcount), %r10
 	std		%dp,0x18(%r10)
 #endif
+
+#ifdef CONFIG_64BIT
+	/* Get PDCE_PROC for monarch CPU. */
+#define MEM_PDC_LO 0x388
+#define MEM_PDC_HI 0x35C
+	ldw             MEM_PDC_LO(%r0),%r3
+	ldw             MEM_PDC_HI(%r0),%r10
+	depd            %r10, 31, 32, %r3        /* move to upper word */
+#endif
+
 
 #ifdef CONFIG_SMP
 	/* Set the smp rendezvous address into page zero.
@@ -236,12 +251,6 @@ common_stext:
         ** Someday, palo might not do this for the Monarch either.
         */
 2:
-#define MEM_PDC_LO 0x388
-#define MEM_PDC_HI 0x35C
-	ldw             MEM_PDC_LO(%r0),%r3
-	ldw             MEM_PDC_HI(%r0),%r6
-	depd            %r6, 31, 32, %r3        /* move to upper word */
-
 	mfctl		%cr30,%r6		/* PCX-W2 firmware bug */
 
 	ldo             PDC_PSW(%r0),%arg0              /* 21 */
@@ -307,6 +316,8 @@ $install_iva:
 	.align 128
 aligned_rfi:
 	pcxt_ssm_bug
+
+	copy		%r3, %arg0	/* PDCE_PROC for smp_callin() */
 
 	rsm		PSW_SM_QUIET,%r0	/* off troublesome PSW bits */
 	/* Don't need NOPs, have 8 compliant insn before rfi */

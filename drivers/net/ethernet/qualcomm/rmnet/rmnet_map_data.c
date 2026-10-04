@@ -1,13 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /* Copyright (c) 2013-2020, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  *
  * RMNET Data MAP protocol
  *
@@ -217,16 +209,39 @@ static void rmnet_map_complement_ipv4_txporthdr_csum_field(void *iphdr)
 }
 
 static void
+rmnet_map_ipv4_ul_csumv3_header(void *iphdr,
+				struct rmnet_map_ul_csum_header *ul_header,
+				struct sk_buff *skb)
+{
+	struct iphdr *ip4h = (struct iphdr *)iphdr;
+	__be16 *net_hdr = (__be16 *)ul_header, offset;
+	u16 *host_hdr = (u16 *)ul_header;
+
+	offset = htons((u16)(skb_transport_header(skb) -
+				     (unsigned char *)iphdr));
+	ul_header->csum_start_offset = offset;
+	ul_header->csum_insert_offset = skb->csum_offset;
+	ul_header->csum_enabled = 1;
+	if (ip4h->protocol == IPPROTO_UDP)
+		ul_header->udp_ind = 1;
+	else
+		ul_header->udp_ind = 0;
+
+	/* Changing remaining fields to network order */
+	net_hdr[1] = htons(host_hdr[1]);
+
+	skb->ip_summed = CHECKSUM_NONE;
+}
+
+static void
 rmnet_map_ipv4_ul_csum_header(void *iphdr,
 			      struct rmnet_map_ul_csum_header *ul_header,
 			      struct sk_buff *skb)
 {
-	struct iphdr *ip4h = (struct iphdr *)iphdr;
-	__be16 *hdr = (__be16 *)ul_header, offset;
+	__be16 *hdr = (__be16 *)ul_header;
+	struct iphdr *ip4h = iphdr;
 
-	offset = htons((__force u16)(skb_transport_header(skb) -
-				     (unsigned char *)iphdr));
-	ul_header->csum_start_offset = offset;
+	ul_header->csum_start_offset = htons(skb_network_header_len(skb));
 	ul_header->csum_insert_offset = skb->csum_offset;
 	ul_header->csum_enabled = 1;
 	if (ip4h->protocol == IPPROTO_UDP)
@@ -263,12 +278,10 @@ rmnet_map_ipv6_ul_csum_header(void *ip6hdr,
 			      struct rmnet_map_ul_csum_header *ul_header,
 			      struct sk_buff *skb)
 {
-	struct ipv6hdr *ip6h = (struct ipv6hdr *)ip6hdr;
-	__be16 *hdr = (__be16 *)ul_header, offset;
+	__be16 *hdr = (__be16 *)ul_header;
+	struct ipv6hdr *ip6h = ip6hdr;
 
-	offset = htons((__force u16)(skb_transport_header(skb) -
-				     (unsigned char *)ip6hdr));
-	ul_header->csum_start_offset = offset;
+	ul_header->csum_start_offset = htons(skb_network_header_len(skb));
 	ul_header->csum_insert_offset = skb->csum_offset;
 	ul_header->csum_enabled = 1;
 
@@ -284,6 +297,32 @@ rmnet_map_ipv6_ul_csum_header(void *ip6hdr,
 	skb->ip_summed = CHECKSUM_NONE;
 
 	rmnet_map_complement_ipv6_txporthdr_csum_field(ip6hdr);
+}
+
+static void
+rmnet_map_ipv6_ul_csumv3_header(void *ip6hdr,
+				struct rmnet_map_ul_csum_header *ul_header,
+				struct sk_buff *skb)
+{
+	struct ipv6hdr *ip6h = (struct ipv6hdr *)ip6hdr;
+	__be16 *net_hdr = (__be16 *)ul_header, offset;
+	u16 *host_hdr = (u16 *)ul_header;
+
+	offset = htons((u16)(skb_transport_header(skb) -
+				     (unsigned char *)ip6hdr));
+	ul_header->csum_start_offset = offset;
+	ul_header->csum_insert_offset = skb->csum_offset;
+	ul_header->csum_enabled = 1;
+
+	if (ip6h->nexthdr == IPPROTO_UDP)
+		ul_header->udp_ind = 1;
+	else
+		ul_header->udp_ind = 0;
+
+	/* Changing remaining fields to network order */
+	net_hdr[1] = htons(host_hdr[1]);
+
+	skb->ip_summed = CHECKSUM_NONE;
 }
 #endif
 
@@ -444,6 +483,51 @@ int rmnet_map_checksum_downlink_packet(struct sk_buff *skb, u16 len)
 }
 EXPORT_SYMBOL(rmnet_map_checksum_downlink_packet);
 
+void rmnet_map_v3_checksum_uplink_packet(struct sk_buff *skb,
+					 struct net_device *orig_dev)
+{
+	struct rmnet_priv *priv = netdev_priv(orig_dev);
+	struct rmnet_map_ul_csum_header *ul_header;
+	void *iphdr;
+
+	ul_header = (struct rmnet_map_ul_csum_header *)
+		    skb_push(skb, sizeof(struct rmnet_map_ul_csum_header));
+
+	if (unlikely(!(orig_dev->features &
+		     (NETIF_F_IP_CSUM | NETIF_F_IPV6_CSUM))))
+		goto sw_csum;
+
+	if (skb->ip_summed == CHECKSUM_PARTIAL) {
+		iphdr = (char *)ul_header +
+			sizeof(struct rmnet_map_ul_csum_header);
+
+		if (skb->protocol == htons(ETH_P_IP)) {
+			rmnet_map_ipv4_ul_csumv3_header(iphdr, ul_header, skb);
+			priv->stats.csum_hw++;
+			return;
+		} else if (skb->protocol == htons(ETH_P_IPV6)) {
+#if IS_ENABLED(CONFIG_IPV6)
+			rmnet_map_ipv6_ul_csumv3_header(iphdr, ul_header, skb);
+			priv->stats.csum_hw++;
+			return;
+#else
+			priv->stats.csum_err_invalid_ip_version++;
+			goto sw_csum;
+#endif
+		} else {
+			priv->stats.csum_err_invalid_ip_version++;
+		}
+	}
+
+sw_csum:
+	ul_header->csum_start_offset = 0;
+	ul_header->csum_insert_offset = 0;
+	ul_header->csum_enabled = 0;
+	ul_header->udp_ind = 0;
+
+	priv->stats.csum_sw++;
+}
+
 void rmnet_map_v4_checksum_uplink_packet(struct sk_buff *skb,
 					 struct net_device *orig_dev)
 {
@@ -564,6 +648,9 @@ void rmnet_map_checksum_uplink_packet(struct sk_buff *skb,
 				      int csum_type)
 {
 	switch (csum_type) {
+	case RMNET_FLAGS_EGRESS_MAP_CKSUMV3:
+		rmnet_map_v3_checksum_uplink_packet(skb, orig_dev);
+		break;
 	case RMNET_FLAGS_EGRESS_MAP_CKSUMV4:
 		rmnet_map_v4_checksum_uplink_packet(skb, orig_dev);
 		break;
@@ -1203,7 +1290,7 @@ int rmnet_map_process_next_hdr_packet(struct sk_buff *skb,
 
 long rmnet_agg_time_limit __read_mostly = 1000000L;
 long rmnet_agg_bypass_time __read_mostly = 10000000L;
-extern void ipa_pm_update_last_icmp_sent(u64 time);
+
 int rmnet_map_tx_agg_skip(struct sk_buff *skb, int offset)
 {
 	u8 *packet_start = skb->data + offset;
@@ -1229,10 +1316,6 @@ int rmnet_map_tx_agg_skip(struct sk_buff *skb, int offset)
 		}
 	}
 
-	if (is_icmp) {
-		// call to ipa
-		ipa_pm_update_last_icmp_sent(local_clock());
-	}
 	return is_icmp;
 }
 
@@ -1413,17 +1496,46 @@ static struct sk_buff *rmnet_map_build_skb(struct rmnet_port *port)
 	return skb;
 }
 
+static void rmnet_map_send_agg_skb(struct rmnet_port *port, unsigned long flags)
+{
+	struct sk_buff *agg_skb;
+
+	if (!port->agg_skb) {
+		spin_unlock_irqrestore(&port->agg_lock, flags);
+		return;
+	}
+
+	agg_skb = port->agg_skb;
+	/* Reset the aggregation state */
+	port->agg_skb = NULL;
+	port->agg_count = 0;
+	memset(&port->agg_time, 0, sizeof(struct timespec));
+	port->agg_state = 0;
+	spin_unlock_irqrestore(&port->agg_lock, flags);
+	hrtimer_cancel(&port->hrtimer);
+	dev_queue_xmit(agg_skb);
+}
+
 void rmnet_map_tx_aggregate(struct sk_buff *skb, struct rmnet_port *port)
 {
 	struct timespec diff, last;
-	int size, agg_count = 0;
-	struct sk_buff *agg_skb;
+	int size;
 	unsigned long flags;
 
 new_packet:
 	spin_lock_irqsave(&port->agg_lock, flags);
 	memcpy(&last, &port->agg_last, sizeof(struct timespec));
 	getnstimeofday(&port->agg_last);
+
+	if ((port->data_format & RMNET_EGRESS_FORMAT_PRIORITY) &&
+	    skb->priority) {
+		/* Send out any aggregated SKBs we have */
+		rmnet_map_send_agg_skb(port, flags);
+		/* Send out the priority SKB. Not holding agg_lock anymore */
+		skb->protocol = htons(ETH_P_MAP);
+		dev_queue_xmit(skb);
+		return;
+	}
 
 	if (!port->agg_skb) {
 		/* Check to see if we should agg first. If the traffic is very
@@ -1433,9 +1545,6 @@ new_packet:
 		size = port->egress_agg_params.agg_size - skb->len;
 
 		if (diff.tv_sec > 0 || diff.tv_nsec > rmnet_agg_bypass_time ||
-#if defined(CONFIG_ARGOS)
-			!rmnet_data_tx_aggr_enabled ||
-#endif
 		    size <= 0) {
 			spin_unlock_irqrestore(&port->agg_lock, flags);
 			skb->protocol = htons(ETH_P_MAP);
@@ -1467,15 +1576,7 @@ new_packet:
 	if (skb->len > size ||
 	    port->agg_count >= port->egress_agg_params.agg_count ||
 	    diff.tv_sec > 0 || diff.tv_nsec > rmnet_agg_time_limit) {
-		agg_skb = port->agg_skb;
-		agg_count = port->agg_count;
-		port->agg_skb = 0;
-		port->agg_count = 0;
-		memset(&port->agg_time, 0, sizeof(struct timespec));
-		port->agg_state = 0;
-		spin_unlock_irqrestore(&port->agg_lock, flags);
-		hrtimer_cancel(&port->hrtimer);
-		dev_queue_xmit(agg_skb);
+		rmnet_map_send_agg_skb(port, flags);
 		goto new_packet;
 	}
 
@@ -1573,7 +1674,7 @@ void rmnet_map_tx_qmap_cmd(struct sk_buff *qmap_skb)
 
 	port = rmnet_get_port(qmap_skb->dev);
 
-	if (port->data_format & RMNET_EGRESS_FORMAT_AGGREGATION) {
+	if (port && (port->data_format & RMNET_EGRESS_FORMAT_AGGREGATION)) {
 		spin_lock_irqsave(&port->agg_lock, flags);
 		if (port->agg_skb) {
 			agg_skb = port->agg_skb;

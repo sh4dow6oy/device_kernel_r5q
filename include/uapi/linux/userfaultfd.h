@@ -224,15 +224,13 @@ struct uffdio_copy {
 	__u64 dst;
 	__u64 src;
 	__u64 len;
-#define UFFDIO_COPY_MODE_DONTWAKE		((__u64)1<<0)
 	/*
-	 * UFFDIO_COPY_MODE_WP will map the page write protected on
-	 * the fly.  UFFDIO_COPY_MODE_WP is available only if the
-	 * write protected ioctl is implemented for the range
-	 * according to the uffdio_register.ioctls.
+	 * There will be a wrprotection flag later that allows to map
+	 * pages wrprotected on the fly. And such a flag will be
+	 * available if the wrprotection ioctl are implemented for the
+	 * range according to the uffdio_register.ioctls.
 	 */
-#define UFFDIO_COPY_MODE_WP			((__u64)1<<1)
-#define UFFDIO_COPY_MODE_MMAP_TRYLOCK	      	((__u64)1<<63)
+#define UFFDIO_COPY_MODE_DONTWAKE		((__u64)1<<0)
 	__u64 mode;
 
 	/*
@@ -245,7 +243,6 @@ struct uffdio_copy {
 struct uffdio_zeropage {
 	struct uffdio_range range;
 #define UFFDIO_ZEROPAGE_MODE_DONTWAKE		((__u64)1<<0)
-#define UFFDIO_ZEROPAGE_MODE_MMAP_TRYLOCK     	((__u64)1<<63)
 	__u64 mode;
 
 	/*

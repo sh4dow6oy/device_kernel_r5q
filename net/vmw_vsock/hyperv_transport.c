@@ -311,7 +311,6 @@ static void hvs_open_connection(struct vmbus_channel *chan)
 		return;
 
 	lock_sock(sk);
-
 	if ((conn_from_host && sk->sk_state != TCP_LISTEN) ||
 	    (!conn_from_host && sk->sk_state != TCP_SYN_SENT))
 		goto out;
@@ -511,6 +510,7 @@ static void hvs_destruct(struct vsock_sock *vsk)
 		vmbus_hvsock_device_unregister(chan);
 
 	kfree(hvs);
+	vsk->trans = NULL;
 }
 
 static int hvs_dgram_bind(struct vsock_sock *vsk, struct sockaddr_vm *addr)

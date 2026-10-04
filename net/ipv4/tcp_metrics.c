@@ -21,8 +21,6 @@
 #include <net/tcp.h>
 #include <net/genetlink.h>
 
-int sysctl_tcp_nometrics_save __read_mostly;
-
 static struct tcp_metrics_block *__tcp_get_metrics(const struct inetpeer_addr *saddr,
 						   const struct inetpeer_addr *daddr,
 						   struct net *net, unsigned int hash);
@@ -351,7 +349,7 @@ void tcp_update_metrics(struct sock *sk)
 	int m;
 
 	sk_dst_confirm(sk);
-	if (sysctl_tcp_nometrics_save || !dst)
+	if (READ_ONCE(net->ipv4.sysctl_tcp_nometrics_save) || !dst)
 		return;
 
 	rcu_read_lock();
@@ -447,7 +445,8 @@ void tcp_update_metrics(struct sock *sk)
 		if (!tcp_metric_locked(tm, TCP_METRIC_REORDERING)) {
 			val = tcp_metric_get(tm, TCP_METRIC_REORDERING);
 			if (val < tp->reordering &&
-			    tp->reordering != net->ipv4.sysctl_tcp_reordering)
+			    tp->reordering !=
+			    READ_ONCE(net->ipv4.sysctl_tcp_reordering))
 				tcp_metric_set(tm, TCP_METRIC_REORDERING,
 					       tp->reordering);
 		}
@@ -491,10 +490,8 @@ void tcp_init_metrics(struct sock *sk)
 			tp->snd_ssthresh = tp->snd_cwnd_clamp;
 	}
 	val = tcp_metric_get(tm, TCP_METRIC_REORDERING);
-	if (val && tp->reordering != val) {
-		tcp_disable_fack(tp);
+	if (val && tp->reordering != val)
 		tp->reordering = val;
-	}
 
 	crtt = tcp_metric_get(tm, TCP_METRIC_RTT);
 	rcu_read_unlock();
@@ -670,7 +667,7 @@ static int tcp_metrics_fill_info(struct sk_buff *msg,
 	{
 		int n = 0;
 
-		nest = nla_nest_start(msg, TCP_METRICS_ATTR_VALS);
+		nest = nla_nest_start_noflag(msg, TCP_METRICS_ATTR_VALS);
 		if (!nest)
 			goto nla_put_failure;
 		for (i = 0; i < TCP_METRIC_MAX_KERNEL + 1; i++) {
@@ -904,7 +901,7 @@ static void tcp_metrics_flush_all(struct net *net)
 		pp = &hb->chain;
 		for (tm = deref_locked(*pp); tm; tm = deref_locked(*pp)) {
 			match = net ? net_eq(tm_net(tm), net) :
-				!atomic_read(&tm_net(tm)->count);
+				!refcount_read(&tm_net(tm)->count);
 			if (match) {
 				rcu_assign_pointer(*pp, tm->tcpm_next);
 				kfree_rcu(tm, rcu_head);

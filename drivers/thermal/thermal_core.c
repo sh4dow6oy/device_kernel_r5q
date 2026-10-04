@@ -1,13 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  *  thermal.c - Generic Thermal Management Sysfs support.
  *
  *  Copyright (C) 2008 Intel Corp
  *  Copyright (C) 2008 Zhang Rui <rui.zhang@intel.com>
  *  Copyright (C) 2008 Sujith Thomas <sujith.thomas@intel.com>
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; version 2 of the License.
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -31,10 +28,6 @@
 
 #include "thermal_core.h"
 #include "thermal_hwmon.h"
-
-#ifdef CONFIG_SEC_PM
-void *thermal_ipc_log;
-#endif
 
 MODULE_AUTHOR("Zhang Rui");
 MODULE_DESCRIPTION("Generic thermal management sysfs support");
@@ -804,8 +797,9 @@ int thermal_zone_bind_cooling_device(struct thermal_zone_device *tz,
 		 dev->id);
 	sysfs_attr_init(&dev->attr.attr);
 	dev->attr.attr.name = dev->attr_name;
-	dev->attr.attr.mode = 0444;
-	dev->attr.show = thermal_cooling_device_trip_point_show;
+	dev->attr.attr.mode = 0644;
+	dev->attr.show = trip_point_show;
+	dev->attr.store = trip_point_store;
 	result = device_create_file(&tz->device, &dev->attr);
 	if (result)
 		goto remove_symbol_link;
@@ -815,8 +809,8 @@ int thermal_zone_bind_cooling_device(struct thermal_zone_device *tz,
 	sysfs_attr_init(&dev->upper_attr.attr);
 	dev->upper_attr.attr.name = dev->upper_attr_name;
 	dev->upper_attr.attr.mode = 0644;
-	dev->upper_attr.show = thermal_cooling_device_upper_limit_show;
-	dev->upper_attr.store = thermal_cooling_device_upper_limit_store;
+	dev->upper_attr.show = upper_limit_show;
+	dev->upper_attr.store = upper_limit_store;
 	result = device_create_file(&tz->device, &dev->upper_attr);
 	if (result)
 		goto remove_trip_file;
@@ -826,8 +820,8 @@ int thermal_zone_bind_cooling_device(struct thermal_zone_device *tz,
 	sysfs_attr_init(&dev->lower_attr.attr);
 	dev->lower_attr.attr.name = dev->lower_attr_name;
 	dev->lower_attr.attr.mode = 0644;
-	dev->lower_attr.show = thermal_cooling_device_lower_limit_show;
-	dev->lower_attr.store = thermal_cooling_device_lower_limit_store;
+	dev->lower_attr.show = lower_limit_show;
+	dev->lower_attr.store = lower_limit_store;
 	result = device_create_file(&tz->device, &dev->lower_attr);
 	if (result)
 		goto remove_upper_file;
@@ -837,8 +831,8 @@ int thermal_zone_bind_cooling_device(struct thermal_zone_device *tz,
 	sysfs_attr_init(&dev->weight_attr.attr);
 	dev->weight_attr.attr.name = dev->weight_attr_name;
 	dev->weight_attr.attr.mode = S_IWUSR | S_IRUGO;
-	dev->weight_attr.show = thermal_cooling_device_weight_show;
-	dev->weight_attr.store = thermal_cooling_device_weight_store;
+	dev->weight_attr.show = weight_show;
+	dev->weight_attr.store = weight_store;
 	result = device_create_file(&tz->device, &dev->weight_attr);
 	if (result)
 		goto remove_lower_file;
@@ -935,6 +929,7 @@ static void thermal_release(struct device *dev)
 		     sizeof("thermal_zone") - 1)) {
 		tz = to_thermal_zone(dev);
 		thermal_zone_destroy_device_groups(tz);
+		thermal_set_governor(tz, NULL);
 		kfree(tz);
 	} else if (!strncmp(dev_name(dev), "cooling_device",
 			    sizeof("cooling_device") - 1)) {
@@ -1038,7 +1033,7 @@ static void bind_cdev(struct thermal_cooling_device *cdev)
  */
 static struct thermal_cooling_device *
 __thermal_cooling_device_register(struct device_node *np,
-				  char *type, void *devdata,
+				  const char *type, void *devdata,
 				  const struct thermal_cooling_device_ops *ops)
 {
 	struct thermal_cooling_device *cdev;
@@ -1070,10 +1065,10 @@ __thermal_cooling_device_register(struct device_node *np,
 	cdev->ops = ops;
 	cdev->updated = false;
 	cdev->device.class = &thermal_class;
-	thermal_cooling_device_setup_sysfs(cdev);
 	cdev->devdata = devdata;
 	cdev->sysfs_cur_state_req = 0;
 	cdev->sysfs_min_state_req = ULONG_MAX;
+	thermal_cooling_device_setup_sysfs(cdev);
 	dev_set_name(&cdev->device, "cooling_device%d", cdev->id);
 	result = device_register(&cdev->device);
 	if (result) {
@@ -1114,7 +1109,7 @@ __thermal_cooling_device_register(struct device_node *np,
  * ERR_PTR. Caller must check return value with IS_ERR*() helpers.
  */
 struct thermal_cooling_device *
-thermal_cooling_device_register(char *type, void *devdata,
+thermal_cooling_device_register(const char *type, void *devdata,
 				const struct thermal_cooling_device_ops *ops)
 {
 	return __thermal_cooling_device_register(NULL, type, devdata, ops);
@@ -1138,7 +1133,7 @@ EXPORT_SYMBOL_GPL(thermal_cooling_device_register);
  */
 struct thermal_cooling_device *
 thermal_of_cooling_device_register(struct device_node *np,
-				   char *type, void *devdata,
+				   const char *type, void *devdata,
 				   const struct thermal_cooling_device_ops *ops)
 {
 	return __thermal_cooling_device_register(np, type, devdata, ops);
@@ -1205,7 +1200,9 @@ void thermal_cooling_device_unregister(struct thermal_cooling_device *cdev)
 	mutex_unlock(&thermal_list_lock);
 
 	ida_simple_remove(&thermal_cdev_ida, cdev->id);
-	device_unregister(&cdev->device);
+	device_del(&cdev->device);
+	thermal_cooling_device_destroy_sysfs(cdev);
+	put_device(&cdev->device);
 }
 EXPORT_SYMBOL_GPL(thermal_cooling_device_unregister);
 
@@ -1325,8 +1322,10 @@ thermal_zone_device_register(const char *type, int trips, int mask,
 	/* sys I/F */
 	/* Add nodes that are always present via .groups */
 	result = thermal_zone_create_device_groups(tz, mask);
-	if (result)
+	if (result) {
+		thermal_set_governor(tz, NULL);
 		goto remove_id;
+	}
 
 	/* A new thermal zone needs to be updated anyway. */
 	atomic_set(&tz->need_update, 1);
@@ -1448,8 +1447,6 @@ void thermal_zone_device_unregister(struct thermal_zone_device *tz)
 
 	cancel_delayed_work_sync(&tz->poll_queue);
 
-	thermal_set_governor(tz, NULL);
-
 	thermal_remove_hwmon_sysfs(tz);
 	ida_simple_remove(&thermal_tz_ida, tz->id);
 	ida_destroy(&tz->ida);
@@ -1495,6 +1492,43 @@ exit:
 	return ref;
 }
 EXPORT_SYMBOL_GPL(thermal_zone_get_zone_by_name);
+
+/**
+ * thermal_zone_get_cdev_by_name() - search for a cooling device and returns
+ * its ref.
+ * @name: thermal cdev name to fetch the temperature
+ *
+ * When only one cdev is found with the passed name, returns a reference to it.
+ *
+ * Return: On success returns a reference to an unique thermal cooling device
+ * with matching name equals to @name, an ERR_PTR otherwise (-EINVAL for
+ * invalid paramenters, -ENODEV for not found and -EEXIST for multiple matches).
+ */
+struct thermal_cooling_device *thermal_zone_get_cdev_by_name(const char *name)
+{
+	struct thermal_cooling_device *pos = NULL, *ref = ERR_PTR(-EINVAL);
+	unsigned int found = 0;
+
+	if (!name)
+		return ref;
+
+	mutex_lock(&thermal_list_lock);
+	list_for_each_entry(pos, &thermal_cdev_list, node)
+		if (!strncasecmp(name, pos->type, THERMAL_NAME_LENGTH)) {
+			found++;
+			ref = pos;
+		}
+	mutex_unlock(&thermal_list_lock);
+
+	/* nothing has been found, thus an error code for it */
+	if (found == 0)
+		return ERR_PTR(-ENODEV);
+	if (found > 1)
+		return ERR_PTR(-EEXIST);
+	return ref;
+
+}
+EXPORT_SYMBOL_GPL(thermal_zone_get_cdev_by_name);
 
 #ifdef CONFIG_NET
 static const struct genl_multicast_group thermal_event_mcgrps[] = {
@@ -1658,14 +1692,6 @@ static int __init thermal_init(void)
 	if (result)
 		pr_warn("Thermal: Can not register suspend notifier, return %d\n",
 			result);
-
-#ifdef CONFIG_SEC_PM
-	if (!thermal_ipc_log)
-		thermal_ipc_log = ipc_log_context_create(10, "lmh_dcvs", 0);
-
-	if (!thermal_ipc_log)
-		pr_err("%s: Failed to create thermal logging context\n", __func__);
-#endif
 
 	return 0;
 

@@ -2,7 +2,7 @@
 #include <linux/mm.h>
 #include <linux/hugetlb.h>
 #include <linux/security.h>
-#include <asm/pgtable.h>
+#include <linux/pgtable.h>
 #include <asm/pgalloc.h>
 #include <asm/cacheflush.h>
 #include <asm/machdep.h>
@@ -62,16 +62,10 @@ radix__hugetlb_get_unmapped_area(struct file *file, unsigned long addr,
 		return -EINVAL;
 	if (len > high_limit)
 		return -ENOMEM;
+
 	if (fixed) {
 		if (addr > high_limit - len)
 			return -ENOMEM;
-	}
-
-	if (unlikely(addr > mm->context.addr_limit &&
-		     mm->context.addr_limit != TASK_SIZE))
-		mm->context.addr_limit = TASK_SIZE;
-
-	if (fixed) {
 		if (prepare_hugepage_range(file, addr, len))
 			return -EINVAL;
 		return addr;

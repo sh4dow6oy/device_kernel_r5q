@@ -1,21 +1,10 @@
-/* Copyright (c) 2014-2019, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+/* SPDX-License-Identifier: GPL-2.0-only */
+
+/*
+ * Copyright (c) 2014-2019, The Linux Foundation. All rights reserved.
  */
 
 #include <soc/qcom/pm.h>
-
-#ifdef CONFIG_SEC_PM
-extern void debug_rpmstats_show(char *annotation);
-extern void debug_masterstats_show(char *annotation);
-#endif
 
 #define NR_LPM_LEVELS 8
 #define MAXSAMPLES 5
@@ -133,7 +122,7 @@ void free_cluster_node(struct lpm_cluster *cluster);
 void cluster_dt_walkthrough(struct lpm_cluster *cluster);
 
 int create_cluster_lvl_nodes(struct lpm_cluster *p, struct kobject *kobj);
-bool lpm_cpu_mode_allow(unsigned int cpu,
+int lpm_cpu_mode_allow(unsigned int cpu,
 		unsigned int mode, bool from_idle);
 bool lpm_cluster_mode_allow(struct lpm_cluster *cluster,
 		unsigned int mode, bool from_idle);
@@ -142,7 +131,7 @@ uint32_t *get_per_cpu_min_residency(int cpu);
 extern struct lpm_cluster *lpm_root_node;
 
 #if defined(CONFIG_SMP)
-extern DEFINE_PER_CPU(bool, pending_ipi);
+DECLARE_PER_CPU(bool, pending_ipi);
 static inline bool is_IPI_pending(const struct cpumask *mask)
 {
 	unsigned int cpu;

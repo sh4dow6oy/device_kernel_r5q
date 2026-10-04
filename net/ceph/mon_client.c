@@ -60,9 +60,9 @@ struct ceph_monmap *ceph_monmap_decode(void *p, void *end)
 	num_mon = ceph_decode_32(&p);
 	ceph_decode_need(&p, end, num_mon*sizeof(m->mon_inst[0]), bad);
 
-	if (num_mon >= CEPH_MAX_MON)
+	if (num_mon > CEPH_MAX_MON)
 		goto bad;
-	m = kmalloc(sizeof(*m) + sizeof(m->mon_inst[0])*num_mon, GFP_NOFS);
+	m = kmalloc(struct_size(m, mon_inst, num_mon), GFP_NOFS);
 	if (m == NULL)
 		return ERR_PTR(-ENOMEM);
 	m->fsid = fsid;
@@ -734,7 +734,7 @@ static void handle_get_version_reply(struct ceph_mon_client *monc,
 	struct ceph_mon_generic_request *req;
 	u64 tid = le64_to_cpu(msg->hdr.tid);
 	void *p = msg->front.iov_base;
-	void *end = p + msg->front_alloc_len;
+	void *const end = p + msg->front.iov_len;
 	u64 handle;
 
 	dout("%s msg %p tid %llu\n", __func__, msg, tid);
@@ -1017,8 +1017,7 @@ static int build_initial_monmap(struct ceph_mon_client *monc)
 	int i;
 
 	/* build initial monmap */
-	monc->monmap = kzalloc(sizeof(*monc->monmap) +
-			       num_mon*sizeof(monc->monmap->mon_inst[0]),
+	monc->monmap = kzalloc(struct_size(monc->monmap, mon_inst, num_mon),
 			       GFP_KERNEL);
 	if (!monc->monmap)
 		return -ENOMEM;
@@ -1269,7 +1268,7 @@ static void dispatch(struct ceph_connection *con, struct ceph_msg *msg)
 		if (monc->client->extra_mon_dispatch &&
 		    monc->client->extra_mon_dispatch(monc->client, msg) == 0)
 			break;
-			
+
 		pr_err("received unknown message type %d %s\n", type,
 		       ceph_msg_type_name(type));
 	}
@@ -1306,9 +1305,10 @@ static struct ceph_msg *mon_alloc_msg(struct ceph_connection *con,
 
 		/*
 		 * Older OSDs don't set reply tid even if the orignal
-		 * request had a non-zero tid.  Workaround this weirdness
-		 * by falling through to the allocate case.
+		 * request had a non-zero tid.  Work around this weirdness
+		 * by allocating a new message.
 		 */
+		/* fall through */
 	case CEPH_MSG_MON_MAP:
 	case CEPH_MSG_MDS_MAP:
 	case CEPH_MSG_OSD_MAP:

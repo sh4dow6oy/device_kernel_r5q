@@ -1117,7 +1117,7 @@ static void service_rx_tasklet(unsigned long data)
 	if (resched)
 		tasklet_schedule(&service->rx_tasklet);
 
-	spin_release(&service->state_spinlock.dep_map, 0, _THIS_IP_);
+	spin_release(&service->state_spinlock.dep_map, _THIS_IP_);
 	__release(service);
 }
 
@@ -1706,8 +1706,7 @@ fail_add_idr:
 	return ERR_PTR(ret);
 
 fail_copy_name:
-	if (service->protocol)
-		kfree(service->protocol);
+    kfree(service->protocol);
 fail_copy_protocol:
 	kfree(service);
 fail:
@@ -2522,7 +2521,6 @@ int vs_service_bus_remove(struct device *dev)
 {
 	struct vs_service_device *service = to_vs_service_device(dev);
 	struct vs_service_driver *vsdrv = to_vs_service_driver(dev->driver);
-	int err = 0;
 
 	reset_service(service);
 
@@ -2553,7 +2551,7 @@ int vs_service_bus_remove(struct device *dev)
 
 	module_put(vsdrv->driver.owner);
 
-	return err;
+	return 0;
 }
 EXPORT_SYMBOL_GPL(vs_service_bus_remove);
 

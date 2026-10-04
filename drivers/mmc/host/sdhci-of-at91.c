@@ -114,7 +114,8 @@ static void sdhci_at91_set_power(struct sdhci_host *host, unsigned char mode,
 	sdhci_set_power_noreg(host, mode, vdd);
 }
 
-void sdhci_at91_set_uhs_signaling(struct sdhci_host *host, unsigned int timing)
+static void sdhci_at91_set_uhs_signaling(struct sdhci_host *host,
+					 unsigned int timing)
 {
 	u8 mc1r;
 

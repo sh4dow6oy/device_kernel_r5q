@@ -26,10 +26,10 @@ struct mmc_gpio {
 	struct gpio_desc *cd_gpio;
 	bool override_ro_active_level;
 	bool override_cd_active_level;
-	bool status;
 	irqreturn_t (*cd_gpio_isr)(int irq, void *dev_id);
 	char *ro_label;
-	char cd_label[0];
+	u32 cd_debounce_delay_ms;
+	char cd_label[];
 };
 
 static irqreturn_t mmc_gpio_cd_irqt(int irq, void *dev_id)
@@ -37,24 +37,13 @@ static irqreturn_t mmc_gpio_cd_irqt(int irq, void *dev_id)
 	/* Schedule a card detection after a debounce timeout */
 	struct mmc_host *host = dev_id;
 	struct mmc_gpio *ctx = host->slot.handler_priv;
-	bool status;
+	int present = host->ops->get_cd(host);
 
-	status = mmc_gpio_get_cd(host) ? true : false;
+	pr_debug("%s: cd gpio irq, gpio state %d (CARD_%s)\n",
+		mmc_hostname(host), present, present?"INSERT":"REMOVAL");
 
-	if (status ^ ctx->status) {
-		pr_err("%s: slot status change detected (%d -> %d), GPIO_ACTIVE_%s\n",
-				mmc_hostname(host), ctx->status, status,
-				(host->caps2 & MMC_CAP2_CD_ACTIVE_HIGH) ?
-				"HIGH" : "LOW");
-		ctx->status = status;
-
-		host->trigger_card_event = true;
-
-		if (host->card_detect_cnt < 0x7FFFFFFF)
-			host->card_detect_cnt++;
-
-		mmc_detect_change(host, msecs_to_jiffies(200));
-	}
+	host->trigger_card_event = true;
+	mmc_detect_change(host, msecs_to_jiffies(ctx->cd_debounce_delay_ms));
 
 	return IRQ_HANDLED;
 }
@@ -67,6 +56,7 @@ int mmc_gpio_alloc(struct mmc_host *host)
 
 	if (ctx) {
 		ctx->ro_label = ctx->cd_label + len;
+		ctx->cd_debounce_delay_ms = 200;
 		snprintf(ctx->cd_label, len, "%s cd", dev_name(host->parent));
 		snprintf(ctx->ro_label, len, "%s ro", dev_name(host->parent));
 		host->slot.handler_priv = ctx;
@@ -94,7 +84,8 @@ EXPORT_SYMBOL(mmc_gpio_get_ro);
 int mmc_gpio_get_cd(struct mmc_host *host)
 {
 	struct mmc_gpio *ctx = host->slot.handler_priv;
-	int ret = 0;
+	int cansleep;
+	int ret;
 
 	if (host->extcon) {
 		ret =  extcon_get_state(host->extcon, EXTCON_MECHANICAL);
@@ -103,15 +94,20 @@ int mmc_gpio_get_cd(struct mmc_host *host)
 					__func__, ret);
 		return ret;
 	}
-
 	if (!ctx || !ctx->cd_gpio)
 		return -ENOSYS;
 
-	if (ctx->override_cd_active_level)
-		return !gpiod_get_raw_value_cansleep(ctx->cd_gpio) ^
-			!!(host->caps2 & MMC_CAP2_CD_ACTIVE_HIGH);
+	cansleep = gpiod_cansleep(ctx->cd_gpio);
+	if (ctx->override_cd_active_level) {
+		int value = cansleep ?
+				gpiod_get_raw_value_cansleep(ctx->cd_gpio) :
+				gpiod_get_raw_value(ctx->cd_gpio);
+		return !value ^ !!(host->caps2 & MMC_CAP2_CD_ACTIVE_HIGH);
+	}
 
-	return gpiod_get_value_cansleep(ctx->cd_gpio);
+	return cansleep ?
+		gpiod_get_value_cansleep(ctx->cd_gpio) :
+		gpiod_get_value(ctx->cd_gpio);
 }
 EXPORT_SYMBOL(mmc_gpio_get_cd);
 
@@ -145,58 +141,29 @@ int mmc_gpio_request_ro(struct mmc_host *host, unsigned int gpio)
 }
 EXPORT_SYMBOL(mmc_gpio_request_ro);
 
-void mmc_gpiod_free_cd_irq(struct mmc_host *host)
-{
-	devm_free_irq(host->parent, host->slot.cd_irq, host);
-}
-EXPORT_SYMBOL(mmc_gpiod_free_cd_irq);
-
-void mmc_gpiod_restore_cd_irq(struct mmc_host *host)
-{
-	struct mmc_gpio *ctx = host->slot.handler_priv;
-	int irq = host->slot.cd_irq;
-
-	if (irq >= 0) {
-		devm_request_threaded_irq(host->parent, irq,
-			NULL, ctx->cd_gpio_isr,
-			IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING |
-			IRQF_ONESHOT,
-			ctx->cd_label, host);
-	}
-}
-EXPORT_SYMBOL(mmc_gpiod_restore_cd_irq);
-
 void mmc_gpiod_request_cd_irq(struct mmc_host *host)
 {
 	struct mmc_gpio *ctx = host->slot.handler_priv;
-	int ret, irq;
+	int irq = -EINVAL;
+	int ret;
 
 	if (host->slot.cd_irq >= 0 || !ctx || !ctx->cd_gpio)
 		return;
 
-	irq = gpiod_to_irq(ctx->cd_gpio);
-
 	/*
-	 * Even if gpiod_to_irq() returns a valid IRQ number, the platform might
-	 * still prefer to poll, e.g., because that IRQ number is already used
-	 * by another unit and cannot be shared.
+	 * Do not use IRQ if the platform prefers to poll, e.g., because that
+	 * IRQ number is already used by another unit and cannot be shared.
 	 */
-	if (irq >= 0 && host->caps & MMC_CAP_NEEDS_POLL)
-		irq = -EINVAL;
-
-	ret = mmc_gpio_get_cd(host);
-	if (ret < 0) {
-		pr_err("%s: getting card detection gpio is failed.\n", mmc_hostname(host));
-		return;
-	}
-	ctx->status = ret ? true : false;
+	if (!(host->caps & MMC_CAP_NEEDS_POLL))
+		irq = gpiod_to_irq(ctx->cd_gpio);
 
 	if (irq >= 0) {
 		if (!ctx->cd_gpio_isr)
 			ctx->cd_gpio_isr = mmc_gpio_cd_irqt;
 		ret = devm_request_threaded_irq(host->parent, irq,
 			NULL, ctx->cd_gpio_isr,
-			IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
+			IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING |
+			IRQF_ONESHOT | IRQF_SHARED,
 			ctx->cd_label, host);
 		if (ret < 0)
 			irq = ret;
@@ -206,63 +173,28 @@ void mmc_gpiod_request_cd_irq(struct mmc_host *host)
 
 	if (irq < 0)
 		host->caps |= MMC_CAP_NEEDS_POLL;
-	else if ((host->caps & MMC_CAP_CD_WAKE) && !enable_irq_wake(irq))
-		host->slot.cd_wake_enabled = true;
+	ret = mmc_gpio_set_cd_wake(host, true);
+	if (ret)
+		dev_err(mmc_dev(host), "%s: enabling cd irq wake failed ret=%d\n",
+				      __func__, ret);
 }
 EXPORT_SYMBOL(mmc_gpiod_request_cd_irq);
-
-/**
- * mmc_gpiod_update_status - update ctx->status to current status
- * @host: mmc_host
- * @present: current status from get_cd()
- *
- * It is to update card detection status.
- */
-void mmc_gpiod_update_status(struct mmc_host *host, int present)
-{
-	struct mmc_gpio *ctx = host->slot.handler_priv;
-	bool ctx_status;
-
-	if (present < 0)
-		return;
-
-	ctx_status = !!present;
-	if (ctx && (ctx->status ^ ctx_status))
-		ctx->status = ctx_status;
-}
-EXPORT_SYMBOL(mmc_gpiod_update_status);
 
 static int mmc_card_detect_notifier(struct notifier_block *nb,
 				       unsigned long event, void *ptr)
 {
 	struct mmc_host *host = container_of(nb, struct mmc_host,
 					     card_detect_nb);
-	struct mmc_gpio *ctx = host->slot.handler_priv;
-	bool status;
 
-	status = event ? true : false;
+	host->trigger_card_event = true;
+	mmc_detect_change(host, 0);
 
-	if (status ^ ctx->status) {
-		pr_err("%s: slot status change detected (%d -> %d), GPIO_ACTIVE_%s.(EXT)\n",
-				mmc_hostname(host), ctx->status, status,
-				(host->caps2 & MMC_CAP2_CD_ACTIVE_HIGH) ?
-				"HIGH" : "LOW");
-		ctx->status = status;
-
-		host->trigger_card_event = true;
-
-		if (host->card_detect_cnt < 0x7FFFFFFF)
-			host->card_detect_cnt++;
-
-		mmc_detect_change(host, msecs_to_jiffies(200));
-	}
 	return NOTIFY_DONE;
 }
 
 void mmc_register_extcon(struct mmc_host *host)
 {
 	struct extcon_dev *extcon = host->extcon;
-	struct mmc_gpio *ctx = host->slot.handler_priv;
 	int err;
 
 	if (!extcon)
@@ -275,15 +207,6 @@ void mmc_register_extcon(struct mmc_host *host)
 		dev_err(mmc_dev(host), "%s: extcon_register_notifier() failed ret=%d\n",
 			__func__, err);
 		host->caps |= MMC_CAP_NEEDS_POLL;
-	} else {
-		int ret = 0;
-
-		ret = mmc_gpio_get_cd(host);
-		if (ret < 0) {
-			pr_err("%s: getting card detection gpio is failed.\n", mmc_hostname(host));
-			return;
-		}
-		ctx->status = ret ? true : false;
 	}
 }
 EXPORT_SYMBOL(mmc_register_extcon);
@@ -303,6 +226,28 @@ void mmc_unregister_extcon(struct mmc_host *host)
 			__func__, err);
 }
 EXPORT_SYMBOL(mmc_unregister_extcon);
+
+
+int mmc_gpio_set_cd_wake(struct mmc_host *host, bool on)
+{
+	int ret = 0;
+
+	if (!(host->caps & MMC_CAP_CD_WAKE) ||
+	    host->slot.cd_irq < 0 ||
+	    on == host->slot.cd_wake_enabled)
+		return 0;
+
+	if (on) {
+		ret = enable_irq_wake(host->slot.cd_irq);
+		host->slot.cd_wake_enabled = !ret;
+	} else {
+		disable_irq_wake(host->slot.cd_irq);
+		host->slot.cd_wake_enabled = false;
+	}
+
+	return ret;
+}
+EXPORT_SYMBOL(mmc_gpio_set_cd_wake);
 
 /* Register an alternate interrupt service routine for
  * the card-detect GPIO.
@@ -392,7 +337,7 @@ int mmc_gpiod_request_cd(struct mmc_host *host, const char *con_id,
 	if (debounce) {
 		ret = gpiod_set_debounce(desc, debounce);
 		if (ret < 0)
-			return ret;
+			ctx->cd_debounce_delay_ms = debounce / 1000;
 	}
 
 	if (gpio_invert)
@@ -455,3 +400,11 @@ int mmc_gpiod_request_ro(struct mmc_host *host, const char *con_id,
 	return 0;
 }
 EXPORT_SYMBOL(mmc_gpiod_request_ro);
+
+bool mmc_can_gpio_ro(struct mmc_host *host)
+{
+	struct mmc_gpio *ctx = host->slot.handler_priv;
+
+	return ctx->ro_gpio ? true : false;
+}
+EXPORT_SYMBOL(mmc_can_gpio_ro);

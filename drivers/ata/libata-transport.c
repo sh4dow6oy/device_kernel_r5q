@@ -224,6 +224,8 @@ static DECLARE_TRANSPORT_CLASS(ata_port_class,
 
 static void ata_tport_release(struct device *dev)
 {
+	struct ata_port *ap = tdev_to_port(dev);
+	ata_host_put(ap->host);
 }
 
 /**
@@ -291,6 +293,7 @@ int ata_tport_add(struct device *parent,
 		dev->type = &ata_port_type;
 
 	dev->parent = parent;
+	ata_host_get(ap->host);
 	dev->release = ata_tport_release;
 	dev_set_name(dev, "ata%d", ap->print_id);
 	transport_setup_device(dev);

@@ -25,17 +25,19 @@
 #include <linux/moduleloader.h>
 #include <linux/bpf.h>
 #include <linux/btf.h>
-#include <linux/frame.h>
+#include <linux/objtool.h>
 #include <linux/rbtree_latch.h>
 #include <linux/kallsyms.h>
 #include <linux/rcupdate.h>
 #include <linux/perf_event.h>
 #include <linux/extable.h>
+#include <linux/log2.h>
 #include <linux/nospec.h>
 
 #include <asm/barrier.h>
-#include <linux/log2.h>
 #include <asm/unaligned.h>
+
+#include <trace/hooks/memory.h>
 
 /* Registers */
 #define BPF_R0	regs[BPF_REG_0]
@@ -82,7 +84,7 @@ void *bpf_internal_load_pointer_neg_helper(const struct sk_buff *skb, int k, uns
 
 struct bpf_prog *bpf_prog_alloc_no_stats(unsigned int size, gfp_t gfp_extra_flags)
 {
-	gfp_t gfp_flags = GFP_KERNEL | __GFP_ZERO | gfp_extra_flags;
+	gfp_t gfp_flags = GFP_KERNEL_ACCOUNT | __GFP_ZERO | gfp_extra_flags;
 	struct bpf_prog_aux *aux;
 	struct bpf_prog *fp;
 
@@ -91,9 +93,15 @@ struct bpf_prog *bpf_prog_alloc_no_stats(unsigned int size, gfp_t gfp_extra_flag
 	if (fp == NULL)
 		return NULL;
 
-	aux = kzalloc(sizeof(*aux), GFP_KERNEL | gfp_extra_flags);
+	aux = kzalloc(sizeof(*aux), GFP_KERNEL_ACCOUNT | gfp_extra_flags);
 	if (aux == NULL) {
 		vfree(fp);
+		return NULL;
+	}
+	fp->active = alloc_percpu_gfp(int, GFP_KERNEL_ACCOUNT | gfp_extra_flags);
+	if (!fp->active) {
+		vfree(fp);
+		kfree(aux);
 		return NULL;
 	}
 
@@ -111,7 +119,7 @@ struct bpf_prog *bpf_prog_alloc_no_stats(unsigned int size, gfp_t gfp_extra_flag
 
 struct bpf_prog *bpf_prog_alloc(unsigned int size, gfp_t gfp_extra_flags)
 {
-	gfp_t gfp_flags = GFP_KERNEL | __GFP_ZERO | gfp_extra_flags;
+	gfp_t gfp_flags = GFP_KERNEL_ACCOUNT | __GFP_ZERO | gfp_extra_flags;
 	struct bpf_prog *prog;
 	int cpu;
 
@@ -119,8 +127,9 @@ struct bpf_prog *bpf_prog_alloc(unsigned int size, gfp_t gfp_extra_flags)
 	if (!prog)
 		return NULL;
 
-	prog->aux->stats = alloc_percpu_gfp(struct bpf_prog_stats, gfp_flags);
-	if (!prog->aux->stats) {
+	prog->stats = alloc_percpu_gfp(struct bpf_prog_stats, gfp_flags);
+	if (!prog->stats) {
+		free_percpu(prog->active);
 		kfree(prog->aux);
 		vfree(prog);
 		return NULL;
@@ -129,7 +138,7 @@ struct bpf_prog *bpf_prog_alloc(unsigned int size, gfp_t gfp_extra_flags)
 	for_each_possible_cpu(cpu) {
 		struct bpf_prog_stats *pstats;
 
-		pstats = per_cpu_ptr(prog->aux->stats, cpu);
+		pstats = per_cpu_ptr(prog->stats, cpu);
 		u64_stats_init(&pstats->syncp);
 	}
 	return prog;
@@ -143,7 +152,7 @@ int bpf_prog_alloc_jited_linfo(struct bpf_prog *prog)
 
 	prog->aux->jited_linfo = kcalloc(prog->aux->nr_linfo,
 					 sizeof(*prog->aux->jited_linfo),
-					 GFP_KERNEL | __GFP_NOWARN);
+					 GFP_KERNEL_ACCOUNT | __GFP_NOWARN);
 	if (!prog->aux->jited_linfo)
 		return -ENOMEM;
 
@@ -224,25 +233,17 @@ void bpf_prog_free_linfo(struct bpf_prog *prog)
 struct bpf_prog *bpf_prog_realloc(struct bpf_prog *fp_old, unsigned int size,
 				  gfp_t gfp_extra_flags)
 {
-	gfp_t gfp_flags = GFP_KERNEL | __GFP_ZERO | gfp_extra_flags;
+	gfp_t gfp_flags = GFP_KERNEL_ACCOUNT | __GFP_ZERO | gfp_extra_flags;
 	struct bpf_prog *fp;
-	u32 pages, delta;
-	int ret;
+	u32 pages;
 
 	size = round_up(size, PAGE_SIZE);
 	pages = size / PAGE_SIZE;
 	if (pages <= fp_old->pages)
 		return fp_old;
 
-	delta = pages - fp_old->pages;
-	ret = __bpf_prog_charge(fp_old->aux->user, delta);
-	if (ret)
-		return NULL;
-
 	fp = __vmalloc(size, gfp_flags);
-	if (fp == NULL) {
-		__bpf_prog_uncharge(fp_old->aux->user, delta);
-	} else {
+	if (fp) {
 		memcpy(fp, fp_old, fp_old->pages * PAGE_SIZE);
 		fp->pages = pages;
 		fp->aux->prog = fp;
@@ -251,6 +252,8 @@ struct bpf_prog *bpf_prog_realloc(struct bpf_prog *fp_old, unsigned int size,
 		 * reallocated structure.
 		 */
 		fp_old->aux = NULL;
+		fp_old->stats = NULL;
+		fp_old->active = NULL;
 		__bpf_prog_free(fp_old);
 	}
 
@@ -262,10 +265,11 @@ void __bpf_prog_free(struct bpf_prog *fp)
 	if (fp->aux) {
 		mutex_destroy(&fp->aux->used_maps_mutex);
 		mutex_destroy(&fp->aux->dst_mutex);
-		free_percpu(fp->aux->stats);
 		kfree(fp->aux->poke_tab);
 		kfree(fp->aux);
 	}
+	free_percpu(fp->stats);
+	free_percpu(fp->active);
 	vfree(fp);
 }
 
@@ -840,7 +844,7 @@ static int __init bpf_jit_charge_init(void)
 }
 pure_initcall(bpf_jit_charge_init);
 
-static int bpf_jit_charge_modmem(u32 pages)
+int bpf_jit_charge_modmem(u32 pages)
 {
 	if (atomic_long_add_return(pages, &bpf_jit_current) >
 	    (bpf_jit_limit >> PAGE_SHIFT)) {
@@ -853,7 +857,7 @@ static int bpf_jit_charge_modmem(u32 pages)
 	return 0;
 }
 
-static void bpf_jit_uncharge_modmem(u32 pages)
+void bpf_jit_uncharge_modmem(u32 pages)
 {
 	atomic_long_sub(pages, &bpf_jit_current);
 }
@@ -912,6 +916,8 @@ void bpf_jit_binary_free(struct bpf_binary_header *hdr)
 {
 	u32 pages = hdr->pages;
 
+	trace_android_vh_set_memory_rw((unsigned long)hdr, pages);
+	trace_android_vh_set_memory_nx((unsigned long)hdr, pages);
 	bpf_jit_free_exec(hdr);
 	bpf_jit_uncharge_modmem(pages);
 }
@@ -989,6 +995,9 @@ static int bpf_jit_blind_insn(const struct bpf_insn *from,
 	 * below.
 	 *
 	 * Constant blinding is only used by JITs, not in the interpreter.
+	 * The interpreter uses AX in some occasions as a local temporary
+	 * register e.g. in DIV or MOD instructions.
+	 *
 	 * In restricted circumstances, the verifier can also use the AX
 	 * register for rewrites as long as they do not interfere with
 	 * the above cases!
@@ -1128,6 +1137,8 @@ static void bpf_prog_clone_free(struct bpf_prog *fp)
 	 * clone is guaranteed to not be locked.
 	 */
 	fp->aux = NULL;
+	fp->stats = NULL;
+	fp->active = NULL;
 	__bpf_prog_free(fp);
 }
 
@@ -1330,7 +1341,7 @@ EXPORT_SYMBOL_GPL(__bpf_call_base);
 	INSN_3(STX, MEM,  W),			\
 	INSN_3(STX, MEM,  DW),			\
 	INSN_3(STX, ATOMIC, W),			\
-	INSN_3(STX, ATOMIC, DW),			\
+	INSN_3(STX, ATOMIC, DW),		\
 	/*   Immediate based. */		\
 	INSN_3(ST, MEM, B),			\
 	INSN_3(ST, MEM, H),			\
@@ -1500,12 +1511,12 @@ select_insn:
 		DST = do_div(AX, (u32) SRC);
 		CONT;
 	ALU64_MOD_K:
-		div64_u64_rem(DST, IMM, &tmp);
-		DST = tmp;
+		div64_u64_rem(DST, IMM, &AX);
+		DST = AX;
 		CONT;
 	ALU_MOD_K:
-		tmp = (u32) DST;
-		DST = do_div(tmp, (u32) IMM);
+		AX = (u32) DST;
+		DST = do_div(AX, (u32) IMM);
 		CONT;
 	ALU64_DIV_X:
 		DST = div64_u64(DST, SRC);
@@ -1519,9 +1530,9 @@ select_insn:
 		DST = div64_u64(DST, IMM);
 		CONT;
 	ALU_DIV_K:
-		tmp = (u32) DST;
-		do_div(tmp, (u32) IMM);
-		DST = (u32) tmp;
+		AX = (u32) DST;
+		do_div(AX, (u32) IMM);
+		DST = (u32) AX;
 		CONT;
 	ALU_END_TO_BE:
 		switch (IMM) {
@@ -1672,23 +1683,23 @@ out:
 	LDST(DW, u64)
 #undef LDST
 
-	#define ATOMIC_ALU_OP(BOP, KOP)					\
+#define ATOMIC_ALU_OP(BOP, KOP)						\
 		case BOP:						\
 			if (BPF_SIZE(insn->code) == BPF_W)		\
 				atomic_##KOP((u32) SRC, (atomic_t *)(unsigned long) \
 					     (DST + insn->off));	\
 			else						\
 				atomic64_##KOP((u64) SRC, (atomic64_t *)(unsigned long) \
-					       (DST + insn->off)); \
+					       (DST + insn->off));	\
 			break;						\
 		case BOP | BPF_FETCH:					\
 			if (BPF_SIZE(insn->code) == BPF_W)		\
 				SRC = (u32) atomic_fetch_##KOP(		\
-					(u32) SRC,				\
+					(u32) SRC,			\
 					(atomic_t *)(unsigned long) (DST + insn->off)); \
 			else						\
-				SRC = (u64) atomic64_fetch_##KOP(		\
-					(u64) SRC,				\
+				SRC = (u64) atomic64_fetch_##KOP(	\
+					(u64) SRC,			\
 					(atomic64_t *)(unsigned long) (DST + insn->off)); \
 			break;
 
@@ -2125,7 +2136,6 @@ int bpf_prog_array_update_at(struct bpf_prog_array *array, int index,
 int bpf_prog_array_copy(struct bpf_prog_array *old_array,
 			struct bpf_prog *exclude_prog,
 			struct bpf_prog *include_prog,
-			u64 bpf_cookie,
 			struct bpf_prog_array **new_array)
 {
 	int new_prog_cnt, carry_prog_cnt = 0;
@@ -2178,15 +2188,10 @@ int bpf_prog_array_copy(struct bpf_prog_array *old_array,
 			    existing->prog != &dummy_bpf_prog.prog) {
 				array->items[new_prog_idx++].prog =
 					existing->prog;
-				array->items[new_prog_idx - 1].bpf_cookie =
-					existing->bpf_cookie;
 			}
 	}
-	if (include_prog) {
-		array->items[new_prog_idx].prog = include_prog;
-		array->items[new_prog_idx].bpf_cookie = bpf_cookie;
-		new_prog_idx++;
-	}
+	if (include_prog)
+		array->items[new_prog_idx++].prog = include_prog;
 	array->items[new_prog_idx].prog = NULL;
 	*new_array = array;
 	return 0;
@@ -2233,7 +2238,7 @@ static void bpf_free_used_maps(struct bpf_prog_aux *aux)
 }
 
 void __bpf_free_used_btfs(struct bpf_prog_aux *aux,
-				  struct btf_mod_pair *used_btfs, u32 len)
+			  struct btf_mod_pair *used_btfs, u32 len)
 {
 #ifdef CONFIG_BPF_SYSCALL
 	struct btf_mod_pair *btf_mod;
@@ -2404,6 +2409,10 @@ bool __weak bpf_helper_changes_pkt_data(void *func)
 /* Return TRUE if the JIT backend wants verifier to enable sub-register usage
  * analysis code and wants explicit zero extension inserted by verifier.
  * Otherwise, return FALSE.
+ *
+ * The verifier inserts an explicit zero extension after BPF_CMPXCHGs even if
+ * you don't override this. JITs that don't want these extra insns can detect
+ * them using insn_is_zext.
  */
 bool __weak bpf_jit_needs_zext(void)
 {
@@ -2429,6 +2438,7 @@ DEFINE_STATIC_KEY_FALSE(bpf_stats_enabled_key);
 EXPORT_SYMBOL(bpf_stats_enabled_key);
 
 /* All definitions of tracepoints related to BPF. */
+#undef TRACE_INCLUDE_PATH
 #define CREATE_TRACE_POINTS
 #include <linux/bpf_trace.h>
 

@@ -61,6 +61,7 @@ static int xfrm6_get_saddr(struct net *net, int oif,
 	struct dst_entry *dst;
 	struct net_device *dev;
 	struct inet6_dev *idev;
+	int err;
 
 	dst = xfrm6_dst_lookup(net, 0, oif, NULL, daddr, mark);
 	if (IS_ERR(dst))
@@ -72,8 +73,10 @@ static int xfrm6_get_saddr(struct net *net, int oif,
 		return -EHOSTUNREACH;
 	}
 	dev = idev->dev;
-	ipv6_dev_get_saddr(dev_net(dev), dev, &daddr->in6, 0, &saddr->in6);
+	err = ipv6_dev_get_saddr(dev_net(dev), dev, &daddr->in6, 0, &saddr->in6);
 	dst_release(dst);
+	if (err)
+		return -EHOSTUNREACH;
 	return 0;
 }
 
@@ -117,6 +120,9 @@ static int xfrm6_fill_dst(struct xfrm_dst *xdst, struct net_device *dev,
 	xdst->u.rt6.rt6i_gateway = rt->rt6i_gateway;
 	xdst->u.rt6.rt6i_dst = rt->rt6i_dst;
 	xdst->u.rt6.rt6i_src = rt->rt6i_src;
+	INIT_LIST_HEAD(&xdst->u.rt6.rt6i_uncached);
+	rt6_uncached_list_add(&xdst->u.rt6);
+	atomic_inc(&dev_net(dev)->ipv6.rt6_stats->fib_rt_uncache);
 
 	return 0;
 }
@@ -149,14 +155,15 @@ _decode_session6(struct sk_buff *skb, struct flowi *fl, int reverse)
 	fl6->daddr = reverse ? hdr->saddr : hdr->daddr;
 	fl6->saddr = reverse ? hdr->daddr : hdr->saddr;
 
-	while (nh + offset + 1 < skb->data ||
-	       pskb_may_pull(skb, nh + offset + 1 - skb->data)) {
+	while (nh + offset + sizeof(*exthdr) < skb->data ||
+	       pskb_may_pull(skb, nh + offset + sizeof(*exthdr) - skb->data)) {
 		nh = skb_network_header(skb);
 		exthdr = (struct ipv6_opt_hdr *)(nh + offset);
 
 		switch (nexthdr) {
 		case NEXTHDR_FRAGMENT:
 			onlyproto = 1;
+			fallthrough;
 		case NEXTHDR_ROUTING:
 		case NEXTHDR_HOP:
 		case NEXTHDR_DEST:
@@ -245,9 +252,11 @@ static void xfrm6_dst_destroy(struct dst_entry *dst)
 {
 	struct xfrm_dst *xdst = (struct xfrm_dst *)dst;
 
+	dst_destroy_metrics_generic(dst);
+	if (xdst->u.rt6.rt6i_uncached_list)
+		rt6_uncached_list_del(&xdst->u.rt6);
 	if (likely(xdst->u.rt6.rt6i_idev))
 		in6_dev_put(xdst->u.rt6.rt6i_idev);
-	dst_destroy_metrics_generic(dst);
 	xfrm_dst_destroy(xdst);
 }
 

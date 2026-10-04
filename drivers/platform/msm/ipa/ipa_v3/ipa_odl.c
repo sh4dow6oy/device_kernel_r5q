@@ -1,13 +1,6 @@
-/* Copyright (c) 2018-2020, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2018-2020, The Linux Foundation. All rights reserved.
  */
 
 #include "ipa_i.h"
@@ -119,9 +112,9 @@ static ssize_t ipa_odl_ctl_fops_read(struct file *filp, char __user *buf,
 	if (old_state != new_state) {
 		old_state = new_state;
 
-		if (new_state == true)
+		if (new_state)
 			data = 1;
-		else if (new_state == false)
+		else if (!new_state)
 			data = 0;
 
 		if (copy_to_user(buf, &data,
@@ -151,7 +144,7 @@ static unsigned int ipa_odl_ctl_fops_poll(struct file *file, poll_table *wait)
 
 	poll_wait(file, &odl_ctl_msg_wq, wait);
 
-	if (ipa3_odl_ctx->odl_ctl_msg_wq_flag == true) {
+	if (ipa3_odl_ctx->odl_ctl_msg_wq_flag) {
 		IPADBG("Sending read mask to odl control pipe\n");
 		mask |= POLLIN | POLLRDNORM;
 	}
@@ -242,7 +235,7 @@ int ipa3_send_adpl_msg(unsigned long skb_data)
 		return -ENOMEM;
 	}
 
-	data = kmalloc(skb->len, GFP_KERNEL);
+	data = kmemdup(skb->data, skb->len, GFP_KERNEL);
 	if (data == NULL) {
 		kfree(msg);
 		return -ENOMEM;
@@ -257,6 +250,7 @@ int ipa3_send_adpl_msg(unsigned long skb_data)
 	list_add_tail(&msg->link, &ipa3_odl_ctx->adpl_msg_list);
 	atomic_inc(&ipa3_odl_ctx->stats.numer_in_queue);
 	mutex_unlock(&ipa3_odl_ctx->adpl_msg_lock);
+	wake_up(&ipa3_odl_ctx->adpl_msg_waitq);
 	IPA_STATS_INC_CNT(ipa3_odl_ctx->stats.odl_rx_pkt);
 
 	return 0;
@@ -475,6 +469,12 @@ void ipa3_odl_pipe_cleanup(bool is_ssr)
 		IPAERR("adpl pipe not configured\n");
 		return;
 	}
+
+	if (!ipa3_odl_ctx->odl_state.odl_ep_setup) {
+		IPAERR("adpl pipe setup not done\n");
+		return;
+	}
+
 	if (ipa3_odl_ctx->odl_state.odl_open)
 		ipa_odl_opened = true;
 
@@ -541,7 +541,9 @@ static ssize_t ipa_adpl_read(struct file *filp, char __user *buf, size_t count,
 	int ret =  0;
 	char __user *start = buf;
 	struct ipa3_push_msg_odl *msg;
+	DEFINE_WAIT_FUNC(wait, woken_wake_function);
 
+	add_wait_queue(&ipa3_odl_ctx->adpl_msg_waitq, &wait);
 	while (1) {
 		IPADBG_LOW("Writing message to adpl pipe\n");
 		if (!ipa3_odl_ctx->odl_state.odl_open)
@@ -586,9 +588,6 @@ static ssize_t ipa_adpl_read(struct file *filp, char __user *buf, size_t count,
 			IPA_STATS_INC_CNT(ipa3_odl_ctx->stats.odl_tx_diag_pkt);
 			kfree(msg);
 			msg = NULL;
-		} else {
-			ret = -EAGAIN;
-			break;
 		}
 
 		ret = -EAGAIN;
@@ -601,9 +600,9 @@ static ssize_t ipa_adpl_read(struct file *filp, char __user *buf, size_t count,
 
 		if (start != buf)
 			break;
-
+		wait_woken(&wait, TASK_INTERRUPTIBLE, MAX_SCHEDULE_TIMEOUT);
 	}
-
+	remove_wait_queue(&ipa3_odl_ctx->adpl_msg_waitq, &wait);
 	if (start != buf && ret != -EFAULT)
 		ret = buf - start;
 
@@ -679,6 +678,7 @@ int ipa_odl_init(void)
 
 	odl_cdev = ipa3_odl_ctx->odl_cdev;
 	INIT_LIST_HEAD(&ipa3_odl_ctx->adpl_msg_list);
+	init_waitqueue_head(&ipa3_odl_ctx->adpl_msg_waitq);
 	mutex_init(&ipa3_odl_ctx->adpl_msg_lock);
 	mutex_init(&ipa3_odl_ctx->pipe_lock);
 
@@ -759,7 +759,6 @@ int ipa_odl_init(void)
 	if (result) {
 		IPAWANERR("ipa3_odl_register_pm failed, ret: %d\n",
 				result);
-		goto cdev1_add_fail;
 	}
 	return 0;
 cdev1_add_fail:

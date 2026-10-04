@@ -8,6 +8,7 @@
 #include <linux/syscalls.h>
 #include <linux/mm.h>
 #include <linux/capability.h>
+#include <linux/compat.h>
 #include <linux/file.h>
 #include <linux/fs.h>
 #include <linux/security.h>
@@ -17,9 +18,6 @@
 #include <linux/buffer_head.h>
 #include <linux/falloc.h>
 #include <linux/sched/signal.h>
-#include <linux/sec_param.h>
-#include <linux/slab.h>
-
 
 #include "internal.h"
 
@@ -52,6 +50,7 @@ long vfs_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
  out:
 	return error;
 }
+EXPORT_SYMBOL(vfs_ioctl);
 
 static int ioctl_fibmap(struct file *filp, int __user *p)
 {
@@ -154,7 +153,7 @@ int fiemap_check_flags(struct fiemap_extent_info *fieinfo, u32 fs_flags)
 }
 EXPORT_SYMBOL(fiemap_check_flags);
 
-int fiemap_check_ranges(struct super_block *sb,
+static int fiemap_check_ranges(struct super_block *sb,
 			       u64 start, u64 len, u64 *new_len)
 {
 	u64 maxbytes = (u64) sb->s_maxbytes;
@@ -175,7 +174,6 @@ int fiemap_check_ranges(struct super_block *sb,
 
 	return 0;
 }
-EXPORT_SYMBOL(fiemap_check_ranges);
 
 static int ioctl_fiemap(struct file *filp, unsigned long arg)
 {
@@ -553,7 +551,7 @@ static int ioctl_fsfreeze(struct file *filp)
 {
 	struct super_block *sb = file_inode(filp)->i_sb;
 
-	if (!capable(CAP_SYS_ADMIN))
+	if (!ns_capable(sb->s_user_ns, CAP_SYS_ADMIN))
 		return -EPERM;
 
 	/* If filesystem doesn't support freeze feature, return. */
@@ -570,7 +568,7 @@ static int ioctl_fsthaw(struct file *filp)
 {
 	struct super_block *sb = file_inode(filp)->i_sb;
 
-	if (!capable(CAP_SYS_ADMIN))
+	if (!ns_capable(sb->s_user_ns, CAP_SYS_ADMIN))
 		return -EPERM;
 
 	/* Thaw */
@@ -672,6 +670,9 @@ int do_vfs_ioctl(struct file *filp, unsigned int fd, unsigned int cmd,
 		return ioctl_fiemap(filp, arg);
 
 	case FIGETBSZ:
+		/* anon_bdev filesystems may not have a block size */
+		if (!inode->i_sb->s_blocksize)
+			return -EINVAL;
 		return put_user(inode->i_sb->s_blocksize, argp);
 
 	case FICLONE:
@@ -693,7 +694,7 @@ int do_vfs_ioctl(struct file *filp, unsigned int fd, unsigned int cmd,
 	return error;
 }
 
-SYSCALL_DEFINE3(ioctl, unsigned int, fd, unsigned int, cmd, unsigned long, arg)
+int ksys_ioctl(unsigned int fd, unsigned int cmd, unsigned long arg)
 {
 	int error;
 	struct fd f = fdget(fd);
@@ -706,3 +707,42 @@ SYSCALL_DEFINE3(ioctl, unsigned int, fd, unsigned int, cmd, unsigned long, arg)
 	fdput(f);
 	return error;
 }
+
+SYSCALL_DEFINE3(ioctl, unsigned int, fd, unsigned int, cmd, unsigned long, arg)
+{
+	return ksys_ioctl(fd, cmd, arg);
+}
+
+#ifdef CONFIG_COMPAT
+/**
+ * compat_ptr_ioctl - generic implementation of .compat_ioctl file operation
+ *
+ * This is not normally called as a function, but instead set in struct
+ * file_operations as
+ *
+ *     .compat_ioctl = compat_ptr_ioctl,
+ *
+ * On most architectures, the compat_ptr_ioctl() just passes all arguments
+ * to the corresponding ->ioctl handler. The exception is arch/s390, where
+ * compat_ptr() clears the top bit of a 32-bit pointer value, so user space
+ * pointers to the second 2GB alias the first 2GB, as is the case for
+ * native 32-bit s390 user space.
+ *
+ * The compat_ptr_ioctl() function must therefore be used only with ioctl
+ * functions that either ignore the argument or pass a pointer to a
+ * compatible data type.
+ *
+ * If any ioctl command handled by fops->unlocked_ioctl passes a plain
+ * integer instead of a pointer, or any of the passed data types
+ * is incompatible between 32-bit and 64-bit architectures, a proper
+ * handler is required instead of compat_ptr_ioctl.
+ */
+long compat_ptr_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+	if (!file->f_op->unlocked_ioctl)
+		return -ENOIOCTLCMD;
+
+	return file->f_op->unlocked_ioctl(file, cmd, (unsigned long)compat_ptr(arg));
+}
+EXPORT_SYMBOL(compat_ptr_ioctl);
+#endif

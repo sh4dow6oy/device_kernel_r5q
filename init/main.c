@@ -47,10 +47,12 @@
 #include <linux/cgroup.h>
 #include <linux/efi.h>
 #include <linux/tick.h>
+#include <linux/sched/isolation.h>
 #include <linux/interrupt.h>
 #include <linux/taskstats_kern.h>
 #include <linux/delayacct.h>
 #include <linux/unistd.h>
+#include <linux/utsname.h>
 #include <linux/rmap.h>
 #include <linux/mempolicy.h>
 #include <linux/key.h>
@@ -78,7 +80,7 @@
 #include <linux/pti.h>
 #include <linux/blkdev.h>
 #include <linux/elevator.h>
-#include <linux/sched_clock.h>
+#include <linux/sched/clock.h>
 #include <linux/sched/task.h>
 #include <linux/sched/task_stack.h>
 #include <linux/context_tracking.h>
@@ -89,25 +91,13 @@
 #include <linux/io.h>
 #include <linux/cache.h>
 #include <linux/rodata_test.h>
+#include <linux/jump_label.h>
+#include <linux/mem_encrypt.h>
 
 #include <asm/io.h>
 #include <asm/setup.h>
 #include <asm/sections.h>
 #include <asm/cacheflush.h>
-#include <soc/qcom/boot_stats.h>
-
-#include "do_mounts.h"
-#ifdef CONFIG_SEC_GPIO_DVS
-#include <linux/secgpio_dvs.h>
-#endif
-
-#include <linux/sec_bootstat.h>
-#include <linux/sec_debug.h>
-
-#ifdef CONFIG_SECURITY_DEFEX
-#include <linux/defex.h>
-void __init __weak defex_load_rules(void) { }
-#endif
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/initcall.h>
@@ -116,34 +106,6 @@ static int kernel_init(void *);
 
 extern void init_IRQ(void);
 extern void radix_tree_init(void);
-
-#ifdef CONFIG_DEFERRED_INITCALLS
-extern initcall_t __deferred_initcall_start[], __deferred_initcall_end[];
-
-/* call deferred init routines */
-static void __ref do_deferred_initcalls(struct work_struct *work)
-{
-	initcall_t *call;
-	static bool already_run;
-
-	if (already_run) {
-		pr_warn("%s() has already run\n", __func__);
-		return;
-	}
-
-	already_run = true;
-
-	for (call = __deferred_initcall_start;
-			call < __deferred_initcall_end; call++) {
-		do_one_initcall(*call);
-         
-	}
-
-	free_initmem();
-}
-
-static DECLARE_WORK(deferred_initcall_work, do_deferred_initcalls);
-#endif
 
 /*
  * Debug helper: via this flag we know that we are in 'early bootup code'
@@ -171,7 +133,7 @@ void (*__initdata late_time_init)(void);
 char __initdata boot_command_line[COMMAND_LINE_SIZE];
 /* Untouched saved command line (eg. for /proc) */
 char *saved_command_line;
-
+EXPORT_SYMBOL_GPL(saved_command_line);
 /* Command line for parameter parsing */
 static char *static_command_line;
 /* Command line for per-initcall parameter parsing */
@@ -232,21 +194,13 @@ static bool __init obsolete_checksetup(char *line)
 			} else if (!p->setup_func) {
 				pr_warn("Parameter %s is obsolete, ignored\n",
 					p->str);
-				had_early_param = true;
-				goto fail;
-			} else {
-				set_memsize_reserved_name(p->str);
-				if (p->setup_func(line + n)) {
-					had_early_param = true;
-					goto fail;
-				}
-			}
+				return true;
+			} else if (p->setup_func(line + n))
+				return true;
 		}
 		p++;
 	} while (p < __setup_end);
 
-fail:
-	unset_memsize_reserved_name();
 	return had_early_param;
 }
 
@@ -290,27 +244,6 @@ static int __init loglevel(char *str)
 }
 
 early_param("loglevel", loglevel);
-
-#ifdef CONFIG_RTC_AUTO_PWRON_PARAM
-unsigned int sapa_param_time;
-EXPORT_SYMBOL(sapa_param_time);
-
-static int __init read_sapa_param(char *str)
-{
-	int temp = 0;
-
-	if (get_option(&str, &temp)) {
-		sapa_param_time = (unsigned int)temp;
-		pr_info("sapa: %s param_time:%u\n",
-			__func__, sapa_param_time);
-		return 0;
-	}
-
-	return -EINVAL;
-}
-
-early_param("sapa", read_sapa_param);
-#endif
 
 /* Change NUL term back to "=", to make "param" the whole string. */
 static int __init repair_env_string(char *param, char *val,
@@ -448,7 +381,6 @@ static void __init setup_command_line(char *command_line)
 	static_command_line = memblock_virt_alloc(strlen(command_line) + 1, 0);
 	strcpy(saved_command_line, boot_command_line);
 	strcpy(static_command_line, command_line);
-	sec_debug_get_erased_command_line();
 }
 
 /*
@@ -492,7 +424,7 @@ static noinline void __ref rest_init(void)
 
 	/*
 	 * Enable might_sleep() and smp_processor_id() checks.
-	 * They cannot be enabled earlier because with CONFIG_PRREMPT=y
+	 * They cannot be enabled earlier because with CONFIG_PREEMPT=y
 	 * kernel_thread() would trigger might_sleep() splats. With
 	 * CONFIG_PREEMPT_VOLUNTARY=y the init task might have scheduled
 	 * already, but it's stuck on the kthreadd_done completion.
@@ -521,13 +453,11 @@ static int __init do_early_param(char *param, char *val,
 		    (strcmp(param, "console") == 0 &&
 		     strcmp(p->str, "earlycon") == 0)
 		) {
-			set_memsize_reserved_name(p->str);
 			if (p->setup_func(val) != 0)
 				pr_warn("Malformed early option '%s'\n", param);
 		}
 	}
 	/* We accept everything at this stage. */
-	unset_memsize_reserved_name();
 	return 0;
 }
 
@@ -564,6 +494,17 @@ void __init __weak thread_stack_cache_init(void)
 }
 #endif
 
+bool initcall_debug;
+core_param(initcall_debug, initcall_debug, bool, 0644);
+
+#ifdef TRACEPOINTS_ENABLED
+static void __init initcall_debug_enable(void);
+#else
+static inline void initcall_debug_enable(void)
+{
+}
+#endif
+
 /* Report memory auto-initialization states for this boot. */
 static void __init report_meminit(void)
 {
@@ -594,7 +535,6 @@ static void __init report_meminit(void)
  */
 static void __init mm_init(void)
 {
-	set_memsize_kernel_type(MEMSIZE_KERNEL_MM_INIT);
 	/*
 	 * page_ext requires contiguous pages,
 	 * bigger than MAX_ORDER unless SPARSEMEM.
@@ -603,7 +543,8 @@ static void __init mm_init(void)
 	kfence_alloc_pool();
 	report_meminit();
 	mem_init();
-	set_memsize_kernel_type(MEMSIZE_KERNEL_STOP);
+	/* page_owner must be initialized after buddy is ready */
+	page_ext_init_flatmem_late();
 	kmem_cache_init();
 	pgtable_init();
 	vmalloc_init();
@@ -619,7 +560,6 @@ asmlinkage __visible void __init start_kernel(void)
 	char *command_line;
 	char *after_dashes;
 
-	set_memsize_kernel_type(MEMSIZE_KERNEL_OTHERS);
 	set_task_stack_end_magic(&init_task);
 	smp_setup_processor_id();
 	debug_objects_early_init();
@@ -647,6 +587,7 @@ asmlinkage __visible void __init start_kernel(void)
 	build_all_zonelists(NULL);
 	page_alloc_init();
 
+	pr_notice("Kernel command line: %s\n", boot_command_line);
 	/* parameters may set static keys */
 	jump_label_init();
 	parse_early_param();
@@ -666,7 +607,6 @@ asmlinkage __visible void __init start_kernel(void)
 	 * kmem_cache_init()
 	 */
 	setup_log_buf(0);
-	pidhash_init();
 	vfs_caches_init_early();
 	sort_main_extable();
 	trap_init();
@@ -694,6 +634,12 @@ asmlinkage __visible void __init start_kernel(void)
 	radix_tree_init();
 
 	/*
+	 * Set up housekeeping before setting up workqueues to allow the unbound
+	 * workqueue to take non-housekeeping into account.
+	 */
+	housekeeping_init();
+
+	/*
 	 * Allow workqueue creation and work item queueing/cancelling
 	 * early.  Work item execution depends on kthreads and starts after
 	 * workqueue_init().
@@ -704,6 +650,9 @@ asmlinkage __visible void __init start_kernel(void)
 
 	/* Trace events are available after this */
 	trace_init();
+
+	if (initcall_debug)
+		initcall_debug_enable();
 
 	context_tracking_init();
 	/* init some links before init_ISA_irqs() */
@@ -724,12 +673,11 @@ asmlinkage __visible void __init start_kernel(void)
 	kfence_init();
 	boot_init_stack_canary();
 
-	sched_clock_postinit();
-	printk_safe_init();
 	perf_event_init();
 	profile_init();
 	call_function_init();
 	WARN(!irqs_disabled(), "Interrupts were enabled early\n");
+
 	early_boot_irqs_disabled = false;
 	local_irq_enable();
 
@@ -745,7 +693,7 @@ asmlinkage __visible void __init start_kernel(void)
 		panic("Too many boot %s vars at `%s'", panic_later,
 		      panic_param);
 
-	lockdep_info();
+	lockdep_init();
 
 	/*
 	 * Need to run this when irqs are enabled, because it wants
@@ -767,15 +715,16 @@ asmlinkage __visible void __init start_kernel(void)
 	debug_objects_mem_init();
 	setup_per_cpu_pageset();
 	numa_policy_init();
+	acpi_early_init();
 	if (late_time_init)
 		late_time_init();
+	sched_clock_init();
 	calibrate_delay();
 
 	arch_cpu_finalize_init();
 
 	pid_idr_init();
 	anon_vma_init();
-	acpi_early_init();
 #ifdef CONFIG_X86
 	if (efi_enabled(EFI_RUNTIME_SERVICES))
 		efi_enter_virtual_mode();
@@ -784,6 +733,7 @@ asmlinkage __visible void __init start_kernel(void)
 	cred_init();
 	fork_init();
 	proc_caches_init();
+	uts_ns_init();
 	buffer_init();
 	key_init();
 	security_init();
@@ -791,6 +741,7 @@ asmlinkage __visible void __init start_kernel(void)
 	vfs_caches_init();
 	pagecache_init();
 	signals_init();
+	seq_file_init();
 	proc_root_init();
 	nsfs_init();
 	cpuset_init();
@@ -823,9 +774,6 @@ static void __init do_ctors(void)
 		(*fn)();
 #endif
 }
-
-bool initcall_debug;
-core_param(initcall_debug, initcall_debug, bool, 0644);
 
 #ifdef CONFIG_KALLSYMS
 struct blacklist_entry {
@@ -896,77 +844,71 @@ static bool __init_or_module initcall_blacklisted(initcall_t fn)
 #endif
 __setup("initcall_blacklist=", initcall_blacklist);
 
-#ifdef CONFIG_SEC_BOOTSTAT
-static bool __init_or_module initcall_sec_debug = true;
-
-static int __init_or_module do_one_initcall_sec_debug(initcall_t fn)
+static __init_or_module void
+trace_initcall_start_cb(void *data, initcall_t fn)
 {
-	ktime_t calltime, delta, rettime;
-	unsigned long long duration;
-	int ret;
-	struct device_init_time_entry *entry;
-
-	calltime = ktime_get();
-	ret = fn();
-	rettime = ktime_get();
-	delta = ktime_sub(rettime, calltime);
-	duration = (unsigned long long) ktime_to_ns(delta) >> 10;
-	if (duration > DEVICE_INIT_TIME_100MS) {
-		entry = kmalloc(sizeof(*entry), GFP_KERNEL);
-		if (!entry)
-			return -ENOMEM;
-		entry->buf = kasprintf(GFP_KERNEL, "%pf", fn);
-		if (!entry->buf) {
-			kfree(entry);
-			return -ENOMEM;
-		}
-		entry->duration = duration;
-		list_add(&entry->next, &device_init_time_list);
-		printk(KERN_DEBUG "initcall %pF returned %d after %lld usecs\n",
-			 fn, ret, duration);
-	}
-
-	return ret;
-}
-#endif
-
-static int __init_or_module do_one_initcall_debug(initcall_t fn)
-{
-	ktime_t calltime, delta, rettime;
-	unsigned long long duration;
-	int ret;
+	ktime_t *calltime = (ktime_t *)data;
 
 	printk(KERN_DEBUG "calling  %pF @ %i\n", fn, task_pid_nr(current));
-	calltime = ktime_get();
-	ret = fn();
+	*calltime = ktime_get();
+}
+
+static __init_or_module void
+trace_initcall_finish_cb(void *data, initcall_t fn, int ret)
+{
+	ktime_t *calltime = (ktime_t *)data;
+	ktime_t delta, rettime;
+	unsigned long long duration;
+
 	rettime = ktime_get();
-	delta = ktime_sub(rettime, calltime);
+	delta = ktime_sub(rettime, *calltime);
 	duration = (unsigned long long) ktime_to_ns(delta) >> 10;
 	printk(KERN_DEBUG "initcall %pF returned %d after %lld usecs\n",
 		 fn, ret, duration);
-
-	return ret;
 }
+
+static ktime_t initcall_calltime;
+
+#ifdef TRACEPOINTS_ENABLED
+static void __init initcall_debug_enable(void)
+{
+	int ret;
+
+	ret = register_trace_initcall_start(trace_initcall_start_cb,
+					    &initcall_calltime);
+	ret |= register_trace_initcall_finish(trace_initcall_finish_cb,
+					      &initcall_calltime);
+	WARN(ret, "Failed to register initcall tracepoints\n");
+}
+# define do_trace_initcall_start	trace_initcall_start
+# define do_trace_initcall_finish	trace_initcall_finish
+#else
+static inline void do_trace_initcall_start(initcall_t fn)
+{
+	if (!initcall_debug)
+		return;
+	trace_initcall_start_cb(&initcall_calltime, fn);
+}
+static inline void do_trace_initcall_finish(initcall_t fn, int ret)
+{
+	if (!initcall_debug)
+		return;
+	trace_initcall_finish_cb(&initcall_calltime, fn, ret);
+}
+#endif /* !TRACEPOINTS_ENABLED */
 
 int __init_or_module do_one_initcall(initcall_t fn)
 {
 	int count = preempt_count();
-	int ret;
 	char msgbuf[64];
+	int ret;
 
 	if (initcall_blacklisted(fn))
 		return -EPERM;
 
-	trace_initcall_start(fn);
-	if (initcall_debug)
-		ret = do_one_initcall_debug(fn);
-#ifdef CONFIG_SEC_BOOTSTAT
-	else if (initcall_sec_debug)
-		ret = do_one_initcall_sec_debug(fn);
-#endif
-	else
-		ret = fn();
-	trace_initcall_finish(fn, ret);
+	do_trace_initcall_start(fn);
+	ret = fn();
+	do_trace_initcall_finish(fn, ret);
 
 	msgbuf[0] = 0;
 
@@ -1010,7 +952,7 @@ static initcall_entry_t *initcall_levels[] __initdata = {
 
 /* Keep these in sync with initcalls in include/linux/init.h */
 static char *initcall_level_names[] __initdata = {
-	"early",
+	"pure",
 	"core",
 	"postcore",
 	"arch",
@@ -1034,10 +976,6 @@ static void __init do_initcall_level(int level)
 	trace_initcall_level(initcall_level_names[level]);
 	for (fn = initcall_levels[level]; fn < initcall_levels[level+1]; fn++)
 		do_one_initcall(initcall_from_entry(fn));
-
-#ifdef CONFIG_SEC_BOOTSTAT
-	sec_bootstat_add_initcall(initcall_level_names[level]);
-#endif
 }
 
 static void __init do_initcalls(void)
@@ -1089,6 +1027,7 @@ void __init load_default_modules(void)
 static int run_init_process(const char *init_filename)
 {
 	argv_init[0] = init_filename;
+	pr_info("Run %s as init process\n", init_filename);
 	return do_execve(getname_kernel(init_filename),
 		(const char __user *const __user *)argv_init,
 		(const char __user *const __user *)envp_init);
@@ -1147,50 +1086,29 @@ static inline void mark_readonly(void)
 static int __ref kernel_init(void *unused)
 {
 	int ret;
-#ifdef CONFIG_EARLY_SERVICES
-	int status = 0;
-#endif
+
 	kernel_init_freeable();
-#ifdef CONFIG_SEC_GPIO_DVS
-	/************************ Caution !!! ****************************/
-	/* This function must be located in appropriate INIT position
-	 * in accordance with the specification of each BB vendor.
-	 */
-	/************************ Caution !!! ****************************/
-	gpio_dvs_check_initgpio();
-#endif
 	/* need to finish all async __init code before freeing the memory */
 	async_synchronize_full();
 	ftrace_free_init_mem();
-#ifndef CONFIG_DEFERRED_INITCALLS
 	free_initmem();
-#endif
 	mark_readonly();
+
+	/*
+	 * Kernel mappings are now finalized - update the userspace page-table
+	 * to finalize PTI.
+	 */
+	pti_finalize();
+
 	system_state = SYSTEM_RUNNING;
 	numa_default_policy();
 
 	rcu_end_inkernel_boot();
-	place_marker("M - DRIVER Kernel Boot Done");
 
-#ifdef CONFIG_EARLY_SERVICES
-	status = get_early_services_status();
-	if (status) {
-		struct kstat stat;
-		/* Wait for early services SE policy load completion signal */
-		while (vfs_stat("/dev/sedone", &stat) != 0)
-			;
-	}
-#endif
 	if (ramdisk_execute_command) {
 		ret = run_init_process(ramdisk_execute_command);
-
-		if (!ret) {
-#ifdef CONFIG_DEFERRED_INITCALLS
-			pr_err("DEFERRED init start by ramdisk(%s) %s(%d)\n", ramdisk_execute_command, __func__, __LINE__);
-			schedule_work(&deferred_initcall_work);
-#endif
+		if (!ret)
 			return 0;
-		}
 		pr_err("Failed to execute %s (error %d)\n",
 		       ramdisk_execute_command, ret);
 	}
@@ -1203,12 +1121,8 @@ static int __ref kernel_init(void *unused)
 	 */
 	if (execute_command) {
 		ret = run_init_process(execute_command);
-		if (!ret) {
-#ifdef CONFIG_DEFERRED_INITCALLS
-			schedule_work(&deferred_initcall_work);
-#endif
+		if (!ret)
 			return 0;
-		}
 		panic("Requested init %s failed (error %d).",
 		      execute_command, ret);
 	}
@@ -1258,11 +1172,11 @@ static noinline void __init kernel_init_freeable(void)
 	do_basic_setup();
 
 	/* Open the /dev/console on the rootfs, this should never fail */
-	if (sys_open((const char __user *) "/dev/console", O_RDWR, 0) < 0)
+	if (ksys_open((const char __user *) "/dev/console", O_RDWR, 0) < 0)
 		pr_err("Warning: unable to open an initial console.\n");
 
-	(void) sys_dup(0);
-	(void) sys_dup(0);
+	(void) ksys_dup(0);
+	(void) ksys_dup(0);
 	/*
 	 * check if there is an early userspace init.  If yes, let it do all
 	 * the work
@@ -1271,11 +1185,11 @@ static noinline void __init kernel_init_freeable(void)
 	if (!ramdisk_execute_command)
 		ramdisk_execute_command = "/init";
 
-	if (sys_access((const char __user *) ramdisk_execute_command, 0) != 0) {
+	if (ksys_access((const char __user *)
+			ramdisk_execute_command, 0) != 0) {
 		ramdisk_execute_command = NULL;
 		prepare_namespace();
 	}
-	launch_early_services();
 
 	/*
 	 * Ok, we have completed the initial bootup, and

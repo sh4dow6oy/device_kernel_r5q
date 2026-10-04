@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -11,7 +11,7 @@
  * GNU General Public License for more details.
  */
 
-#define CONFIG_PINCTRL_LPI 1
+#define CONFIG_PINCTRL_LPI_LEGACY 1
 #define CONFIG_PINCTRL_WCD 1
 #define CONFIG_AUDIO_EXT_CLK 1
 #define CONFIG_SND_SOC_WCD9XXX_V2 1
@@ -53,7 +53,6 @@
 #define CONFIG_SND_SOC_MSM_STUB 1
 #define CONFIG_WCD_DSP_GLINK 1
 #define CONFIG_MSM_AVTIMER 1
-#define CONFIG_AVTIMER_LEGACY 1
 #define CONFIG_SND_SOC_EXT_CODEC 1
 #define CONFIG_SND_SOC_INT_CODEC 1
 #define CONFIG_SND_SOC_CPE 1
@@ -62,3 +61,4 @@
 #define CONFIG_SND_SOC_DIGITAL_CDC 1
 #define CONFIG_SND_SOC_MSM_SDW 1
 #define CONFIG_SND_SOC_MSM_HDMI_CODEC_RX 1
+#define CONFIG_WCD_SPI_DMA_MASKING 1

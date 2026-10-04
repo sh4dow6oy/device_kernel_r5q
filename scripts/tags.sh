@@ -28,15 +28,6 @@ fi
 # ignore userspace tools
 ignore="$ignore ( -path ${tree}tools ) -prune -o"
 
-# Find all available archs
-find_all_archs()
-{
-	ALLSOURCE_ARCHS=""
-	for arch in `ls ${tree}arch`; do
-		ALLSOURCE_ARCHS="${ALLSOURCE_ARCHS} "${arch##\/}
-	done
-}
-
 # gtags(1) refuses to index any file outside of its current working dir.
 # If gtags indexing is requested and the build output directory is not
 # the kernel source tree, index all files in absolute-path form.
@@ -48,7 +39,7 @@ fi
 if [ "${ALLSOURCE_ARCHS}" = "" ]; then
 	ALLSOURCE_ARCHS=${SRCARCH}
 elif [ "${ALLSOURCE_ARCHS}" = "all" ]; then
-	find_all_archs
+	ALLSOURCE_ARCHS=$(find ${tree}arch/ -mindepth 1 -maxdepth 1 -type d -printf '%f ')
 fi
 
 # find sources in arch/$ARCH
@@ -84,7 +75,7 @@ find_include_sources()
 find_other_sources()
 {
 	find ${tree}* $ignore \
-	     \( -name include -o -name arch -o -name '.tmp_*' \) -prune -o \
+	     \( -path ${tree}include -o -path ${tree}arch -o -name '.tmp_*' \) -prune -o \
 	       -name "$1" -not -type l -print;
 }
 
@@ -168,6 +159,7 @@ regex_asm=(
 )
 regex_c=(
 	'/^SYSCALL_DEFINE[0-9](\([[:alnum:]_]*\).*/sys_\1/'
+	'/^BPF_CALL_[0-9](\([[:alnum:]_]*\).*/\1/'
 	'/^COMPAT_SYSCALL_DEFINE[0-9](\([[:alnum:]_]*\).*/compat_sys_\1/'
 	'/^TRACE_EVENT(\([[:alnum:]_]*\).*/trace_\1/'
 	'/^TRACE_EVENT(\([[:alnum:]_]*\).*/trace_\1_rcuidle/'
@@ -261,7 +253,7 @@ exuberant()
 {
 	setup_regex exuberant asm c
 	all_target_sources | xargs $1 -a                        \
-	-I __initdata,__exitdata,__initconst,			\
+	-I __initdata,__exitdata,__initconst,__ro_after_init	\
 	-I __initdata_memblock					\
 	-I __refdata,__attribute,__maybe_unused,__always_unused \
 	-I __acquires,__releases,__deprecated			\

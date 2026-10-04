@@ -5,7 +5,7 @@
 #include <linux/mem_encrypt.h>
 
 #include <asm/set_memory.h>
-#include <asm/pgtable.h>
+#include <linux/pgtable.h>
 #include <asm/realmode.h>
 #include <asm/tlbflush.h>
 
@@ -20,8 +20,6 @@ void __init set_real_mode_mem(phys_addr_t mem, size_t size)
 	void *base = __va(mem);
 
 	real_mode_header = (struct real_mode_header *) base;
-	printk(KERN_DEBUG "Base memory trampoline at [%p] %llx size %zu\n",
-	       base, (unsigned long long)mem, size);
 }
 
 void __init reserve_real_mode(void)
@@ -65,9 +63,10 @@ static void __init setup_real_mode(void)
 	/*
 	 * If SME is active, the trampoline area will need to be in
 	 * decrypted memory in order to bring up other processors
-	 * successfully.
+	 * successfully. This is not needed for SEV.
 	 */
-	set_memory_decrypted((unsigned long)base, size >> PAGE_SHIFT);
+	if (sme_active())
+		set_memory_decrypted((unsigned long)base, size >> PAGE_SHIFT);
 
 	memcpy(base, real_mode_blob, size);
 

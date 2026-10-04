@@ -283,6 +283,7 @@
 #include <linux/blkdev.h>
 #include <linux/times.h>
 #include <linux/uaccess.h>
+#include <scsi/scsi_common.h>
 #include <scsi/scsi_request.h>
 
 /* used to tell the module to turn on full debugging messages */
@@ -346,10 +347,10 @@ static LIST_HEAD(cdrom_list);
 int cdrom_dummy_generic_packet(struct cdrom_device_info *cdi,
 			       struct packet_command *cgc)
 {
-	if (cgc->sense) {
-		cgc->sense->sense_key = 0x05;
-		cgc->sense->asc = 0x20;
-		cgc->sense->ascq = 0x00;
+	if (cgc->sshdr) {
+		cgc->sshdr->sense_key = 0x05;
+		cgc->sshdr->asc = 0x20;
+		cgc->sshdr->ascq = 0x00;
 	}
 
 	cgc->stat = -EIO;
@@ -632,6 +633,16 @@ int register_cdrom(struct cdrom_device_info *cdi)
 
 	WARN_ON(!cdo->generic_packet);
 
+	/*
+	 * Propagate the drive's write support to the block layer so BLKROGET
+	 * reflects actual write capability. Drivers that use GET CONFIGURATION
+	 * features (CDC_MRW_W, CDC_RAM) must have called
+	 * cdrom_probe_write_features() before register_cdrom() so the mask is
+	 * complete here.
+	 */
+	set_disk_ro(cdi->disk, !CDROM_CAN(CDC_DVD_RAM | CDC_MRW_W | CDC_RAM |
+				     CDC_CD_RW));
+
 	cd_dbg(CD_REG_UNREG, "drive \"/dev/%s\" registered\n", cdi->name);
 	mutex_lock(&cdrom_mutex);
 	list_add(&cdi->list, &cdrom_list);
@@ -742,6 +753,44 @@ static int cdrom_is_random_writable(struct cdrom_device_info *cdi, int *write)
 
 	return 0;
 }
+
+/*
+ * Probe write-related MMC features via GET CONFIGURATION and update
+ * cdi->mask accordingly. Drivers that populate cdi->mask from the MODE SENSE
+ * capabilities page (e.g. sr) should call this after those MODE SENSE bits
+ * have been set but before register_cdrom(), so that the full set of
+ * write-capability bits is known by the time register_cdrom() decides on the
+ * initial read-only state of the disk.
+ */
+void cdrom_probe_write_features(struct cdrom_device_info *cdi)
+{
+	int mrw, mrw_write, ram_write;
+
+	mrw = 0;
+	if (!cdrom_is_mrw(cdi, &mrw_write))
+		mrw = 1;
+
+	if (CDROM_CAN(CDC_MO_DRIVE))
+		ram_write = 1;
+	else
+		(void) cdrom_is_random_writable(cdi, &ram_write);
+
+	if (mrw)
+		cdi->mask &= ~CDC_MRW;
+	else
+		cdi->mask |= CDC_MRW;
+
+	if (mrw_write)
+		cdi->mask &= ~CDC_MRW_W;
+	else
+		cdi->mask |= CDC_MRW_W;
+
+	if (ram_write)
+		cdi->mask &= ~CDC_RAM;
+	else
+		cdi->mask |= CDC_RAM;
+}
+EXPORT_SYMBOL(cdrom_probe_write_features);
 
 static int cdrom_media_erasable(struct cdrom_device_info *cdi)
 {
@@ -895,32 +944,7 @@ static int cdrom_is_dvd_rw(struct cdrom_device_info *cdi)
  */
 static int cdrom_open_write(struct cdrom_device_info *cdi)
 {
-	int mrw, mrw_write, ram_write;
 	int ret = 1;
-
-	mrw = 0;
-	if (!cdrom_is_mrw(cdi, &mrw_write))
-		mrw = 1;
-
-	if (CDROM_CAN(CDC_MO_DRIVE))
-		ram_write = 1;
-	else
-		(void) cdrom_is_random_writable(cdi, &ram_write);
-	
-	if (mrw)
-		cdi->mask &= ~CDC_MRW;
-	else
-		cdi->mask |= CDC_MRW;
-
-	if (mrw_write)
-		cdi->mask &= ~CDC_MRW_W;
-	else
-		cdi->mask |= CDC_MRW_W;
-
-	if (ram_write)
-		cdi->mask &= ~CDC_RAM;
-	else
-		cdi->mask |= CDC_RAM;
 
 	if (CDROM_CAN(CDC_MRW_W))
 		ret = cdrom_mrw_open_write(cdi);
@@ -2139,7 +2163,7 @@ static int cdrom_read_cdda_old(struct cdrom_device_info *cdi, __u8 __user *ubuf,
 	 */
 	nr = nframes;
 	do {
-		cgc.buffer = kmalloc(CD_FRAMESIZE_RAW * nr, GFP_KERNEL);
+		cgc.buffer = kmalloc_array(nr, CD_FRAMESIZE_RAW, GFP_KERNEL);
 		if (cgc.buffer)
 			break;
 
@@ -2199,7 +2223,7 @@ static int cdrom_read_cdda_bpc(struct cdrom_device_info *cdi, __u8 __user *ubuf,
 
 		len = nr * CD_FRAMESIZE_RAW;
 
-		rq = blk_get_request(q, REQ_OP_SCSI_IN, GFP_KERNEL);
+		rq = blk_get_request(q, REQ_OP_SCSI_IN, 0);
 		if (IS_ERR(rq)) {
 			ret = PTR_ERR(rq);
 			break;
@@ -2229,9 +2253,12 @@ static int cdrom_read_cdda_bpc(struct cdrom_device_info *cdi, __u8 __user *ubuf,
 
 		blk_execute_rq(q, cdi->disk, rq, 0);
 		if (scsi_req(rq)->result) {
-			struct request_sense *s = req->sense;
+			struct scsi_sense_hdr sshdr;
+
 			ret = -EIO;
-			cdi->last_sense = s->sense_key;
+			scsi_normalize_sense(req->sense, req->sense_len,
+					     &sshdr);
+			cdi->last_sense = sshdr.sense_key;
 		}
 
 		if (blk_rq_unmap_user(bio))
@@ -2953,7 +2980,7 @@ static noinline int mmc_ioctl_cdrom_read_data(struct cdrom_device_info *cdi,
 					      struct packet_command *cgc,
 					      int cmd)
 {
-	struct request_sense sense;
+	struct scsi_sense_hdr sshdr;
 	struct cdrom_msf msf;
 	int blocksize = 0, format = 0, lba;
 	int ret;
@@ -2981,13 +3008,13 @@ static noinline int mmc_ioctl_cdrom_read_data(struct cdrom_device_info *cdi,
 	if (cgc->buffer == NULL)
 		return -ENOMEM;
 
-	memset(&sense, 0, sizeof(sense));
-	cgc->sense = &sense;
+	memset(&sshdr, 0, sizeof(sshdr));
+	cgc->sshdr = &sshdr;
 	cgc->data_direction = CGC_DATA_READ;
 	ret = cdrom_read_block(cdi, cgc, lba, 1, format, blocksize);
-	if (ret && sense.sense_key == 0x05 &&
-	    sense.asc == 0x20 &&
-	    sense.ascq == 0x00) {
+	if (ret && sshdr.sense_key == 0x05 &&
+	    sshdr.asc == 0x20 &&
+	    sshdr.ascq == 0x00) {
 		/*
 		 * SCSI-II devices are not required to support
 		 * READ_CD, so let's try switching block size
@@ -2996,7 +3023,7 @@ static noinline int mmc_ioctl_cdrom_read_data(struct cdrom_device_info *cdi,
 		ret = cdrom_switch_blocksize(cdi, blocksize);
 		if (ret)
 			goto out;
-		cgc->sense = NULL;
+		cgc->sshdr = NULL;
 		ret = cdrom_read_cd(cdi, cgc, lba, blocksize, 1);
 		ret |= cdrom_switch_blocksize(cdi, blocksize);
 	}
@@ -3169,6 +3196,7 @@ static noinline int mmc_ioctl_cdrom_volume(struct cdrom_device_info *cdi,
 
 	/* set volume */
 	cgc->buffer = buffer + offset - 8;
+	cgc->buflen -= offset - 8;
 	memset(cgc->buffer, 0, 8);
 	return cdrom_mode_select(cdi, cgc);
 }

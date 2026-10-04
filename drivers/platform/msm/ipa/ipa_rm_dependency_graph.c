@@ -1,13 +1,6 @@
-/* Copyright (c) 2013-2017, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2013-2018, 2021, The Linux Foundation. All rights reserved.
  */
 
 #include <linux/slab.h>
@@ -84,7 +77,8 @@ int ipa_rm_dep_graph_get_resource(
 		goto bail;
 	}
 	resource_index = ipa_rm_dep_get_index(resource_name);
-	if (resource_index == IPA_RM_INDEX_INVALID) {
+	if (resource_index == IPA_RM_INDEX_INVALID ||
+		resource_index >= IPA_RM_RESOURCE_MAX) {
 		result = -EINVAL;
 		goto bail;
 	}
@@ -116,7 +110,8 @@ int ipa_rm_dep_graph_add(struct ipa_rm_dep_graph *graph,
 		goto bail;
 	}
 	resource_index = ipa_rm_dep_get_index(resource->name);
-	if (resource_index == IPA_RM_INDEX_INVALID) {
+	if (resource_index == IPA_RM_INDEX_INVALID ||
+		resource_index >= IPA_RM_RESOURCE_MAX) {
 		result = -EINVAL;
 		goto bail;
 	}

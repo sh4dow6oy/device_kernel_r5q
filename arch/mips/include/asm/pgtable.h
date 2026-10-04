@@ -422,6 +422,8 @@ static inline pte_t pte_mkyoung(pte_t pte)
 	return pte;
 }
 
+#define pte_sw_mkyoung	pte_mkyoung
+
 #ifdef CONFIG_MIPS_HUGE_TLB_SUPPORT
 static inline int pte_huge(pte_t pte)	{ return pte_val(pte) & _PAGE_HUGE; }
 
@@ -534,6 +536,9 @@ static inline int io_remap_pfn_range(struct vm_area_struct *vma,
 
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE
 
+/* We don't have hardware dirty/accessed bits, generic_pmdp_establish is fine.*/
+#define pmdp_establish generic_pmdp_establish
+
 #define has_transparent_hugepage has_transparent_hugepage
 extern int has_transparent_hugepage(void);
 
@@ -552,7 +557,7 @@ static inline pmd_t pmd_mkhuge(pmd_t pmd)
 extern void set_pmd_at(struct mm_struct *mm, unsigned long addr,
 		       pmd_t *pmdp, pmd_t pmd);
 
-#define __HAVE_ARCH_PMD_WRITE
+#define pmd_write pmd_write
 static inline int pmd_write(pmd_t pmd)
 {
 	return !!(pmd_val(pmd) & _PAGE_WRITE);
@@ -662,7 +667,6 @@ static inline pmd_t pmdp_huge_get_and_clear(struct mm_struct *mm,
 
 #endif /* CONFIG_TRANSPARENT_HUGEPAGE */
 
-#include <asm-generic/pgtable.h>
 
 /*
  * uncached accelerated TLB map for video memory access

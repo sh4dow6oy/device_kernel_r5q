@@ -65,10 +65,10 @@ static bool hda_writeable_reg(struct device *dev, unsigned int reg)
 {
 	struct hdac_device *codec = dev_to_hdac_dev(dev);
 	unsigned int verb = get_verb(reg);
+	const unsigned int *v;
 	int i;
 
-	for (i = 0; i < codec->vendor_verbs.used; i++) {
-		unsigned int *v = snd_array_elem(&codec->vendor_verbs, i);
+	snd_array_for_each(&codec->vendor_verbs, i, v) {
 		if (verb == *v)
 			return true;
 	}
@@ -213,7 +213,7 @@ static int hda_reg_read_coef(struct hdac_device *codec, unsigned int reg,
 	err = snd_hdac_exec_verb(codec, verb, 0, NULL);
 	if (err < 0)
 		return err;
-	verb = (reg & ~0xfffff) | (AC_VERB_GET_COEF_INDEX << 8);
+	verb = (reg & ~0xfffff) | (AC_VERB_GET_PROC_COEF << 8);
 	return snd_hdac_exec_verb(codec, verb, 0, val);
 }
 
@@ -231,7 +231,7 @@ static int hda_reg_write_coef(struct hdac_device *codec, unsigned int reg,
 	err = snd_hdac_exec_verb(codec, verb, 0, NULL);
 	if (err < 0)
 		return err;
-	verb = (reg & ~0xfffff) | (AC_VERB_GET_COEF_INDEX << 8) |
+	verb = (reg & ~0xfffff) | (AC_VERB_SET_PROC_COEF << 8) |
 		(val & 0xffff);
 	return snd_hdac_exec_verb(codec, verb, 0, NULL);
 }

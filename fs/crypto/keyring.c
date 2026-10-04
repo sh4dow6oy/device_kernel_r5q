@@ -153,7 +153,7 @@ static struct key *search_fscrypt_keyring(struct key *keyring,
 }
 
 #define FSCRYPT_FS_KEYRING_DESCRIPTION_SIZE	\
-	(CONST_STRLEN("fscrypt-") + FIELD_SIZEOF(struct super_block, s_id))
+	(CONST_STRLEN("fscrypt-") + sizeof_field(struct super_block, s_id))
 
 #define FSCRYPT_MK_DESCRIPTION_SIZE	(2 * FSCRYPT_KEY_IDENTIFIER_SIZE + 1)
 
@@ -670,7 +670,8 @@ int fscrypt_ioctl_add_key(struct file *filp, void __user *_uarg)
 	if (arg.__flags) {
 		if (arg.__flags & ~__FSCRYPT_ADD_KEY_FLAG_HW_WRAPPED)
 			return -EINVAL;
-		if (arg.key_spec.type != FSCRYPT_KEY_SPEC_TYPE_IDENTIFIER)
+		if ((arg.key_spec.type != FSCRYPT_KEY_SPEC_TYPE_IDENTIFIER) &&
+		    (arg.key_spec.type != FSCRYPT_KEY_SPEC_TYPE_DESCRIPTOR))
 			return -EINVAL;
 		secret.is_hw_wrapped = true;
 	}

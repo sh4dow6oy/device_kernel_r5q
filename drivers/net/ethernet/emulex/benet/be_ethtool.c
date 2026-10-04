@@ -27,7 +27,7 @@ struct be_ethtool_stat {
 };
 
 enum {DRVSTAT_TX, DRVSTAT_RX, DRVSTAT};
-#define FIELDINFO(_struct, field) FIELD_SIZEOF(_struct, field), \
+#define FIELDINFO(_struct, field) sizeof_field(_struct, field), \
 					offsetof(_struct, field)
 #define DRVSTAT_TX_INFO(field)	#field, DRVSTAT_TX,\
 					FIELDINFO(struct be_tx_stats, field)
@@ -189,6 +189,7 @@ static const struct be_ethtool_stat et_tx_stats[] = {
 	 * packet data. This counter is applicable only for Lancer adapters.
 	 */
 	{DRVSTAT_TX_INFO(tx_internal_parity_err)},
+	{DRVSTAT_TX_INFO(tx_sge_err)},
 	{DRVSTAT_TX_INFO(tx_bytes)},
 	{DRVSTAT_TX_INFO(tx_pkts)},
 	{DRVSTAT_TX_INFO(tx_vxlan_offload_pkts)},
@@ -574,6 +575,7 @@ static u32 convert_to_et_setting(struct be_adapter *adapter, u32 if_speeds)
 				break;
 			}
 		}
+		/* fall through */
 	case PHY_TYPE_SFP_PLUS_10GB:
 	case PHY_TYPE_XFP_10GB:
 	case PHY_TYPE_SFP_1GB:

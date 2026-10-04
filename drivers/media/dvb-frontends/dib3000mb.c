@@ -17,7 +17,7 @@
  *  Amaury Demol from DiBcom for providing specs and driver
  *  sources, on which this driver (and the dvb-dibusb) are based.
  *
- * see Documentation/dvb/README.dvb-usb for more information
+ * see Documentation/media/dvb-drivers/dvb-usb.rst for more information
  *
  */
 
@@ -30,7 +30,7 @@
 #include <linux/string.h>
 #include <linux/slab.h>
 
-#include "dvb_frontend.h"
+#include <media/dvb_frontend.h>
 
 #include "dib3000.h"
 #include "dib3000mb_priv.h"
@@ -55,7 +55,7 @@ MODULE_PARM_DESC(debug, "set debugging level (1=info,2=xfer,4=setfe,8=getfe (|-a
 static int dib3000_read_reg(struct dib3000_state *state, u16 reg)
 {
 	u8 wb[] = { ((reg >> 8) | 0x80) & 0xff, reg & 0xff };
-	u8 rb[2];
+	u8 rb[2] = {};
 	struct i2c_msg msg[] = {
 		{ .addr = state->config.demod_address, .flags = 0,        .buf = wb, .len = 2 },
 		{ .addr = state->config.demod_address, .flags = I2C_M_RD, .buf = rb, .len = 2 },
@@ -786,9 +786,9 @@ static const struct dvb_frontend_ops dib3000mb_ops = {
 	.delsys = { SYS_DVBT },
 	.info = {
 		.name			= "DiBcom 3000M-B DVB-T",
-		.frequency_min		= 44250000,
-		.frequency_max		= 867250000,
-		.frequency_stepsize	= 62500,
+		.frequency_min_hz	=  44250 * kHz,
+		.frequency_max_hz	= 867250 * kHz,
+		.frequency_stepsize_hz	= 62500,
 		.caps = FE_CAN_INVERSION_AUTO |
 				FE_CAN_FEC_1_2 | FE_CAN_FEC_2_3 | FE_CAN_FEC_3_4 |
 				FE_CAN_FEC_5_6 | FE_CAN_FEC_7_8 | FE_CAN_FEC_AUTO |

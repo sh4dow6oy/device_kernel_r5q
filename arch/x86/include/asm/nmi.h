@@ -41,7 +41,6 @@ struct nmiaction {
 	struct list_head	list;
 	nmi_handler_t		handler;
 	u64			max_duration;
-	struct irq_work		irq_work;
 	unsigned long		flags;
 	const char		*name;
 };
@@ -59,6 +58,8 @@ struct nmiaction {
 int __register_nmi_handler(unsigned int, struct nmiaction *);
 
 void unregister_nmi_handler(unsigned int, const char *);
+
+void set_emergency_nmi_handler(unsigned int type, nmi_handler_t handler);
 
 void stop_nmi(void);
 void restart_nmi(void);

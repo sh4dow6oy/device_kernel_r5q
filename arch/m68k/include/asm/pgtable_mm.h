@@ -55,12 +55,12 @@
  */
 #ifdef CONFIG_SUN3
 #define PTRS_PER_PTE   16
-#define __PAGETABLE_PMD_FOLDED
+#define __PAGETABLE_PMD_FOLDED 1
 #define PTRS_PER_PMD   1
 #define PTRS_PER_PGD   2048
 #elif defined(CONFIG_COLDFIRE)
 #define PTRS_PER_PTE	512
-#define __PAGETABLE_PMD_FOLDED
+#define __PAGETABLE_PMD_FOLDED 1
 #define PTRS_PER_PMD	1
 #define PTRS_PER_PGD	1024
 #else
@@ -170,7 +170,6 @@ static inline void update_mmu_cache(struct vm_area_struct *vma,
 	    : (prot)))
 
 #endif /* CONFIG_COLDFIRE */
-#include <asm-generic/pgtable.h>
 #endif /* !__ASSEMBLY__ */
 
 /*

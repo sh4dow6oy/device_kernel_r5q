@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * Copyright (c) 2001-2002 by David Brownell
  *
@@ -24,6 +25,7 @@
 #include <linux/rwsem.h>
 #include <linux/interrupt.h>
 #include <linux/idr.h>
+#include <linux/android_kabi.h>
 
 #define MAX_TOPO_LEVEL		6
 
@@ -65,7 +67,6 @@
 
 struct giveback_urb_bh {
 	bool running;
-	bool high_prio;
 	spinlock_t lock;
 	struct list_head  head;
 	struct tasklet_struct bh;
@@ -103,8 +104,7 @@ struct usb_hcd {
 	 * other external phys should be software-transparent
 	 */
 	struct usb_phy		*usb_phy;
-	struct usb_phy		*usb3_phy;
-	struct phy		*phy;
+	struct usb_phy_roothub	*phy_roothub;
 
 	/* Flags that need to be manipulated atomically because they can
 	 * change while the host controller is running.  Always use
@@ -151,7 +151,12 @@ struct usb_hcd {
 	unsigned		rh_pollable:1;	/* may we poll the root hub? */
 	unsigned		msix_enabled:1;	/* driver has MSI-X enabled? */
 	unsigned		msi_enabled:1;	/* driver has MSI enabled? */
-	unsigned		remove_phy:1;	/* auto-remove USB phy */
+	/*
+	 * do not manage the PHY state in the HCD core, instead let the driver
+	 * handle this (for example if the PHY can only be turned on after a
+	 * specific event)
+	 */
+	unsigned		skip_phy_initialization:1;
 
 	/* The next flag is a stopgap, to be removed when all the HCDs
 	 * support the new root-hub polling mechanism. */
@@ -213,6 +218,11 @@ struct usb_hcd {
 	 * (ohci 32, uhci 1024, ehci 256/512/1024).
 	 */
 
+	ANDROID_KABI_RESERVE(1);
+	ANDROID_KABI_RESERVE(2);
+	ANDROID_KABI_RESERVE(3);
+	ANDROID_KABI_RESERVE(4);
+
 	/* The HC driver's private data is stored at the end of
 	 * this structure.
 	 */
@@ -256,6 +266,7 @@ struct hc_driver {
 #define	HCD_USB25	0x0030		/* Wireless USB 1.0 (USB 2.5)*/
 #define	HCD_USB3	0x0040		/* USB 3.0 */
 #define	HCD_USB31	0x0050		/* USB 3.1 */
+#define	HCD_USB32	0x0060		/* USB 3.2 */
 #define	HCD_MASK	0x0070
 #define	HCD_BH		0x0100		/* URB complete in BH context */
 
@@ -317,6 +328,7 @@ struct hc_driver {
 	int	(*bus_suspend)(struct usb_hcd *);
 	int	(*bus_resume)(struct usb_hcd *);
 	int	(*start_port_reset)(struct usb_hcd *, unsigned port_num);
+	unsigned long	(*get_resuming_ports)(struct usb_hcd *);
 
 		/* force handover of high-speed port to full-speed companion */
 	void	(*relinquish_port)(struct usb_hcd *, int);
@@ -373,8 +385,9 @@ struct hc_driver {
 		 * or bandwidth constraints.
 		 */
 	void	(*reset_bandwidth)(struct usb_hcd *, struct usb_device *);
-		/* Returns the hardware-chosen device address */
-	int	(*address_device)(struct usb_hcd *, struct usb_device *udev);
+		/* Set the hardware-chosen device address */
+	int	(*address_device)(struct usb_hcd *, struct usb_device *udev,
+				  unsigned int timeout_ms);
 		/* prepares the hardware to send commands to the device */
 	int	(*enable_device)(struct usb_hcd *, struct usb_device *udev);
 		/* Notifies the HCD after a hub descriptor is fetched.
@@ -412,10 +425,6 @@ struct hc_driver {
 	int (*get_core_id)(struct usb_hcd *hcd);
 	int (*stop_endpoint)(struct usb_hcd *hcd, struct usb_device *udev,
 			struct usb_host_endpoint *ep);
-	void    (*log_urb)(struct urb *urb, char *event, unsigned int extra);
-	void    (*dump_regs)(struct usb_hcd *);
-	void    (*set_autosuspend_delay)(struct usb_device *);
-	void    (*reset_sof_bug_handler)(struct usb_hcd *hcd, u32 val);
 };
 
 static inline int hcd_giveback_urb_in_bh(struct usb_hcd *hcd)
@@ -495,9 +504,7 @@ extern void usb_hcd_pci_shutdown(struct pci_dev *dev);
 
 extern int usb_hcd_amd_remote_wakeup_quirk(struct pci_dev *dev);
 
-#ifdef CONFIG_PM
 extern const struct dev_pm_ops usb_hcd_pci_pm_ops;
-#endif
 #endif /* CONFIG_USB_PCI */
 
 /* pci-ish (pdev null is ok) buffer alloc/mapping support */
@@ -570,6 +577,11 @@ struct usb_tt {
 	spinlock_t		lock;
 	struct list_head	clear_list;	/* of usb_tt_clear */
 	struct work_struct	clear_work;
+
+	ANDROID_KABI_RESERVE(1);
+	ANDROID_KABI_RESERVE(2);
+	ANDROID_KABI_RESERVE(3);
+	ANDROID_KABI_RESERVE(4);
 };
 
 struct usb_tt_clear {

@@ -21,7 +21,7 @@
 #include <linux/ioport.h>
 #include <asm/diag.h>
 #include <asm/page.h>
-#include <asm/pgtable.h>
+#include <linux/pgtable.h>
 #include <asm/ebcdic.h>
 #include <asm/errno.h>
 #include <asm/extmem.h>
@@ -103,7 +103,7 @@ static int scode_set;
 static int
 dcss_set_subcodes(void)
 {
-	char *name = kmalloc(8 * sizeof(char), GFP_KERNEL | GFP_DMA);
+	char *name = kmalloc(8, GFP_KERNEL | GFP_DMA);
 	unsigned long rx, ry;
 	int rc;
 

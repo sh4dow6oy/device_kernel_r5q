@@ -103,6 +103,7 @@ static const struct camif_fmt camif_formats[] = {
 
 /**
  * s3c_camif_find_format() - lookup camif color format by fourcc or an index
+ * @vp: video path (DMA) description (codec/preview)
  * @pixelformat: fourcc to match, ignored if null
  * @index: index to the camif_formats array, ignored if negative
  */
@@ -540,10 +541,19 @@ static int s3c_camif_remove(struct platform_device *pdev)
 static int s3c_camif_runtime_resume(struct device *dev)
 {
 	struct camif_dev *camif = dev_get_drvdata(dev);
+	int ret;
 
-	clk_enable(camif->clock[CLK_GATE]);
+	ret = clk_enable(camif->clock[CLK_GATE]);
+	if (ret)
+		return ret;
+
 	/* null op on s3c244x */
-	clk_enable(camif->clock[CLK_CAM]);
+	ret = clk_enable(camif->clock[CLK_CAM]);
+	if (ret) {
+		clk_disable(camif->clock[CLK_GATE]);
+		return ret;
+	}
+
 	return 0;
 }
 

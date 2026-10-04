@@ -65,9 +65,9 @@ report:
 	nd->handler(nd);
 }
 
-static void ncsi_channel_monitor(unsigned long data)
+static void ncsi_channel_monitor(struct timer_list *t)
 {
-	struct ncsi_channel *nc = (struct ncsi_channel *)data;
+	struct ncsi_channel *nc = from_timer(nc, t, monitor.timer);
 	struct ncsi_package *np = nc->package;
 	struct ncsi_dev_priv *ndp = np->ndp;
 	struct ncsi_channel_mode *ncm;
@@ -200,8 +200,7 @@ struct ncsi_channel *ncsi_add_channel(struct ncsi_package *np, unsigned char id)
 	nc->package = np;
 	nc->state = NCSI_CHANNEL_INACTIVE;
 	nc->monitor.enabled = false;
-	setup_timer(&nc->monitor.timer,
-		    ncsi_channel_monitor, (unsigned long)nc);
+	timer_setup(&nc->monitor.timer, ncsi_channel_monitor, 0);
 	spin_lock_init(&nc->lock);
 	INIT_LIST_HEAD(&nc->link);
 	for (index = 0; index < NCSI_CAP_MAX; index++)
@@ -409,9 +408,9 @@ struct ncsi_dev *ncsi_find_dev(struct net_device *dev)
 	return NULL;
 }
 
-static void ncsi_request_timeout(unsigned long data)
+static void ncsi_request_timeout(struct timer_list *t)
 {
-	struct ncsi_request *nr = (struct ncsi_request *)data;
+	struct ncsi_request *nr = from_timer(nr, t, timer);
 	struct ncsi_dev_priv *ndp = nr->ndp;
 	unsigned long flags;
 
@@ -795,8 +794,8 @@ static void ncsi_configure_channel(struct ncsi_dev_priv *ndp)
 		}
 		break;
 	case ncsi_dev_state_config_done:
-		netdev_printk(KERN_DEBUG, ndp->ndev.dev,
-			      "NCSI: channel %u config done\n", nc->id);
+		netdev_dbg(ndp->ndev.dev, "NCSI: channel %u config done\n",
+			   nc->id);
 		spin_lock_irqsave(&nc->lock, flags);
 		if (nc->reconfigure_needed) {
 			/* This channel's configuration has been updated
@@ -811,8 +810,7 @@ static void ncsi_configure_channel(struct ncsi_dev_priv *ndp)
 			list_add_tail_rcu(&nc->link, &ndp->channel_queue);
 			spin_unlock_irqrestore(&ndp->lock, flags);
 
-			netdev_printk(KERN_DEBUG, dev,
-				      "Dirty NCSI channel state reset\n");
+			netdev_dbg(dev, "Dirty NCSI channel state reset\n");
 			ncsi_process_next_channel(ndp);
 			break;
 		}
@@ -823,9 +821,9 @@ static void ncsi_configure_channel(struct ncsi_dev_priv *ndp)
 		} else {
 			hot_nc = NULL;
 			nc->state = NCSI_CHANNEL_INACTIVE;
-			netdev_warn(ndp->ndev.dev,
-				    "NCSI: channel %u link down after config\n",
-				    nc->id);
+			netdev_dbg(ndp->ndev.dev,
+				   "NCSI: channel %u link down after config\n",
+				   nc->id);
 		}
 		spin_unlock_irqrestore(&nc->lock, flags);
 
@@ -915,9 +913,9 @@ static int ncsi_choose_active_channel(struct ncsi_dev_priv *ndp)
 	}
 
 	ncm = &found->modes[NCSI_MODE_LINK];
-	netdev_printk(KERN_DEBUG, ndp->ndev.dev,
-		      "NCSI: Channel %u added to queue (link %s)\n",
-		      found->id, ncm->data[2] & 0x1 ? "up" : "down");
+	netdev_dbg(ndp->ndev.dev,
+		   "NCSI: Channel %u added to queue (link %s)\n",
+		   found->id, ncm->data[2] & 0x1 ? "up" : "down");
 
 out:
 	spin_lock_irqsave(&ndp->lock, flags);
@@ -1206,14 +1204,14 @@ int ncsi_process_next_channel(struct ncsi_dev_priv *ndp)
 	switch (old_state) {
 	case NCSI_CHANNEL_INACTIVE:
 		ndp->ndev.state = ncsi_dev_state_config;
-		netdev_info(ndp->ndev.dev, "NCSI: configuring channel %u\n",
-			    nc->id);
+		netdev_dbg(ndp->ndev.dev, "NCSI: configuring channel %u\n",
+	                   nc->id);
 		ncsi_configure_channel(ndp);
 		break;
 	case NCSI_CHANNEL_ACTIVE:
 		ndp->ndev.state = ncsi_dev_state_suspend;
-		netdev_info(ndp->ndev.dev, "NCSI: suspending channel %u\n",
-			    nc->id);
+		netdev_dbg(ndp->ndev.dev, "NCSI: suspending channel %u\n",
+			   nc->id);
 		ncsi_suspend_channel(ndp);
 		break;
 	default:
@@ -1233,8 +1231,6 @@ out:
 		return ncsi_choose_active_channel(ndp);
 	}
 
-	netdev_printk(KERN_DEBUG, ndp->ndev.dev,
-		      "NCSI: No more channels to process\n");
 	ncsi_report_link(ndp, false);
 	return -ENODEV;
 }
@@ -1325,9 +1321,9 @@ static int ncsi_kick_channels(struct ncsi_dev_priv *ndp)
 				if ((ndp->ndev.state & 0xff00) ==
 						ncsi_dev_state_config ||
 						!list_empty(&nc->link)) {
-					netdev_printk(KERN_DEBUG, nd->dev,
-						      "NCSI: channel %p marked dirty\n",
-						      nc);
+					netdev_dbg(nd->dev,
+						   "NCSI: channel %p marked dirty\n",
+						   nc);
 					nc->reconfigure_needed = true;
 				}
 				spin_unlock_irqrestore(&nc->lock, flags);
@@ -1345,8 +1341,7 @@ static int ncsi_kick_channels(struct ncsi_dev_priv *ndp)
 			list_add_tail_rcu(&nc->link, &ndp->channel_queue);
 			spin_unlock_irqrestore(&ndp->lock, flags);
 
-			netdev_printk(KERN_DEBUG, nd->dev,
-				      "NCSI: kicked channel %p\n", nc);
+			netdev_dbg(nd->dev, "NCSI: kicked channel %p\n", nc);
 			n++;
 		}
 	}
@@ -1377,8 +1372,8 @@ int ncsi_vlan_rx_add_vid(struct net_device *dev, __be16 proto, u16 vid)
 	list_for_each_entry_rcu(vlan, &ndp->vlan_vids, list) {
 		n_vids++;
 		if (vlan->vid == vid) {
-			netdev_printk(KERN_DEBUG, dev,
-				      "NCSI: vid %u already registered\n", vid);
+			netdev_dbg(dev, "NCSI: vid %u already registered\n",
+				   vid);
 			return 0;
 		}
 	}
@@ -1397,7 +1392,7 @@ int ncsi_vlan_rx_add_vid(struct net_device *dev, __be16 proto, u16 vid)
 	vlan->vid = vid;
 	list_add_rcu(&vlan->list, &ndp->vlan_vids);
 
-	netdev_printk(KERN_DEBUG, dev, "NCSI: Added new vid %u\n", vid);
+	netdev_dbg(dev, "NCSI: Added new vid %u\n", vid);
 
 	found = ncsi_kick_channels(ndp) != 0;
 
@@ -1426,8 +1421,7 @@ int ncsi_vlan_rx_kill_vid(struct net_device *dev, __be16 proto, u16 vid)
 	/* Remove the VLAN id from our internal list */
 	list_for_each_entry_safe(vlan, tmp, &ndp->vlan_vids, list)
 		if (vlan->vid == vid) {
-			netdev_printk(KERN_DEBUG, dev,
-				      "NCSI: vid %u found, removing\n", vid);
+			netdev_dbg(dev, "NCSI: vid %u found, removing\n", vid);
 			list_del_rcu(&vlan->list);
 			found = true;
 			kfree(vlan);
@@ -1478,9 +1472,7 @@ struct ncsi_dev *ncsi_register_dev(struct net_device *dev,
 	for (i = 0; i < ARRAY_SIZE(ndp->requests); i++) {
 		ndp->requests[i].id = i;
 		ndp->requests[i].ndp = ndp;
-		setup_timer(&ndp->requests[i].timer,
-			    ncsi_request_timeout,
-			    (unsigned long)&ndp->requests[i]);
+		timer_setup(&ndp->requests[i].timer, ncsi_request_timeout, 0);
 	}
 
 	spin_lock_irqsave(&ncsi_dev_lock, flags);
@@ -1497,9 +1489,6 @@ struct ncsi_dev *ncsi_register_dev(struct net_device *dev,
 	ndp->ptype.func = ncsi_rcv_rsp;
 	ndp->ptype.dev = dev;
 	dev_add_pack(&ndp->ptype);
-
-	/* Set up generic netlink interface */
-	ncsi_init_netlink(dev);
 
 	return nd;
 }
@@ -1556,7 +1545,7 @@ void ncsi_stop_dev(struct ncsi_dev *nd)
 		}
 	}
 
-	netdev_printk(KERN_DEBUG, ndp->ndev.dev, "NCSI: Stopping device\n");
+	netdev_dbg(ndp->ndev.dev, "NCSI: Stopping device\n");
 	ncsi_report_link(ndp, true);
 }
 EXPORT_SYMBOL_GPL(ncsi_stop_dev);
@@ -1579,8 +1568,6 @@ void ncsi_unregister_dev(struct ncsi_dev *nd)
 		unregister_inet6addr_notifier(&ncsi_inet6addr_notifier);
 #endif
 	spin_unlock_irqrestore(&ncsi_dev_lock, flags);
-
-	ncsi_unregister_netlink(nd->dev);
 
 	kfree(ndp);
 }

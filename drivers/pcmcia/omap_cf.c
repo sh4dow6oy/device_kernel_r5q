@@ -80,9 +80,9 @@ static int omap_cf_ss_init(struct pcmcia_socket *s)
 }
 
 /* the timer is primarily to kick this socket's pccardd */
-static void omap_cf_timer(unsigned long _cf)
+static void omap_cf_timer(struct timer_list *t)
 {
-	struct omap_cf_socket	*cf = (void *) _cf;
+	struct omap_cf_socket	*cf = from_timer(cf, t, timer);
 	unsigned		present = omap_cf_present();
 
 	if (present != cf->present) {
@@ -102,7 +102,9 @@ static void omap_cf_timer(unsigned long _cf)
  */
 static irqreturn_t omap_cf_irq(int irq, void *_cf)
 {
-	omap_cf_timer((unsigned long)_cf);
+	struct omap_cf_socket *cf = (struct omap_cf_socket *)_cf;
+
+	omap_cf_timer(&cf->timer);
 	return IRQ_HANDLED;
 }
 
@@ -220,7 +222,7 @@ static int __init omap_cf_probe(struct platform_device *pdev)
 	cf = kzalloc(sizeof *cf, GFP_KERNEL);
 	if (!cf)
 		return -ENOMEM;
-	setup_timer(&cf->timer, omap_cf_timer, (unsigned long)cf);
+	timer_setup(&cf->timer, omap_cf_timer, 0);
 
 	cf->pdev = pdev;
 	platform_set_drvdata(pdev, cf);
@@ -329,7 +331,13 @@ static int __exit omap_cf_remove(struct platform_device *pdev)
 	return 0;
 }
 
-static struct platform_driver omap_cf_driver = {
+/*
+ * omap_cf_remove() lives in .exit.text. For drivers registered via
+ * platform_driver_probe() this is ok because they cannot get unbound at
+ * runtime. So mark the driver struct with __refdata to prevent modpost
+ * triggering a section mismatch warning.
+ */
+static struct platform_driver omap_cf_driver __refdata = {
 	.driver = {
 		.name	= (char *) driver_name,
 	},

@@ -24,13 +24,14 @@
 #include <linux/string.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
+#include <linux/i2c.h>
 #include <linux/init.h>
 #include <linux/slab.h>
 #include <linux/device.h>
 #include <linux/fs.h>
 #include <linux/cdev.h>
 #include <linux/mutex.h>
-#include "dvbdev.h"
+#include <media/dvbdev.h>
 
 /* Due to enum tuner_pad_index */
 #include <media/tuner.h>
@@ -95,10 +96,15 @@ static DECLARE_RWSEM(minor_rwsem);
 static int dvb_device_open(struct inode *inode, struct file *file)
 {
 	struct dvb_device *dvbdev;
+	unsigned int minor = iminor(inode);
+
+	if (minor >= MAX_DVB_MINORS)
+		return -ENODEV;
 
 	mutex_lock(&dvbdev_mutex);
 	down_read(&minor_rwsem);
-	dvbdev = dvb_minors[iminor(inode)];
+
+	dvbdev = dvb_minors[minor];
 
 	if (dvbdev && dvbdev->fops) {
 		int err = 0;
@@ -449,8 +455,10 @@ static int dvb_register_media_device(struct dvb_device *dvbdev,
 	if (!dvbdev->entity)
 		return 0;
 
-	link = media_create_intf_link(dvbdev->entity, &dvbdev->intf_devnode->intf,
-				      MEDIA_LNK_FL_ENABLED);
+	link = media_create_intf_link(dvbdev->entity,
+				      &dvbdev->intf_devnode->intf,
+				      MEDIA_LNK_FL_ENABLED |
+				      MEDIA_LNK_FL_IMMUTABLE);
 	if (!link)
 		return -ENOMEM;
 #endif
@@ -536,7 +544,10 @@ int dvb_register_device(struct dvb_adapter *adap, struct dvb_device **pdvbdev,
 	for (minor = 0; minor < MAX_DVB_MINORS; minor++)
 		if (dvb_minors[minor] == NULL)
 			break;
-	if (minor == MAX_DVB_MINORS) {
+#else
+	minor = nums2minor(adap->num, type, id);
+#endif
+	if (minor >= MAX_DVB_MINORS) {
 		if (new_node) {
 			list_del (&new_node->list_head);
 			kfree(dvbdevfops);
@@ -549,9 +560,7 @@ int dvb_register_device(struct dvb_adapter *adap, struct dvb_device **pdvbdev,
 		mutex_unlock(&dvbdev_register_lock);
 		return -EINVAL;
 	}
-#else
-	minor = nums2minor(adap->num, type, id);
-#endif
+
 	dvbdev->minor = minor;
 	dvb_minors[minor] = dvb_device_get(dvbdev);
 	up_write(&minor_rwsem);
@@ -665,7 +674,8 @@ static int dvb_create_io_intf_links(struct dvb_adapter *adap,
 			if (strncmp(entity->name, name, strlen(name)))
 				continue;
 			link = media_create_intf_link(entity, intf,
-						      MEDIA_LNK_FL_ENABLED);
+						      MEDIA_LNK_FL_ENABLED |
+						      MEDIA_LNK_FL_IMMUTABLE);
 			if (!link)
 				return -ENOMEM;
 		}
@@ -820,14 +830,16 @@ int dvb_create_media_graph(struct dvb_adapter *adap,
 	media_device_for_each_intf(intf, mdev) {
 		if (intf->type == MEDIA_INTF_T_DVB_CA && ca) {
 			link = media_create_intf_link(ca, intf,
-						      MEDIA_LNK_FL_ENABLED);
+						      MEDIA_LNK_FL_ENABLED |
+						      MEDIA_LNK_FL_IMMUTABLE);
 			if (!link)
 				return -ENOMEM;
 		}
 
 		if (intf->type == MEDIA_INTF_T_DVB_FE && tuner) {
 			link = media_create_intf_link(tuner, intf,
-						      MEDIA_LNK_FL_ENABLED);
+						      MEDIA_LNK_FL_ENABLED |
+						      MEDIA_LNK_FL_IMMUTABLE);
 			if (!link)
 				return -ENOMEM;
 		}
@@ -839,7 +851,8 @@ int dvb_create_media_graph(struct dvb_adapter *adap,
 		 */
 		if (intf->type == MEDIA_INTF_T_DVB_DVR && demux) {
 			link = media_create_intf_link(demux, intf,
-						      MEDIA_LNK_FL_ENABLED);
+						      MEDIA_LNK_FL_ENABLED |
+						      MEDIA_LNK_FL_IMMUTABLE);
 			if (!link)
 				return -ENOMEM;
 		}
@@ -925,6 +938,10 @@ int dvb_register_adapter(struct dvb_adapter *adap, const char *name,
 	adap->mfe_dvbdev = NULL;
 	mutex_init (&adap->mfe_lock);
 
+#ifdef CONFIG_MEDIA_CONTROLLER_DVB
+	mutex_init(&adap->mdev_lock);
+#endif
+
 	list_add_tail (&adap->list_head, &dvb_adapter_list);
 
 	mutex_unlock(&dvbdev_register_lock);
@@ -1007,6 +1024,55 @@ out:
 	kfree(mbuf);
 	return err;
 }
+
+#if IS_ENABLED(CONFIG_I2C)
+struct i2c_client *dvb_module_probe(const char *module_name,
+				    const char *name,
+				    struct i2c_adapter *adap,
+				    unsigned char addr,
+				    void *platform_data)
+{
+	struct i2c_client *client;
+	struct i2c_board_info *board_info;
+
+	board_info = kzalloc(sizeof(*board_info), GFP_KERNEL);
+	if (!board_info)
+		return NULL;
+
+	if (name)
+		strlcpy(board_info->type, name, I2C_NAME_SIZE);
+	else
+		strlcpy(board_info->type, module_name, I2C_NAME_SIZE);
+
+	board_info->addr = addr;
+	board_info->platform_data = platform_data;
+	request_module(module_name);
+	client = i2c_new_device(adap, board_info);
+	if (client == NULL || client->dev.driver == NULL) {
+		kfree(board_info);
+		return NULL;
+	}
+
+	if (!try_module_get(client->dev.driver->owner)) {
+		i2c_unregister_device(client);
+		client = NULL;
+	}
+
+	kfree(board_info);
+	return client;
+}
+EXPORT_SYMBOL_GPL(dvb_module_probe);
+
+void dvb_module_release(struct i2c_client *client)
+{
+	if (!client)
+		return;
+
+	module_put(client->dev.driver->owner);
+	i2c_unregister_device(client);
+}
+EXPORT_SYMBOL_GPL(dvb_module_release);
+#endif
 
 static int dvb_uevent(struct device *dev, struct kobj_uevent_env *env)
 {

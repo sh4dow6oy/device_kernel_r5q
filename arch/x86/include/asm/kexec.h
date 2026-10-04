@@ -219,8 +219,11 @@ extern void arch_kexec_pre_free_pages(void *vaddr, unsigned int pages);
 #define arch_kexec_pre_free_pages arch_kexec_pre_free_pages
 
 #ifdef CONFIG_KEXEC_FILE
-int arch_kexec_apply_relocations_add(const Elf_Ehdr *ehdr,
-				     Elf_Shdr *sechdrs, unsigned int relsec);
+struct purgatory_info;
+int arch_kexec_apply_relocations_add(struct purgatory_info *pi,
+				     Elf_Shdr *section,
+				     const Elf_Shdr *relsec,
+				     const Elf_Shdr *symtab);
 #define arch_kexec_apply_relocations_add arch_kexec_apply_relocations_add
 #endif
 #endif

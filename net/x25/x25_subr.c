@@ -45,6 +45,7 @@ void x25_clear_queues(struct sock *sk)
 	skb_queue_purge(&x25->interrupt_in_queue);
 	skb_queue_purge(&x25->interrupt_out_queue);
 	skb_queue_purge(&x25->fragment_queue);
+	x25->fraglen = 0;
 }
 
 
@@ -335,8 +336,7 @@ int x25_decode(struct sock *sk, struct sk_buff *skb, int *ns, int *nr, int *q,
 		}
 	}
 
-	pr_debug("invalid PLP frame %02X %02X %02X\n",
-	       frame[0], frame[1], frame[2]);
+	pr_debug("invalid PLP frame %3ph\n", frame);
 
 	return X25_ILLEGAL;
 }
@@ -388,4 +388,3 @@ void x25_check_rbuf(struct sock *sk)
 		x25_stop_timer(sk);
 	}
 }
-

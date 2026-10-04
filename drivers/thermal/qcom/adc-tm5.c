@@ -1,15 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2012-2020, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
  */
 
 #include <linux/module.h>
@@ -24,9 +15,6 @@
 #include <linux/iio/consumer.h>
 #include "adc-tm.h"
 #include "../thermal_core.h"
-#ifdef CONFIG_SEC_EXT_THERMAL_MONITOR
-#include <linux/wakelock.h>
-#endif /* CONFIG_SEC_EXT_THERMAL_MONITOR */
 
 #define ADC_TM_STATUS2				0x09
 #define ADC_TM_STATUS_LOW			0x0a
@@ -90,12 +78,6 @@ static struct adc_tm_reverse_scale_fn adc_tm_rscale_fn[] = {
 	[SCALE_R_ABSOLUTE] = {adc_tm_absolute_rthr},
 };
 
-#ifdef CONFIG_SEC_EXT_THERMAL_MONITOR
-#define VDD_REF_MV	1875
-static struct wake_lock adctm_wakelock;
-static int wlock_init = 0;
-#endif /* CONFIG_SEC_EXT_THERMAL_MONITOR */
-
 static int adc_tm5_get_temp(struct adc_tm_sensor *sensor, int *temp)
 {
 	int ret, milli_celsius;
@@ -107,11 +89,6 @@ static int adc_tm5_get_temp(struct adc_tm_sensor *sensor, int *temp)
 	if (ret < 0)
 		return ret;
 
-#ifdef CONFIG_SEC_EXT_THERMAL_MONITOR 
-	if (sensor->adc_ch == 0x4d || sensor->adc_ch == 0x52)
-		*temp = sec_bat_convert_adc_to_temp(sensor->adc_ch, milli_celsius);
-	else
-#endif /* CONFIG_SEC_EXT_THERMAL_MONITOR */
 	*temp = milli_celsius;
 
 	return 0;
@@ -311,9 +288,7 @@ static int32_t adc_tm5_thr_update(struct adc_tm_sensor *sensor,
 	uint16_t reg_low_thr_lsb, reg_high_thr_lsb;
 	uint32_t scale_type = 0, mask = 0, btm_chan_idx = 0;
 	struct adc_tm_config tm_config;
-	struct adc_tm_chip *chip;
-
-	chip = sensor->chip;
+	struct adc_tm_chip *chip = NULL;
 
 	ret = adc_tm5_get_btm_idx(chip,
 		sensor->btm_ch, &btm_chan_idx);
@@ -321,6 +296,8 @@ static int32_t adc_tm5_thr_update(struct adc_tm_sensor *sensor,
 		pr_err("Invalid btm channel idx\n");
 		return ret;
 	}
+
+	chip = sensor->chip;
 
 	tm_config.high_thr_voltage = (int64_t)high_thr;
 	tm_config.low_thr_voltage = (int64_t)low_thr;
@@ -444,16 +421,14 @@ static int32_t adc_tm5_manage_thresholds(struct adc_tm_sensor *sensor)
 	return 0;
 }
 
-void notify_adc_tm_fn(struct work_struct *work)
+/* Used to notify non-thermal clients of threshold crossing */
+void notify_adc_tm5_fn(struct adc_tm_sensor *adc_tm)
 {
 	struct adc_tm_client_info *client_info = NULL;
 	struct adc_tm_chip *chip;
 	struct list_head *thr_list;
 	uint32_t btm_chan_num = 0, btm_chan_idx = 0;
 	int ret = 0;
-
-	struct adc_tm_sensor *adc_tm = container_of(work,
-		struct adc_tm_sensor, work);
 
 	chip = adc_tm->chip;
 
@@ -536,7 +511,8 @@ void notify_adc_tm_fn(struct work_struct *work)
 	}
 }
 
-int32_t adc_tm5_channel_measure(struct adc_tm_chip *chip,
+/* Used by non-thermal clients to configure an ADC_TM channel */
+static int32_t adc_tm_5_channel_measure(struct adc_tm_chip *chip,
 					struct adc_tm_param *param)
 
 {
@@ -589,9 +565,9 @@ int32_t adc_tm5_channel_measure(struct adc_tm_chip *chip,
 	/* enable low/high irqs */
 	list_for_each_entry(client_info,
 			&chip->sensor[dt_index].thr_list, list) {
-		if (client_info->high_thr_set == true)
+		if (client_info->high_thr_set)
 			high_thr_set = true;
-		if (client_info->low_thr_set == true)
+		if (client_info->low_thr_set)
 			low_thr_set = true;
 	}
 
@@ -638,9 +614,9 @@ fail_unlock:
 	mutex_unlock(&chip->adc_mutex_lock);
 	return ret;
 }
-EXPORT_SYMBOL(adc_tm5_channel_measure);
 
-int32_t adc_tm5_disable_chan_meas(struct adc_tm_chip *chip,
+/* Used by non-thermal clients to release an ADC_TM channel */
+static int32_t adc_tm_5_disable_chan_meas(struct adc_tm_chip *chip,
 					struct adc_tm_param *param)
 {
 	int ret = 0, i = 0;
@@ -698,7 +674,6 @@ fail:
 	spin_unlock_irqrestore(&chip->adc_tm_lock, flags);
 	return ret;
 }
-EXPORT_SYMBOL(adc_tm5_disable_chan_meas);
 
 static int adc_tm5_set_mode(struct adc_tm_sensor *sensor,
 			      enum thermal_device_mode mode)
@@ -787,9 +762,6 @@ static int adc_tm5_set_trip_temp(struct adc_tm_sensor *sensor,
 	int ret;
 	uint32_t btm_chan = 0, btm_chan_idx = 0, mask = 0;
 	unsigned long flags;
-#ifdef CONFIG_SEC_EXT_THERMAL_MONITOR
-	int64_t remap_high_thr_voltage = 0, remap_low_thr_voltage = 0;
-#endif /* CONFIG_SEC_EXT_THERMAL_MONITOR */
 
 	if (!sensor)
 		return -EINVAL;
@@ -813,44 +785,6 @@ static int adc_tm5_set_trip_temp(struct adc_tm_sensor *sensor,
 	pr_debug("requested a low temp- %d and high temp- %d\n",
 			tm_config.low_thr_temp, tm_config.high_thr_temp);
 	adc_tm_scale_therm_voltage_100k(&tm_config, chip->data);
-
-#ifdef CONFIG_SEC_EXT_THERMAL_MONITOR
-	if (tm_config.channel == 0x4d || tm_config.channel == 0x52) {
-		pr_debug("%s: adc_ch(0x%x) low_temp %d, high_temp %d\n",
-			__func__, sensor->adc_ch, low_temp, high_temp);
-
-		/* NOTE: Remap trip threshold voltage for adc-tm interrupt
-		 * if remap_voltage is nonzero, then reset threshold voltage. 
-		 * Otherwise, it means sec_adc driver is not ready, so skip it.
-		 */
-		if (high_temp != INT_MAX) {
-			remap_low_thr_voltage =
-				sec_bat_get_thr_voltage(sensor->adc_ch, (high_temp/100));
-
-			if (remap_low_thr_voltage) {
-				pr_debug("%s: adc_ch(0x%x) high_temp %d - voltage %d\n",
-					__func__, sensor->adc_ch, high_temp, remap_low_thr_voltage);
-				tm_config.low_thr_voltage =
-					remap_low_thr_voltage * chip->data->full_scale_code_volt;
-				tm_config.low_thr_voltage =
-					div64_s64(tm_config.low_thr_voltage, VDD_REF_MV);
-			}
-		}
-		if (low_temp != INT_MIN) {
-			remap_high_thr_voltage =
-				sec_bat_get_thr_voltage(sensor->adc_ch, (low_temp/100)) + 1;
-
-			if (remap_high_thr_voltage) {
-				pr_debug("%s: adc_ch(0x%x) low_temp %d - voltage %d\n",
-					__func__, sensor->adc_ch, low_temp, remap_high_thr_voltage);
-				tm_config.high_thr_voltage =
-					remap_high_thr_voltage * chip->data->full_scale_code_volt;
-		 		tm_config.high_thr_voltage =
-					div64_s64(tm_config.high_thr_voltage, VDD_REF_MV);
-			}
-		}
-	}
-#endif /* CONFIG_SEC_EXT_THERMAL_MONITOR */
 
 	/* Cool temperature corresponds to high voltage threshold */
 	mask = lower_32_bits(tm_config.high_thr_voltage);
@@ -1024,16 +958,6 @@ fail:
 			 * with new thresholds and activate/disable
 			 * the appropriate trips.
 			 */
-#ifdef CONFIG_SEC_EXT_THERMAL_MONITOR
-			pr_info("%s: adc_ch(0x%x) - temp: %d, ctl: 0x%x, Lower: %d, Upper: %d\n",
-				__func__, chip->sensor[i].adc_ch, temp, ctl, lower_set, upper_set);
-
-			/* Acquire wakelock for 5 secs to prevent entering sleep
-			 * before handling thermal notification in user-space
-			 */
-			 if (!wake_lock_active(&adctm_wakelock))
-				wake_lock_timeout(&adctm_wakelock, msecs_to_jiffies(5000));
-#endif /* CONFIG_SEC_EXT_THERMAL_MONITOR */
 			pr_debug("notifying of_thermal\n");
 			temp = therm_fwd_scale((int64_t)code,
 						ADC_HC_VDD_REF, chip->data);
@@ -1115,13 +1039,13 @@ static int adc_tm5_init(struct adc_tm_chip *chip, uint32_t dt_chans)
 	u8 buf[4], channels_available, meas_int_timer_2_3 = 0;
 	int ret;
 	int dig_param_len = 4;
-	int pmic_subtype_660 = 0;
+	bool pmic_subtype_660 = false;
 	unsigned int offset_btm_idx = 0, i;
 
 	if ((chip->pmic_rev_id) &&
 		(chip->pmic_rev_id->pmic_subtype == PM660_SUBTYPE)) {
 		dig_param_len = 2;
-		pmic_subtype_660 = 1;
+		pmic_subtype_660 = true;
 	} else {
 		ret = adc_tm5_read_reg(chip, ADC_TM_NUM_BTM,
 					&channels_available, 1);
@@ -1195,10 +1119,7 @@ static int adc_tm5_init(struct adc_tm_chip *chip, uint32_t dt_chans)
 		chip->sensor[i].btm_ch =
 				adc_tm_ch_data[i + offset_btm_idx].btm_amux_ch;
 	}
-#ifdef CONFIG_SEC_EXT_THERMAL_MONITOR
-	if(!wlock_init++)
-		wake_lock_init(&adctm_wakelock, WAKE_LOCK_SUSPEND, "adctm_lock");
-#endif /* CONFIG_SEC_EXT_THERMAL_MONITOR */
+
 	return ret;
 }
 
@@ -1207,6 +1128,9 @@ static const struct adc_tm_ops ops_adc_tm5 = {
 	.set_trips	= adc_tm5_set_trip_temp,
 	.interrupts_reg = adc_tm5_register_interrupts,
 	.get_temp	= adc_tm5_get_temp,
+	.channel_measure = adc_tm_5_channel_measure,
+	.disable_chan = adc_tm_5_disable_chan_meas,
+	.notify = notify_adc_tm5_fn,
 };
 
 const struct adc_tm_data data_adc_tm5 = {

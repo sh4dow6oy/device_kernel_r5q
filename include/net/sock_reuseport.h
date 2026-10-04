@@ -15,6 +15,10 @@ struct sock_reuseport {
 
 	u16			max_socks;	/* length of socks */
 	u16			num_socks;	/* elements in socks */
+	/* The last synq overflow event timestamp of this
+	 * reuse->socks[] group.
+	 */
+	unsigned int		synq_overflow_ts;
 	/* ID stays the same even after the size of socks[] grows. */
 	unsigned int		reuseport_id;
 	unsigned int		bind_inany:1;
@@ -32,7 +36,6 @@ extern struct sock *reuseport_select_sock(struct sock *sk,
 					  struct sk_buff *skb,
 					  int hdr_len);
 extern int reuseport_attach_prog(struct sock *sk, struct bpf_prog *prog);
-extern int reuseport_detach_prog(struct sock *sk);
 
 static inline bool reuseport_has_conns(struct sock *sk, bool set)
 {

@@ -46,7 +46,7 @@ int phonet_address_add(struct net_device *dev, u8 addr);
 int phonet_address_del(struct net_device *dev, u8 addr);
 u8 phonet_address_get(struct net_device *dev, u8 addr);
 int phonet_address_lookup(struct net *net, u8 addr);
-void phonet_address_notify(int event, struct net_device *dev, u8 addr);
+void phonet_address_notify(struct net *net, int event, u32 ifindex, u8 addr);
 
 int phonet_route_add(struct net_device *dev, u8 daddr);
 int phonet_route_del(struct net_device *dev, u8 daddr);
@@ -56,7 +56,7 @@ struct net_device *phonet_route_output(struct net *net, u8 daddr);
 
 #define PN_NO_ADDR	0xff
 
-extern const struct file_operations pn_sock_seq_fops;
-extern const struct file_operations pn_res_seq_fops;
+extern const struct seq_operations pn_sock_seq_ops;
+extern const struct seq_operations pn_res_seq_ops;
 
 #endif

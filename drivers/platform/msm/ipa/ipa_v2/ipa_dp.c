@@ -1,13 +1,6 @@
-/* Copyright (c) 2012-2018, 2020, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2012-2018, 2020-2021, The Linux Foundation. All rights reserved.
  */
 
 #include <linux/delay.h>
@@ -207,7 +200,7 @@ static int ipa_handle_tx_core(struct ipa_sys_context *sys, bool process_all,
 
 		ipa_wq_write_done_common(sys, 1);
 		cnt++;
-	};
+	}
 
 	return cnt;
 }
@@ -828,7 +821,7 @@ static int ipa_handle_rx_core(struct ipa_sys_context *sys, bool process_all,
 			ipa_wq_rx_common(sys, iov.size);
 
 		cnt++;
-	};
+	}
 
 	return cnt;
 }
@@ -1105,7 +1098,7 @@ int ipa2_rx_poll(u32 clnt_hdl, int weight)
 
 		ipa_wq_rx_common(ep->sys, iov.size);
 		cnt += IPA_WAN_AGGR_PKT_CNT;
-	};
+	}
 
 	if (cnt == 0 || cnt < weight) {
 		ep->inactive_cycles++;
@@ -2341,7 +2334,6 @@ static struct sk_buff *ipa_skb_copy_for_client(struct sk_buff *skb, int len)
 static int ipa_lan_rx_pyld_hdlr(struct sk_buff *skb,
 		struct ipa_sys_context *sys)
 {
-	int rc = 0;
 	struct ipa_hw_pkt_status *status;
 	struct sk_buff *skb2;
 	int pad_len_byte;
@@ -2358,7 +2350,7 @@ static int ipa_lan_rx_pyld_hdlr(struct sk_buff *skb,
 	if (skb->len == 0) {
 		IPAERR("ZLT\n");
 		sys->free_skb(skb);
-		return rc;
+		goto out;
 	}
 
 	if (sys->len_partial) {
@@ -2419,7 +2411,7 @@ static int ipa_lan_rx_pyld_hdlr(struct sk_buff *skb,
 			}
 			sys->len_rem -= skb->len;
 			sys->free_skb(skb);
-			return rc;
+			goto out;
 		}
 	}
 
@@ -2433,7 +2425,7 @@ begin:
 			IPADBG("status straddles buffer\n");
 			sys->prev_skb = skb_copy(skb, GFP_KERNEL);
 			sys->len_partial = skb->len;
-			return rc;
+			goto out;
 		}
 
 		status = (struct ipa_hw_pkt_status *)skb->data;
@@ -2480,7 +2472,7 @@ begin:
 				skb_pull(skb, IPA_PKT_STATUS_SIZE);
 				if (skb->len < sizeof(comp)) {
 					IPAERR("TAG arrived without packet\n");
-					return rc;
+					goto out;
 				}
 				memcpy(&comp, skb->data, sizeof(comp));
 				skb_pull(skb, sizeof(comp) +
@@ -2518,7 +2510,7 @@ begin:
 				IPADBG_LOW("Ins header in next buffer\n");
 				sys->prev_skb = skb_copy(skb, GFP_KERNEL);
 				sys->len_partial =	 skb->len;
-				return rc;
+				goto out;
 			}
 
 			pad_len_byte = ((status->pkt_len + 3) & ~3) -
@@ -2606,10 +2598,11 @@ begin:
 			IPA_STATS_DEC_CNT(
 				ipa_ctx->stats.rx_excp_pkts[MAX_NUM_EXCP - 1]);
 		}
-	};
+	}
 
 	sys->free_skb(skb);
-	return rc;
+out:
+	return 0;
 }
 
 static struct sk_buff *join_prev_skb(struct sk_buff *prev_skb,
@@ -2669,7 +2662,6 @@ static void wan_rx_handle_splt_pyld(struct sk_buff *skb,
 static int ipa_wan_rx_pyld_hdlr(struct sk_buff *skb,
 		struct ipa_sys_context *sys)
 {
-	int rc = 0;
 	struct ipa_hw_pkt_status *status;
 	struct sk_buff *skb2;
 	__be16 pkt_len_with_pad;
@@ -2690,7 +2682,7 @@ static int ipa_wan_rx_pyld_hdlr(struct sk_buff *skb,
 	if (ipa_ctx->ipa_client_apps_wan_cons_agg_gro) {
 		sys->ep->client_notify(sys->ep->priv,
 					IPA_RECEIVE, (unsigned long)(skb));
-		return rc;
+		return 0;
 	}
 	if (sys->repl_hdlr == ipa_replenish_rx_cache_recycle) {
 		IPAERR("Recycle should enable only with GRO Aggr\n");
@@ -2821,10 +2813,10 @@ static int ipa_wan_rx_pyld_hdlr(struct sk_buff *skb,
 				skb_pull(skb, frame_len);
 			}
 		}
-	};
+	}
 bail:
 	sys->free_skb(skb);
-	return rc;
+	return 0;
 }
 
 static int ipa_rx_pyld_hdlr(struct sk_buff *rx_skb, struct ipa_sys_context *sys)
@@ -3096,7 +3088,7 @@ static int ipa_odu_rx_pyld_hdlr(struct sk_buff *rx_skb,
 static int ipa_assign_policy_v2(struct ipa_sys_connect_params *in,
 		struct ipa_sys_context *sys)
 {
-	unsigned long int aggr_byte_limit;
+	unsigned long aggr_byte_limit;
 
 	sys->ep->status.status_en = true;
 	sys->ep->wakelock_client = IPA_WAKELOCK_REF_CLIENT_MAX;
@@ -3120,7 +3112,7 @@ static int ipa_assign_policy_v2(struct ipa_sys_connect_params *in,
 	}
 
 	aggr_byte_limit =
-	(unsigned long int)IPA_GENERIC_RX_BUFF_SZ(
+	(unsigned long)IPA_GENERIC_RX_BUFF_SZ(
 		ipa_adjust_ra_buff_base_sz(
 			in->ipa_ep_cfg.aggr.aggr_byte_limit));
 
@@ -3203,7 +3195,7 @@ static int ipa_assign_policy_v2(struct ipa_sys_connect_params *in,
 			IPA_ADJUST_AGGR_BYTE_LIMIT(
 			in->ipa_ep_cfg.aggr.aggr_byte_limit);
 			IPAERR("set aggr_limit %lu\n",
-			(unsigned long int)
+			(unsigned long)
 			in->ipa_ep_cfg.aggr.aggr_byte_limit);
 			} else {
 				in->ipa_ep_cfg.aggr.aggr_byte_limit =

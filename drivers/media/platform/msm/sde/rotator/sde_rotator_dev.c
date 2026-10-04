@@ -1,13 +1,6 @@
-/* Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2015-2020, The Linux Foundation. All rights reserved.
  */
 #define pr_fmt(fmt)	"%s:%d: " fmt, __func__, __LINE__
 
@@ -133,11 +126,6 @@ static void sde_rotator_get_config_from_ctx(struct sde_rotator_ctx *ctx,
 	config->output.comp_ratio.numer = 1;
 	config->output.comp_ratio.denom = 1;
 
-#if defined(CONFIG_DISPLAY_SAMSUNG)
-	if(config->input.width * config->input.height >= ((3840-100)*(2160-100)))
-		config->frame_rate = 60;
-#endif
-
 	/*
 	 * Use compression ratio of the first buffer to estimate
 	 * performance requirement of the session. If core layer does
@@ -256,7 +244,7 @@ static int sde_rotator_validate_item(struct sde_rotator_ctx *ctx,
 
 	ret = sde_rotator_validate_request(rot_dev->mgr, ctx->private, req);
 	sde_rot_mgr_unlock(rot_dev->mgr);
-	devm_kfree(rot_dev->dev, req);
+	kfree(req);
 	return ret;
 }
 
@@ -756,7 +744,7 @@ static ssize_t sde_rotator_ctx_show(struct kobject *kobj,
 		container_of(kobj, struct sde_rotator_ctx, kobj);
 
 	if (!ctx)
-		return cnt;
+		return 0;
 
 #define SPRINT(fmt, ...) \
 		(cnt += scnprintf(buf + cnt, len - cnt, fmt, ##__VA_ARGS__))
@@ -1419,7 +1407,7 @@ void *sde_rotator_inline_open(struct platform_device *pdev)
 		goto rotator_open_error;
 	}
 
-	ctx->slice = llcc_slice_getd(rot_dev->dev, "rotator");
+	ctx->slice = llcc_slice_getd(LLCC_ROTATOR);
 	if (IS_ERR(ctx->slice)) {
 		rc = PTR_ERR(ctx->slice);
 		SDEROT_ERR("failed to get system cache %d\n", rc);
@@ -1843,7 +1831,7 @@ int sde_rotator_inline_commit(void *handle, struct sde_rotator_inline_cmd *cmd,
 			goto error_session_validate;
 		}
 
-		devm_kfree(rot_dev->dev, req);
+		kfree(req);
 		req = NULL;
 
 	} else if (cmd_type == SDE_ROTATOR_INLINE_CMD_COMMIT) {
@@ -1973,7 +1961,7 @@ error_handle_request:
 error_retired_list:
 error_session_validate:
 error_session_config:
-	devm_kfree(rot_dev->dev, req);
+	kfree(req);
 error_invalid_handle:
 error_init_request:
 	sde_rot_mgr_unlock(rot_dev->mgr);
@@ -3265,7 +3253,7 @@ static int sde_rotator_process_buffers(struct sde_rotator_ctx *ctx,
 
 	return 0;
 error_handle_request:
-	devm_kfree(rot_dev->dev, req);
+	kfree(req);
 error_init_request:
 error_fence_wait:
 error_null_buffer:

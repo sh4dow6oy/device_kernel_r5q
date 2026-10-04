@@ -508,57 +508,6 @@ void ata_eh_release(struct ata_port *ap)
 	mutex_unlock(&ap->host->eh_mutex);
 }
 
-/**
- *	ata_scsi_timed_out - SCSI layer time out callback
- *	@cmd: timed out SCSI command
- *
- *	Handles SCSI layer timeout.  We race with normal completion of
- *	the qc for @cmd.  If the qc is already gone, we lose and let
- *	the scsi command finish (EH_HANDLED).  Otherwise, the qc has
- *	timed out and EH should be invoked.  Prevent ata_qc_complete()
- *	from finishing it by setting EH_SCHEDULED and return
- *	EH_NOT_HANDLED.
- *
- *	TODO: kill this function once old EH is gone.
- *
- *	LOCKING:
- *	Called from timer context
- *
- *	RETURNS:
- *	EH_HANDLED or EH_NOT_HANDLED
- */
-enum blk_eh_timer_return ata_scsi_timed_out(struct scsi_cmnd *cmd)
-{
-	struct Scsi_Host *host = cmd->device->host;
-	struct ata_port *ap = ata_shost_to_port(host);
-	unsigned long flags;
-	struct ata_queued_cmd *qc;
-	enum blk_eh_timer_return ret;
-
-	DPRINTK("ENTER\n");
-
-	if (ap->ops->error_handler) {
-		ret = BLK_EH_NOT_HANDLED;
-		goto out;
-	}
-
-	ret = BLK_EH_HANDLED;
-	spin_lock_irqsave(ap->lock, flags);
-	qc = ata_qc_from_tag(ap, ap->link.active_tag);
-	if (qc) {
-		WARN_ON(qc->scsicmd != cmd);
-		qc->flags |= ATA_QCFLAG_EH_SCHEDULED;
-		qc->err_mask |= AC_ERR_TIMEOUT;
-		ret = BLK_EH_NOT_HANDLED;
-	}
-	spin_unlock_irqrestore(ap->lock, flags);
-
- out:
-	DPRINTK("EXIT, ret=%d\n", ret);
-	return ret;
-}
-EXPORT_SYMBOL(ata_scsi_timed_out);
-
 static void ata_eh_unload(struct ata_port *ap)
 {
 	struct ata_link *link;
@@ -673,8 +622,7 @@ void ata_scsi_cmd_error_handler(struct Scsi_Host *host, struct ata_port *ap,
 		list_for_each_entry_safe(scmd, tmp, eh_work_q, eh_entry) {
 			struct ata_queued_cmd *qc;
 
-			for (i = 0; i < ATA_MAX_QUEUE; i++) {
-				qc = __ata_qc_from_tag(ap, i);
+			ata_qc_for_each_raw(ap, qc, i) {
 				if (qc->flags & ATA_QCFLAG_ACTIVE &&
 				    qc->scsicmd == scmd)
 					break;
@@ -823,7 +771,8 @@ void ata_scsi_port_error_handler(struct Scsi_Host *host, struct ata_port *ap)
 
 	if (ap->pflags & ATA_PFLAG_LOADING)
 		ap->pflags &= ~ATA_PFLAG_LOADING;
-	else if (ap->pflags & ATA_PFLAG_SCSI_HOTPLUG)
+	else if ((ap->pflags & ATA_PFLAG_SCSI_HOTPLUG) &&
+		!(ap->flags & ATA_FLAG_SAS_HOST))
 		schedule_delayed_work(&ap->hotplug_task, 0);
 
 	if (ap->pflags & ATA_PFLAG_RECOVERED)
@@ -876,20 +825,22 @@ EXPORT_SYMBOL_GPL(ata_port_wait_eh);
 
 static int ata_eh_nr_in_flight(struct ata_port *ap)
 {
+	struct ata_queued_cmd *qc;
 	unsigned int tag;
 	int nr = 0;
 
 	/* count only non-internal commands */
-	for (tag = 0; tag < ATA_MAX_QUEUE - 1; tag++)
-		if (ata_qc_from_tag(ap, tag))
+	ata_qc_for_each(ap, qc, tag) {
+		if (qc)
 			nr++;
+	}
 
 	return nr;
 }
 
-void ata_eh_fastdrain_timerfn(unsigned long arg)
+void ata_eh_fastdrain_timerfn(struct timer_list *t)
 {
-	struct ata_port *ap = (void *)arg;
+	struct ata_port *ap = from_timer(ap, t, fastdrain_timer);
 	unsigned long flags;
 	int cnt;
 
@@ -902,13 +853,13 @@ void ata_eh_fastdrain_timerfn(unsigned long arg)
 		goto out_unlock;
 
 	if (cnt == ap->fastdrain_cnt) {
+		struct ata_queued_cmd *qc;
 		unsigned int tag;
 
 		/* No progress during the last interval, tag all
 		 * in-flight qcs as timed out and freeze the port.
 		 */
-		for (tag = 0; tag < ATA_MAX_QUEUE - 1; tag++) {
-			struct ata_queued_cmd *qc = ata_qc_from_tag(ap, tag);
+		ata_qc_for_each(ap, qc, tag) {
 			if (qc)
 				qc->err_mask |= AC_ERR_TIMEOUT;
 		}
@@ -1054,6 +1005,7 @@ void ata_port_schedule_eh(struct ata_port *ap)
 
 static int ata_do_link_abort(struct ata_port *ap, struct ata_link *link)
 {
+	struct ata_queued_cmd *qc;
 	int tag, nr_aborted = 0;
 
 	WARN_ON(!ap->ops->error_handler);
@@ -1061,9 +1013,8 @@ static int ata_do_link_abort(struct ata_port *ap, struct ata_link *link)
 	/* we're gonna abort all commands, no need for fast drain */
 	ata_eh_set_pending(ap, 0);
 
-	for (tag = 0; tag < ATA_MAX_QUEUE; tag++) {
-		struct ata_queued_cmd *qc = ata_qc_from_tag(ap, tag);
-
+	/* include internal tag in iteration */
+	ata_qc_for_each_with_internal(ap, qc, tag) {
 		if (qc && (!link || qc->dev->link == link)) {
 			qc->flags |= ATA_QCFLAG_FAILED;
 			ata_qc_complete(qc);
@@ -1490,6 +1441,10 @@ static const char *ata_err_string(unsigned int err_mask)
 		return "invalid argument";
 	if (err_mask & AC_ERR_DEV)
 		return "device error";
+	if (err_mask & AC_ERR_NCQ)
+		return "NCQ error";
+	if (err_mask & AC_ERR_NODEV_HINT)
+		return "Polling detection error";
 	return "unknown error";
 }
 
@@ -1669,8 +1624,15 @@ unsigned int atapi_eh_request_sense(struct ata_device *dev,
 	tf.flags |= ATA_TFLAG_ISADDR | ATA_TFLAG_DEVICE;
 	tf.command = ATA_CMD_PACKET;
 
-	/* is it pointless to prefer PIO for "safety reasons"? */
-	if (ap->flags & ATA_FLAG_PIO_DMA) {
+	/*
+	 * Do not use DMA if the connected device only supports PIO, even if the
+	 * port prefers PIO commands via DMA.
+	 *
+	 * Ideally, we should call atapi_check_dma() to check if it is safe for
+	 * the LLD to use DMA for REQUEST_SENSE, but we don't have a qc.
+	 * Since we can't check the command, perhaps we should only use pio?
+	 */
+	if ((ap->flags & ATA_FLAG_PIO_DMA) && !(dev->flags & ATA_DFLAG_PIO)) {
 		tf.protocol = ATAPI_PROT_DMA;
 		tf.feature |= ATAPI_PKT_DMA;
 	} else {
@@ -1762,9 +1724,7 @@ void ata_eh_analyze_ncq_error(struct ata_link *link)
 		return;
 
 	/* has LLDD analyzed already? */
-	for (tag = 0; tag < ATA_MAX_QUEUE; tag++) {
-		qc = __ata_qc_from_tag(ap, tag);
-
+	ata_qc_for_each_raw(ap, qc, tag) {
 		if (!(qc->flags & ATA_QCFLAG_FAILED))
 			continue;
 
@@ -1875,10 +1835,10 @@ static unsigned int ata_eh_analyze_tf(struct ata_queued_cmd *qc,
 	if (qc->flags & ATA_QCFLAG_SENSE_VALID) {
 		int ret = scsi_check_sense(qc->scsicmd);
 		/*
-		 * SUCCESS here means that the sense code could
+		 * SUCCESS here means that the sense code could be
 		 * evaluated and should be passed to the upper layers
 		 * for correct evaluation.
-		 * FAILED means the sense code could not interpreted
+		 * FAILED means the sense code could not be interpreted
 		 * and the device would need to be reset.
 		 * NEEDS_RETRY and ADD_TO_MLQUEUE means that the
 		 * command would need to be retried.
@@ -2159,6 +2119,21 @@ static inline int ata_eh_worth_retry(struct ata_queued_cmd *qc)
 }
 
 /**
+ *      ata_eh_quiet - check if we need to be quiet about a command error
+ *      @qc: qc to check
+ *
+ *      Look at the qc flags anbd its scsi command request flags to determine
+ *      if we need to be quiet about the command failure.
+ */
+static inline bool ata_eh_quiet(struct ata_queued_cmd *qc)
+{
+	if (qc->scsicmd &&
+	    qc->scsicmd->request->rq_flags & RQF_QUIET)
+		qc->flags |= ATA_QCFLAG_QUIET;
+	return qc->flags & ATA_QCFLAG_QUIET;
+}
+
+/**
  *	ata_eh_link_autopsy - analyze error and determine recovery action
  *	@link: host link to perform autopsy on
  *
@@ -2173,9 +2148,10 @@ static void ata_eh_link_autopsy(struct ata_link *link)
 {
 	struct ata_port *ap = link->ap;
 	struct ata_eh_context *ehc = &link->eh_context;
+	struct ata_queued_cmd *qc;
 	struct ata_device *dev;
 	unsigned int all_err_mask = 0, eflags = 0;
-	int tag;
+	int tag, nr_failed = 0, nr_quiet = 0;
 	u32 serror;
 	int rc;
 
@@ -2205,9 +2181,7 @@ static void ata_eh_link_autopsy(struct ata_link *link)
 
 	all_err_mask |= ehc->i.err_mask;
 
-	for (tag = 0; tag < ATA_MAX_QUEUE; tag++) {
-		struct ata_queued_cmd *qc = __ata_qc_from_tag(ap, tag);
-
+	ata_qc_for_each_raw(ap, qc, tag) {
 		if (!(qc->flags & ATA_QCFLAG_FAILED) ||
 		    ata_dev_phys_link(qc->dev) != link)
 			continue;
@@ -2245,7 +2219,16 @@ static void ata_eh_link_autopsy(struct ata_link *link)
 		if (qc->flags & ATA_QCFLAG_IO)
 			eflags |= ATA_EFLAG_IS_IO;
 		trace_ata_eh_link_autopsy_qc(qc);
+
+		/* Count quiet errors */
+		if (ata_eh_quiet(qc))
+			nr_quiet++;
+		nr_failed++;
 	}
+
+	/* If all failed commands requested silence, then be quiet */
+	if (nr_quiet == nr_failed)
+		ehc->i.flags |= ATA_EHI_QUIET;
 
 	/* enforce default EH actions */
 	if (ap->pflags & ATA_PFLAG_FROZEN ||
@@ -2465,6 +2448,7 @@ static void ata_eh_link_report(struct ata_link *link)
 {
 	struct ata_port *ap = link->ap;
 	struct ata_eh_context *ehc = &link->eh_context;
+	struct ata_queued_cmd *qc;
 	const char *frozen, *desc;
 	char tries_buf[16] = "";
 	int tag, nr_failed = 0;
@@ -2476,9 +2460,7 @@ static void ata_eh_link_report(struct ata_link *link)
 	if (ehc->i.desc[0] != '\0')
 		desc = ehc->i.desc;
 
-	for (tag = 0; tag < ATA_MAX_QUEUE; tag++) {
-		struct ata_queued_cmd *qc = __ata_qc_from_tag(ap, tag);
-
+	ata_qc_for_each_raw(ap, qc, tag) {
 		if (!(qc->flags & ATA_QCFLAG_FAILED) ||
 		    ata_dev_phys_link(qc->dev) != link ||
 		    ((qc->flags & ATA_QCFLAG_QUIET) &&
@@ -2540,8 +2522,7 @@ static void ata_eh_link_report(struct ata_link *link)
 		  ehc->i.serror & SERR_DEV_XCHG ? "DevExch " : "");
 #endif
 
-	for (tag = 0; tag < ATA_MAX_QUEUE; tag++) {
-		struct ata_queued_cmd *qc = __ata_qc_from_tag(ap, tag);
+	ata_qc_for_each_raw(ap, qc, tag) {
 		struct ata_taskfile *cmd = &qc->tf, *res = &qc->result_tf;
 		char data_buf[20] = "";
 		char cdb_buf[70] = "";
@@ -3719,9 +3700,11 @@ static int ata_eh_handle_dev_fail(struct ata_device *dev, int err)
 	case -ENODEV:
 		/* device missing or wrong IDENTIFY data, schedule probing */
 		ehc->i.probe_mask |= (1 << dev->devno);
+		/* fall through */
 	case -EINVAL:
 		/* give it just one more chance */
 		ehc->tries[dev->devno] = min(ehc->tries[dev->devno], 1);
+		/* fall through */
 	case -EIO:
 		if (ehc->tries[dev->devno] == 1) {
 			/* This is the last chance, better to slow
@@ -4012,12 +3995,11 @@ int ata_eh_recover(struct ata_port *ap, ata_prereset_fn_t prereset,
  */
 void ata_eh_finish(struct ata_port *ap)
 {
+	struct ata_queued_cmd *qc;
 	int tag;
 
 	/* retry or finish qcs */
-	for (tag = 0; tag < ATA_MAX_QUEUE; tag++) {
-		struct ata_queued_cmd *qc = __ata_qc_from_tag(ap, tag);
-
+	ata_qc_for_each_raw(ap, qc, tag) {
 		if (!(qc->flags & ATA_QCFLAG_FAILED))
 			continue;
 

@@ -177,12 +177,9 @@ int tls_proccess_cmsg(struct sock *sk, struct msghdr *msg,
 			if (msg->msg_flags & MSG_MORE)
 				return -EINVAL;
 
-			rc = tls_handle_open_record(sk, msg->msg_flags);
-			if (rc)
-				return rc;
-
 			*record_type = *(unsigned char *)CMSG_DATA(cmsg);
-			rc = 0;
+
+			rc = tls_handle_open_record(sk, msg->msg_flags);
 			break;
 		default:
 			return -EINVAL;
@@ -711,8 +708,8 @@ EXPORT_SYMBOL(tls_unregister_device);
 
 static struct tcp_ulp_ops tcp_tls_ulp_ops __read_mostly = {
 	.name			= "tls",
-	.uid                    = TCP_ULP_TLS,
-	.user_visible           = true,
+	.uid			= TCP_ULP_TLS,
+	.user_visible		= true,
 	.owner			= THIS_MODULE,
 	.init			= tls_init,
 };

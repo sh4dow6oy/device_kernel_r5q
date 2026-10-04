@@ -25,6 +25,7 @@
 #include <linux/termios.h>	/* For TIOCOUTQ/INQ */
 #include <linux/list.h>
 #include <linux/slab.h>
+#include <linux/socket.h>
 #include <net/datalink.h>
 #include <net/psnap.h>
 #include <net/sock.h>
@@ -457,6 +458,7 @@ struct dgram_sock {
 	unsigned int bound:1;
 	unsigned int connected:1;
 	unsigned int want_ack:1;
+	unsigned int want_lqi:1;
 	unsigned int secen:1;
 	unsigned int secen_override:1;
 	unsigned int seclevel:3;
@@ -491,6 +493,7 @@ static int dgram_init(struct sock *sk)
 	struct dgram_sock *ro = dgram_sk(sk);
 
 	ro->want_ack = 1;
+	ro->want_lqi = 0;
 	return 0;
 }
 
@@ -723,6 +726,7 @@ static int dgram_recvmsg(struct sock *sk, struct msghdr *msg, size_t len,
 	size_t copied = 0;
 	int err = -EOPNOTSUPP;
 	struct sk_buff *skb;
+	struct dgram_sock *ro = dgram_sk(sk);
 	DECLARE_SOCKADDR(struct sockaddr_ieee802154 *, saddr, msg->msg_name);
 
 	skb = skb_recv_datagram(sk, flags, noblock, &err);
@@ -752,6 +756,13 @@ static int dgram_recvmsg(struct sock *sk, struct msghdr *msg, size_t len,
 		saddr->family = AF_IEEE802154;
 		ieee802154_addr_to_sa(&saddr->addr, &mac_cb(skb)->source);
 		*addr_len = sizeof(*saddr);
+	}
+
+	if (ro->want_lqi) {
+		err = put_cmsg(msg, SOL_IEEE802154, WPAN_WANTLQI,
+			       sizeof(uint8_t), &(mac_cb(skb)->lqi));
+		if (err)
+			goto done;
 	}
 
 	if (flags & MSG_TRUNC)
@@ -857,6 +868,9 @@ static int dgram_getsockopt(struct sock *sk, int level, int optname,
 	case WPAN_WANTACK:
 		val = ro->want_ack;
 		break;
+	case WPAN_WANTLQI:
+		val = ro->want_lqi;
+		break;
 	case WPAN_SECURITY:
 		if (!ro->secen_override)
 			val = WPAN_SECURITY_DEFAULT;
@@ -901,6 +915,9 @@ static int dgram_setsockopt(struct sock *sk, int level, int optname,
 	switch (optname) {
 	case WPAN_WANTACK:
 		ro->want_ack = !!val;
+		break;
+	case WPAN_WANTLQI:
+		ro->want_lqi = !!val;
 		break;
 	case WPAN_SECURITY:
 		if (!ns_capable(net->user_ns, CAP_NET_ADMIN) &&
@@ -1048,19 +1065,21 @@ static int ieee802154_create(struct net *net, struct socket *sock,
 
 	if (sk->sk_prot->hash) {
 		rc = sk->sk_prot->hash(sk);
-		if (rc) {
-			sk_common_release(sk);
-			goto out;
-		}
+		if (rc)
+			goto out_sk_release;
 	}
 
 	if (sk->sk_prot->init) {
 		rc = sk->sk_prot->init(sk);
 		if (rc)
-			sk_common_release(sk);
+			goto out_sk_release;
 	}
 out:
 	return rc;
+out_sk_release:
+	sk_common_release(sk);
+	sock->sk = NULL;
+	goto out;
 }
 
 static const struct net_proto_family ieee802154_family_ops = {

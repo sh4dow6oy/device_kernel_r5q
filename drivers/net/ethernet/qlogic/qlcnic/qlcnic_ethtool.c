@@ -20,7 +20,7 @@ struct qlcnic_stats {
 	int stat_offset;
 };
 
-#define QLC_SIZEOF(m) FIELD_SIZEOF(struct qlcnic_adapter, m)
+#define QLC_SIZEOF(m) sizeof_field(struct qlcnic_adapter, m)
 #define QLC_OFF(m) offsetof(struct qlcnic_adapter, m)
 static const u32 qlcnic_fw_dump_level[] = {
 	0x3, 0x7, 0xf, 0x1f, 0x3f, 0x7f, 0xff
@@ -351,9 +351,9 @@ skip:
 	case QLCNIC_BRDTYPE_P3P_REF_QG:
 	case QLCNIC_BRDTYPE_P3P_4_GB:
 	case QLCNIC_BRDTYPE_P3P_4_GB_MM:
-
 		supported |= SUPPORTED_Autoneg;
 		advertising |= ADVERTISED_Autoneg;
+		/* fall through */
 	case QLCNIC_BRDTYPE_P3P_10G_CX4:
 	case QLCNIC_BRDTYPE_P3P_10G_CX4_LP:
 	case QLCNIC_BRDTYPE_P3P_10000_BASE_T:
@@ -377,6 +377,7 @@ skip:
 		supported |= SUPPORTED_TP;
 		check_sfp_module = netif_running(adapter->netdev) &&
 				   ahw->has_link_events;
+		/* fall through */
 	case QLCNIC_BRDTYPE_P3P_10G_XFP:
 		supported |= SUPPORTED_FIBRE;
 		advertising |= ADVERTISED_FIBRE;

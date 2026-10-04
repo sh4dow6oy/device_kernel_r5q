@@ -325,6 +325,12 @@ sbc_setup_write_same(struct se_cmd *cmd, unsigned char flags, struct sbc_ops *op
 		pr_warn("WRITE SAME with ANCHOR not supported\n");
 		return TCM_INVALID_CDB_FIELD;
 	}
+
+	if (flags & 0x01) {
+		pr_warn("WRITE SAME with NDOB not supported\n");
+		return TCM_INVALID_CDB_FIELD;
+	}
+
 	/*
 	 * Special case for WRITE_SAME w/ UNMAP=1 that ends up getting
 	 * translated into block discard requests within backend code.
@@ -977,9 +983,10 @@ sbc_parse_cdb(struct se_cmd *cmd, struct sbc_ops *ops)
 	}
 	case COMPARE_AND_WRITE:
 		if (!dev->dev_attrib.emulate_caw) {
-			pr_err_ratelimited("se_device %s/%s (vpd_unit_serial %s) reject"
-				" COMPARE_AND_WRITE\n", dev->se_hba->backend->ops->name,
-				dev->dev_group.cg_item.ci_name, dev->t10_wwn.unit_serial);
+			pr_err_ratelimited("se_device %s/%s (vpd_unit_serial %s) reject COMPARE_AND_WRITE\n",
+					   dev->se_hba->backend->ops->name,
+					   config_item_name(&dev->dev_group.cg_item),
+					   dev->t10_wwn.unit_serial);
 			return TCM_UNSUPPORTED_SCSI_OPCODE;
 		}
 		sectors = cdb[13];
@@ -1210,14 +1217,17 @@ sbc_execute_unmap(struct se_cmd *cmd)
 			goto err;
 		}
 
-		if (lba + range > dev->transport->get_blocks(dev) + 1) {
+		if (lba + range < lba ||
+		    lba + range > dev->transport->get_blocks(dev) + 1) {
 			ret = TCM_ADDRESS_OUT_OF_RANGE;
 			goto err;
 		}
 
-		ret = ops->execute_unmap(cmd, lba, range);
-		if (ret)
-			goto err;
+		if (range) {
+			ret = ops->execute_unmap(cmd, lba, range);
+			if (ret)
+				goto err;
+		}
 
 		ptr += 16;
 		size -= 16;

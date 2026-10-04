@@ -205,8 +205,8 @@ static void set_info_for_irq(unsigned int irq, struct irq_info *info)
 
 static void delayed_free_irq(struct work_struct *work)
 {
-	struct irq_info *info = container_of(work, struct irq_info,
-					     work);
+	struct irq_info *info = container_of(to_rcu_work(work), struct irq_info,
+					     rwork);
 	unsigned int irq = info->irq;
 
 	/* Remove the info pointer only now, with no potential users left. */
@@ -217,13 +217,6 @@ static void delayed_free_irq(struct work_struct *work)
 	/* Legacy IRQ descriptors are managed by the arch. */
 	if (irq >= nr_legacy_irqs())
 		irq_free_desc(irq);
-}
-
-static void rcu_free_irq(struct rcu_head *rcu_head)
-{
-	struct irq_info *info = container_of(rcu_head, struct irq_info, rcu);
-
-	queue_work(system_wq, &info->work);
 }
 
 /* Constructors for packed IRQ information. */
@@ -633,7 +626,7 @@ static void xen_irq_init(unsigned irq)
 
 	info->type = IRQT_UNBOUND;
 	info->refcnt = -1;
-	INIT_WORK(&info->work, delayed_free_irq);
+	INIT_RCU_WORK(&info->rwork, delayed_free_irq);
 
 	set_info_for_irq(irq, info);
 
@@ -697,7 +690,7 @@ static void xen_free_irq(unsigned irq)
 
 	WARN_ON(info->refcnt > 0);
 
-	call_rcu(&info->rcu, rcu_free_irq);
+	queue_rcu_work(system_wq, &info->rwork);
 }
 
 static void xen_evtchn_close(unsigned int port)
@@ -1217,10 +1210,12 @@ EXPORT_SYMBOL_GPL(bind_interdomain_evtchn_to_irq_lateeoi);
 static int find_virq(unsigned int virq, unsigned int cpu)
 {
 	struct evtchn_status status;
-	int port, rc = -ENOENT;
+	int port;
 
 	memset(&status, 0, sizeof(status));
 	for (port = 0; port < xen_evtchn_max_channels(); port++) {
+		int rc;
+
 		status.dom = DOMID_SELF;
 		status.port = port;
 		rc = HYPERVISOR_event_channel_op(EVTCHNOP_status, &status);
@@ -1228,12 +1223,10 @@ static int find_virq(unsigned int virq, unsigned int cpu)
 			continue;
 		if (status.status != EVTCHNSTAT_virq)
 			continue;
-		if (status.u.virq == virq && status.vcpu == xen_vcpu_nr(cpu)) {
-			rc = port;
-			break;
-		}
+		if (status.u.virq == virq && status.vcpu == xen_vcpu_nr(cpu))
+			return port;
 	}
-	return rc;
+	return -ENOENT;
 }
 
 /**
@@ -1724,8 +1717,19 @@ static int xen_rebind_evtchn_to_cpu(struct irq_info *info, unsigned int tcpu)
 	 * virq or IPI channel, which don't actually need to be rebound. Ignore
 	 * it, but don't do the xenlinux-level rebind in that case.
 	 */
-	if (HYPERVISOR_event_channel_op(EVTCHNOP_bind_vcpu, &bind_vcpu) >= 0)
+	if (HYPERVISOR_event_channel_op(EVTCHNOP_bind_vcpu, &bind_vcpu) >= 0) {
+		int old_cpu = info->cpu;
+
 		bind_evtchn_to_cpu(evtchn, tcpu);
+
+		if (info->type == IRQT_VIRQ) {
+			int virq = info->u.virq;
+			int irq = per_cpu(virq_to_irq, old_cpu)[virq];
+
+			per_cpu(virq_to_irq, old_cpu)[virq] = -1;
+			per_cpu(virq_to_irq, tcpu)[virq] = irq;
+		}
+	}
 
 	do_unmask(info, EVT_MASK_REASON_TEMPORARY);
 

@@ -175,9 +175,9 @@ static void ssp_wdt_work_func(struct work_struct *work)
 	data->timeout_cnt = 0;
 }
 
-static void ssp_wdt_timer_func(unsigned long ptr)
+static void ssp_wdt_timer_func(struct timer_list *t)
 {
-	struct ssp_data *data = (struct ssp_data *)ptr;
+	struct ssp_data *data = from_timer(data, t, wdt_timer);
 
 	switch (data->fw_dl_state) {
 	case SSP_FW_DL_STATE_FAIL:
@@ -486,7 +486,7 @@ static struct ssp_data *ssp_parse_dt(struct device *dev)
 	if (!match)
 		goto err_mcu_reset_gpio;
 
-	data->sensorhub_info = (struct ssp_sensorhub_info *)match->data;
+	data->sensorhub_info = match->data;
 
 	dev_set_drvdata(dev, data);
 
@@ -543,7 +543,7 @@ static int ssp_probe(struct spi_device *spi)
 	ret = spi_setup(spi);
 	if (ret < 0) {
 		dev_err(&spi->dev, "Failed to setup spi\n");
-		return ret;
+		goto err_setup_spi;
 	}
 
 	data->fw_dl_state = SSP_FW_DL_STATE_NONE;
@@ -571,7 +571,7 @@ static int ssp_probe(struct spi_device *spi)
 	INIT_WORK(&data->work_wdt, ssp_wdt_work_func);
 	INIT_DELAYED_WORK(&data->work_refresh, ssp_refresh_task);
 
-	setup_timer(&data->wdt_timer, ssp_wdt_timer_func, (unsigned long)data);
+	timer_setup(&data->wdt_timer, ssp_wdt_timer_func, 0);
 
 	ret = request_threaded_irq(data->spi->irq, NULL,
 				   ssp_irq_thread_fn,
@@ -608,6 +608,8 @@ err_read_reg:
 err_setup_irq:
 	mutex_destroy(&data->pending_lock);
 	mutex_destroy(&data->comm_lock);
+err_setup_spi:
+	mfd_remove_devices(&spi->dev);
 
 	dev_err(&spi->dev, "Probe failed!\n");
 
@@ -628,6 +630,7 @@ static int ssp_remove(struct spi_device *spi)
 	ssp_clean_pending_list(data);
 
 	free_irq(data->spi->irq, data);
+	cancel_delayed_work_sync(&data->work_refresh);
 
 	del_timer_sync(&data->wdt_timer);
 	cancel_work_sync(&data->work_wdt);

@@ -73,12 +73,21 @@ struct snd_seq_timer *snd_seq_timer_new(void)
 void snd_seq_timer_delete(struct snd_seq_timer **tmr)
 {
 	struct snd_seq_timer *t = *tmr;
-	*tmr = NULL;
+	struct snd_timer_instance *ti;
 
 	if (t == NULL) {
 		pr_debug("ALSA: seq: snd_seq_timer_delete() called with NULL timer\n");
 		return;
 	}
+
+	spin_lock_irq(&t->lock);
+	ti = t->timeri;
+	t->timeri = NULL;
+	spin_unlock_irq(&t->lock);
+	if (ti)
+		snd_timer_close(ti);
+
+	*tmr = NULL;
 	t->running = 0;
 
 	/* reset time */
@@ -191,14 +200,15 @@ int snd_seq_timer_set_tempo(struct snd_seq_timer * tmr, int tempo)
 	return 0;
 }
 
-/* set current ppq */
-int snd_seq_timer_set_ppq(struct snd_seq_timer * tmr, int ppq)
+/* set current tempo and ppq in a shot */
+int snd_seq_timer_set_tempo_ppq(struct snd_seq_timer *tmr, int tempo, int ppq)
 {
+	int changed;
 	unsigned long flags;
 
 	if (snd_BUG_ON(!tmr))
 		return -EINVAL;
-	if (ppq <= 0)
+	if (tempo <= 0 || ppq <= 0)
 		return -EINVAL;
 	spin_lock_irqsave(&tmr->lock, flags);
 	if (tmr->running && (ppq != tmr->ppq)) {
@@ -208,9 +218,11 @@ int snd_seq_timer_set_ppq(struct snd_seq_timer * tmr, int ppq)
 		pr_debug("ALSA: seq: cannot change ppq of a running timer\n");
 		return -EBUSY;
 	}
-
+	changed = (tempo != tmr->tempo) || (ppq != tmr->ppq);
+	tmr->tempo = tempo;
 	tmr->ppq = ppq;
-	snd_seq_timer_set_tick_resolution(tmr);
+	if (changed)
+		snd_seq_timer_set_tick_resolution(tmr);
 	spin_unlock_irqrestore(&tmr->lock, flags);
 	return 0;
 }
@@ -368,9 +380,7 @@ static int initialize_timer(struct snd_seq_timer *tmr)
 
 	tmr->ticks = 1;
 	if (!(t->hw.flags & SNDRV_TIMER_HW_SLAVE)) {
-		unsigned long r = t->hw.resolution;
-		if (! r && t->hw.c_resolution)
-			r = t->hw.c_resolution(t);
+		unsigned long r = snd_timer_resolution(tmr->timeri);
 		if (r) {
 			tmr->ticks = (unsigned int)(1000000000uL / (r * freq));
 			if (! tmr->ticks)

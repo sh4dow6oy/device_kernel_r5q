@@ -50,7 +50,7 @@
 #define SPI_IDLE_SDA_PULL_LOW			(2 << 18)
 #define SPI_IDLE_SDA_PULL_HIGH			(3 << 18)
 #define SPI_IDLE_SDA_MASK			(3 << 18)
-#define SPI_CS_SS_VAL				(1 << 20)
+#define SPI_CS_SW_VAL				(1 << 20)
 #define SPI_CS_SW_HW				(1 << 21)
 /* SPI_CS_POL_INACTIVE bits are default high */
 						/* n from 0 to 3 */
@@ -757,9 +757,9 @@ static u32 tegra_spi_setup_transfer_one(struct spi_device *spi,
 
 		command1 |= SPI_CS_SW_HW;
 		if (spi->mode & SPI_CS_HIGH)
-			command1 |= SPI_CS_SS_VAL;
+			command1 |= SPI_CS_SW_VAL;
 		else
-			command1 &= ~SPI_CS_SS_VAL;
+			command1 &= ~SPI_CS_SW_VAL;
 
 		tegra_spi_writel(tspi, 0, SPI_COMMAND2);
 	} else {
@@ -1200,7 +1200,7 @@ static int tegra_spi_probe(struct platform_device *pdev)
 	}
 
 	master->dev.of_node = pdev->dev.of_node;
-	ret = devm_spi_register_master(&pdev->dev, master);
+	ret = spi_register_master(master);
 	if (ret < 0) {
 		dev_err(&pdev->dev, "can not register to master err %d\n", ret);
 		goto exit_free_irq;
@@ -1226,6 +1226,10 @@ static int tegra_spi_remove(struct platform_device *pdev)
 	struct spi_master *master = platform_get_drvdata(pdev);
 	struct tegra_spi_data	*tspi = spi_master_get_devdata(master);
 
+	spi_master_get(master);
+
+	spi_unregister_master(master);
+
 	free_irq(tspi->irq, tspi);
 
 	if (tspi->tx_dma_chan)
@@ -1237,6 +1241,8 @@ static int tegra_spi_remove(struct platform_device *pdev)
 	pm_runtime_disable(&pdev->dev);
 	if (!pm_runtime_status_suspended(&pdev->dev))
 		tegra_spi_runtime_suspend(&pdev->dev);
+
+	spi_master_put(master);
 
 	return 0;
 }

@@ -1191,8 +1191,6 @@ static const struct atmdev_ops fpga_ops = {
 	.open =		popen,
 	.close =	pclose,
 	.ioctl =	NULL,
-	.getsockopt =	NULL,
-	.setsockopt =	NULL,
 	.send =		psend,
 	.send_oam =	NULL,
 	.phy_put =	NULL,
@@ -1291,7 +1289,8 @@ static int fpga_probe(struct pci_dev *dev, const struct pci_device_id *id)
 		card->using_dma = 1;
 		if (1) { /* All known FPGA versions so far */
 			card->dma_alignment = 3;
-			card->dma_bounce = kmalloc(card->nr_ports * BUF_SIZE, GFP_KERNEL);
+			card->dma_bounce = kmalloc_array(card->nr_ports,
+							 BUF_SIZE, GFP_KERNEL);
 			if (!card->dma_bounce) {
 				dev_warn(&card->dev->dev, "Failed to allocate DMA bounce buffers\n");
 				err = -ENOMEM;

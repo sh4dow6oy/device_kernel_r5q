@@ -1,13 +1,6 @@
-/* Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
  */
 
 #define pr_fmt(fmt)	"[hdcp-qseecom] %s: " fmt, __func__
@@ -32,10 +25,6 @@
 #include <linux/kthread.h>
 
 #include "qseecom_kernel.h"
-
-#ifdef CONFIG_SEC_DISPLAYPORT_ENG
-#include <linux/secdp_logger.h>
-#endif
 
 #define HDCP2P2_APP_NAME      "hdcp2p2"
 #define HDCP1_APP_NAME        "hdcp1"
@@ -764,8 +753,6 @@ static int hdcp2_app_load(struct hdcp2_handle *handle)
 {
 	int rc = 0;
 
-	pr_debug("+++\n");
-
 	if (!handle) {
 		pr_err("invalid input\n");
 		rc = -EINVAL;
@@ -831,8 +818,6 @@ static int hdcp2_app_unload(struct hdcp2_handle *handle)
 	hdcp2_app_init_var(deinit);
 
 	hdcp2_app_process_cmd(deinit);
-
-	pr_debug("+++\n");
 
 	/* deallocate the resources for qseecom HDCPSRM handle */
 	rc = qseecom_shutdown_app(&handle->hdcpsrm_qseecom_handle);
@@ -1043,8 +1028,6 @@ static int hdcp2_app_start(struct hdcp2_handle *handle)
 {
 	int rc = 0;
 
-	pr_debug("+++\n");
-
 	rc = hdcp2_app_load(handle);
 	if (rc)
 		goto error;
@@ -1070,8 +1053,6 @@ error:
 static int hdcp2_app_stop(struct hdcp2_handle *handle)
 {
 	int rc = 0;
-
-	pr_debug("+++\n");
 
 	rc = hdcp2_app_tx_deinit(handle);
 	if (rc)
@@ -1135,7 +1116,7 @@ error:
 	return rc;
 }
 
-static int hdcp2_app_set_hw_key(struct hdcp2_handle *handle)
+static int hdcp2_app_enable_encryption(struct hdcp2_handle *handle)
 {
 	int rc = 0;
 
@@ -1260,8 +1241,8 @@ int hdcp2_app_comm(void *ctx, enum hdcp2_app_cmd cmd,
 	case HDCP2_CMD_TIMEOUT:
 		rc = hdcp2_app_timeout(handle);
 		break;
-	case HDCP2_CMD_SET_HW_KEY:
-		rc = hdcp2_app_set_hw_key(handle);
+	case HDCP2_CMD_EN_ENCRYPTION:
+		rc = hdcp2_app_enable_encryption(handle);
 		break;
 	case HDCP2_CMD_QUERY_STREAM:
 		rc = hdcp2_app_query_stream(handle);
@@ -1407,8 +1388,7 @@ EXPORT_SYMBOL(hdcp2_init);
 
 void hdcp2_deinit(void *ctx)
 {
-	if (ctx)
-		kzfree(ctx);
+	kzfree(ctx);
 }
 EXPORT_SYMBOL(hdcp2_deinit);
 

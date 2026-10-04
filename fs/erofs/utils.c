@@ -5,7 +5,6 @@
  */
 #include "internal.h"
 #include <linux/pagevec.h>
-#include <linux/xarray.h>
 
 struct page *erofs_allocpage(struct list_head *pool, gfp_t gfp)
 {

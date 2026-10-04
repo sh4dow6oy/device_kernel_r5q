@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * Driver for USB Mass Storage compliant devices
  *
@@ -27,23 +28,6 @@
  *
  * Also, for certain devices, the interrupt endpoint is used to convey
  * status of a command.
- *
- * Please see http://www.one-eyed-alien.net/~mdharm/linux-usb for more
- * information about this driver.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License as published by the
- * Free Software Foundation; either version 2, or (at your option) any
- * later version.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #ifdef CONFIG_USB_STORAGE_DEBUG
@@ -224,8 +208,8 @@ int usb_stor_reset_resume(struct usb_interface *iface)
 	usb_stor_report_bus_reset(us);
 
 	/*
-	 * FIXME: Notify the subdrivers that they need to reinitialize
-	 * the device
+	 * If any of the subdrivers implemented a reinitialization scheme,
+	 * this is where the callback would be invoked.
 	 */
 	return 0;
 }
@@ -240,75 +224,10 @@ EXPORT_SYMBOL_GPL(usb_stor_reset_resume);
 
 int usb_stor_pre_reset(struct usb_interface *iface)
 {
-	struct us_data *us;
-	unsigned long jiffies_expire = jiffies + HZ;
-	int mu_lock = 1;
-
-	pr_info("%s +\n", __func__);
-
-	us = usb_get_intfdata(iface);
+	struct us_data *us = usb_get_intfdata(iface);
 
 	/* Make sure no command runs during the reset */
-	while (!mutex_trylock(&us->dev_mutex)) {
-
-		/* If we can't acquire the lock after waiting one second,
-		 * we're probably deadlocked */
-		if (time_after(jiffies, jiffies_expire))
-			goto busy;
-
-		msleep(15);
-		if (us->pusb_dev->state == USB_STATE_NOTATTACHED) {
-			mu_lock = 0;
-			goto skip;
-		}
-		if (us->pusb_dev->state == USB_STATE_SUSPENDED) {
-			mu_lock = 0;
-			goto skip;
-		}
-		if (iface->condition == USB_INTERFACE_UNBINDING ||
-				iface->condition == USB_INTERFACE_UNBOUND) {
-			mu_lock = 0;
-			goto skip;
-		}
-	}
-	
-	goto skip;
-	
-busy:
-	pr_info("%s busy\n", __func__);
-	set_bit(US_FLIDX_ABORTING, &us->dflags);
-	usb_stor_stop_transport(us);
-	/* wait 6 seconds. usb unlink may be spend 5 sec. */
-	jiffies_expire = jiffies + 6*HZ;
-	pr_info("%s try lock again\n", __func__);
-	while (!mutex_trylock(&us->dev_mutex)) {
-
-		/* If we can't acquire the lock after waiting one second,
-		 * we're probably deadlocked */
-		if (time_after(jiffies, jiffies_expire)) {
-			mu_lock = 0;
-			goto skip;
-		}
-
-		msleep(15);
-		if (us->pusb_dev->state == USB_STATE_NOTATTACHED) {
-			mu_lock = 0;
-			goto skip;
-		}
-		if (us->pusb_dev->state == USB_STATE_SUSPENDED) {
-			mu_lock = 0;
-			goto skip;
-		}
-		if (iface->condition == USB_INTERFACE_UNBINDING ||
-				iface->condition == USB_INTERFACE_UNBOUND) {
-			mu_lock = 0;
-			goto skip;
-		}
-	}
-skip:
-	set_bit(US_FLIDX_RESETTING, &us->dflags);
-	us->is_mu_lock = mu_lock;
-	pr_info("%s - mu_lock=%d\n", __func__, us->is_mu_lock);
+	mutex_lock(&us->dev_mutex);
 	return 0;
 }
 EXPORT_SYMBOL_GPL(usb_stor_pre_reset);
@@ -317,23 +236,15 @@ int usb_stor_post_reset(struct usb_interface *iface)
 {
 	struct us_data *us = usb_get_intfdata(iface);
 
-	pr_info("%s +\n", __func__);
 	/* Report the reset to the SCSI core */
 	usb_stor_report_bus_reset(us);
 
 	/*
-	 * FIXME: Notify the subdrivers that they need to reinitialize
-	 * the device
+	 * If any of the subdrivers implemented a reinitialization scheme,
+	 * this is where the callback would be invoked.
 	 */
 
-	clear_bit(US_FLIDX_RESETTING, &us->dflags);
-	clear_bit(US_FLIDX_ABORTING, &us->dflags);
-	if (us->is_mu_lock) {
-		mutex_unlock(&us->dev_mutex);
-		us->is_mu_lock = 0;
-		pr_info("%s mutex_unlock\n", __func__);
-	}
-	pr_info("%s -\n", __func__);
+	mutex_unlock(&us->dev_mutex);
 	return 0;
 }
 EXPORT_SYMBOL_GPL(usb_stor_post_reset);
@@ -405,7 +316,7 @@ static int usb_stor_control_thread(void * __us)
 
 		/* When we are called with no command pending, we're done */
 		srb = us->srb;
-		if (us->srb == NULL) {
+		if (srb == NULL) {
 			scsi_unlock(host);
 			mutex_unlock(&us->dev_mutex);
 			usb_stor_dbg(us, "-- exiting\n");
@@ -414,7 +325,7 @@ static int usb_stor_control_thread(void * __us)
 
 		/* has the command timed out *already* ? */
 		if (test_bit(US_FLIDX_TIMED_OUT, &us->dflags)) {
-			us->srb->result = DID_ABORT << 16;
+			srb->result = DID_ABORT << 16;
 			goto SkipForAbort;
 		}
 
@@ -424,35 +335,35 @@ static int usb_stor_control_thread(void * __us)
 		 * reject the command if the direction indicator
 		 * is UNKNOWN
 		 */
-		if (us->srb->sc_data_direction == DMA_BIDIRECTIONAL) {
+		if (srb->sc_data_direction == DMA_BIDIRECTIONAL) {
 			usb_stor_dbg(us, "UNKNOWN data direction\n");
-			us->srb->result = DID_ERROR << 16;
+			srb->result = DID_ERROR << 16;
 		}
 
 		/*
 		 * reject if target != 0 or if LUN is higher than
 		 * the maximum known LUN
 		 */
-		else if (us->srb->device->id &&
+		else if (srb->device->id &&
 				!(us->fflags & US_FL_SCM_MULT_TARG)) {
 			usb_stor_dbg(us, "Bad target number (%d:%llu)\n",
-				     us->srb->device->id,
-				     us->srb->device->lun);
-			us->srb->result = DID_BAD_TARGET << 16;
+				     srb->device->id,
+				     srb->device->lun);
+			srb->result = DID_BAD_TARGET << 16;
 		}
 
-		else if (us->srb->device->lun > us->max_lun) {
+		else if (srb->device->lun > us->max_lun) {
 			usb_stor_dbg(us, "Bad LUN (%d:%llu)\n",
-				     us->srb->device->id,
-				     us->srb->device->lun);
-			us->srb->result = DID_BAD_TARGET << 16;
+				     srb->device->id,
+				     srb->device->lun);
+			srb->result = DID_BAD_TARGET << 16;
 		}
 
 		/*
 		 * Handle those devices which need us to fake
 		 * their inquiry data
 		 */
-		else if ((us->srb->cmnd[0] == INQUIRY) &&
+		else if ((srb->cmnd[0] == INQUIRY) &&
 			    (us->fflags & US_FL_FIX_INQUIRY)) {
 			unsigned char data_ptr[36] = {
 			    0x00, 0x80, 0x02, 0x02,
@@ -460,13 +371,13 @@ static int usb_stor_control_thread(void * __us)
 
 			usb_stor_dbg(us, "Faking INQUIRY command\n");
 			fill_inquiry_response(us, data_ptr, 36);
-			us->srb->result = SAM_STAT_GOOD;
+			srb->result = SAM_STAT_GOOD;
 		}
 
 		/* we've got a command, let's do it! */
 		else {
-			US_DEBUG(usb_stor_show_command(us, us->srb));
-			us->proto_handler(us->srb, us);
+			US_DEBUG(usb_stor_show_command(us, srb));
+			us->proto_handler(srb, us);
 			usb_mark_last_busy(us->pusb_dev);
 		}
 
@@ -474,7 +385,7 @@ static int usb_stor_control_thread(void * __us)
 		scsi_lock(host);
 
 		/* was the command aborted? */
-		if (us->srb->result == DID_ABORT << 16) {
+		if (srb->result == DID_ABORT << 16) {
 SkipForAbort:
 			usb_stor_dbg(us, "scsi command aborted\n");
 			srb = NULL;	/* Don't call srb->scsi_done() */
@@ -493,10 +404,6 @@ SkipForAbort:
 			/* Allow USB transfers to resume */
 			clear_bit(US_FLIDX_ABORTING, &us->dflags);
 			clear_bit(US_FLIDX_TIMED_OUT, &us->dflags);
-#ifdef CONFIG_USB_DEBUG_DETAILED_LOG
-			printk(KERN_ERR USB_STORAGE "%s clear TIMED_OUT\n",
-				__func__);
-#endif
 		}
 
 		/* finished working on this command */
@@ -581,7 +488,7 @@ void usb_stor_adjust_quirks(struct usb_device *udev, unsigned long *fflags)
 			US_FL_INITIAL_READ10 | US_FL_WRITE_CACHE |
 			US_FL_NO_ATA_1X | US_FL_NO_REPORT_OPCODES |
 			US_FL_MAX_SECTORS_240 | US_FL_NO_REPORT_LUNS |
-			US_FL_ALWAYS_SYNC);
+			US_FL_ALWAYS_SYNC | US_FL_NO_SAME);
 
 	p = quirks;
 	while (*p) {
@@ -1051,9 +958,6 @@ int usb_stor_probe1(struct us_data **pus,
 	/*
 	 * Allow 16-byte CDBs and thus > 2TB
 	 */
-#ifdef CONFIG_USB_STORAGE_DETECT
-	host->by_usb = 1;
-#endif
 	host->max_cmd_len = 16;
 	host->sg_tablesize = usb_stor_sg_tablesize(intf);
 	*pus = us = host_to_us(host);
@@ -1179,18 +1083,9 @@ EXPORT_SYMBOL_GPL(usb_stor_probe2);
 void usb_stor_disconnect(struct usb_interface *intf)
 {
 	struct us_data *us = usb_get_intfdata(intf);
-#ifdef CONFIG_USB_STORAGE_DETECT
-	pr_info("%s enter\n", __func__);
-#endif
 
 	quiesce_and_remove_host(us);
-#ifdef CONFIG_USB_STORAGE_DETECT
-	pr_info("%s doing\n", __func__);
-#endif
 	release_everything(us);
-#ifdef CONFIG_USB_STORAGE_DETECT
-	pr_info("%s exit\n", __func__);
-#endif
 }
 EXPORT_SYMBOL_GPL(usb_stor_disconnect);
 

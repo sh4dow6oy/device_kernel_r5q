@@ -387,6 +387,7 @@ static void radeon_vm_set_pages(struct radeon_device *rdev,
 static int radeon_vm_clear_bo(struct radeon_device *rdev,
 			      struct radeon_bo *bo)
 {
+	struct ttm_operation_ctx ctx = { true, false };
 	struct radeon_ib ib;
 	unsigned entries;
 	uint64_t addr;
@@ -396,7 +397,7 @@ static int radeon_vm_clear_bo(struct radeon_device *rdev,
 	if (r)
 		return r;
 
-	r = ttm_bo_validate(&bo->tbo, &bo->placement, true, false);
+	r = ttm_bo_validate(&bo->tbo, &bo->placement, &ctx);
 	if (r)
 		goto error_unreserve;
 
@@ -830,7 +831,7 @@ static int radeon_vm_update_ptes(struct radeon_device *rdev,
 		int r;
 
 		radeon_sync_resv(rdev, &ib->sync, pt->tbo.resv, true);
-		r = reservation_object_reserve_shared(pt->tbo.resv);
+		r = reservation_object_reserve_shared(pt->tbo.resv, 1);
 		if (r)
 			return r;
 

@@ -66,35 +66,6 @@ static int ecryptfs_writepage(struct page *page, struct writeback_control *wbc)
 {
 	int rc;
 
-	// WTL_EDM_START
-	/* MDM 3.1 START */
-	struct inode *inode;
-	struct ecryptfs_crypt_stat *crypt_stat;
-
-	inode = page->mapping->host;
-	crypt_stat = &ecryptfs_inode_to_private(inode)->crypt_stat;
-	if (!(crypt_stat->flags & ECRYPTFS_ENCRYPTED)) {
-		size_t size;
-		loff_t file_size = i_size_read(inode);
-		pgoff_t end_page_index = file_size >> PAGE_CACHE_SHIFT;
-		if (end_page_index < page->index)
-			size = 0;
-		else if (end_page_index == page->index)
-			size = file_size & ~PAGE_CACHE_MASK;
-		else
-			size = PAGE_CACHE_SIZE;
-
-		rc = ecryptfs_write_lower_page_segment(inode, page, 0, size);
-		if (unlikely(rc)) {
-			ecryptfs_printk(KERN_WARNING, "Error write ""page (upper index [0x%.16lx])\n", page->index);
-			ClearPageUptodate(page);
-		} else
-			SetPageUptodate(page);
-		goto out;
-	}
-	/* MDM 3.1 END */
-	// WTL_EDM_END
-
 	rc = ecryptfs_encrypt_page(page);
 	if (rc) {
 		ecryptfs_printk(KERN_WARNING, "Error encrypting "
@@ -460,8 +431,6 @@ static int ecryptfs_write_inode_size_to_xattr(struct inode *ecryptfs_inode)
 	}
 	xattr_virt = kmem_cache_alloc(ecryptfs_xattr_cache, GFP_KERNEL);
 	if (!xattr_virt) {
-		printk(KERN_ERR "Out of memory whilst attempting to write "
-		       "inode size to xattr\n");
 		rc = -ENOMEM;
 		goto out;
 	}

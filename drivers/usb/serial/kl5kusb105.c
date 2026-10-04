@@ -1,13 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * KLSI KL5KUSB105 chip RS232 converter driver
  *
  *   Copyright (C) 2010 Johan Hovold <jhovold@gmail.com>
  *   Copyright (C) 2001 Utz-Uwe Haus <haus@uuhaus.de>
- *
- *   This program is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License as published by
- *   the Free Software Foundation; either version 2 of the License, or
- *   (at your option) any later version.
  *
  * All information about the device was acquired using SniffUSB ans snoopUSB
  * on Windows98.
@@ -71,7 +67,6 @@ static int klsi_105_prepare_write_buffer(struct usb_serial_port *port,
  */
 static const struct usb_device_id id_table[] = {
 	{ USB_DEVICE(PALMCONNECT_VID, PALMCONNECT_PID) },
-	{ USB_DEVICE(KLSI_VID, KLSI_KL5KUSB105D_PID) },
 	{ }		/* Terminating entry */
 };
 
@@ -364,8 +359,8 @@ static int klsi_105_prepare_write_buffer(struct usb_serial_port *port,
 	unsigned char *buf = dest;
 	int count;
 
-	count = kfifo_out_locked(&port->write_fifo, buf + KLSI_HDR_LEN, size,
-								&port->lock);
+	count = kfifo_out_locked(&port->write_fifo, buf + KLSI_HDR_LEN,
+				 size - KLSI_HDR_LEN, &port->lock);
 	put_unaligned_le16(count, buf);
 
 	return count + KLSI_HDR_LEN;

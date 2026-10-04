@@ -28,6 +28,7 @@
 #include <net/netlink.h>
 #include <net/act_api.h>
 #include <net/pkt_cls.h>
+#include <net/sch_generic.h>
 
 #define HTSIZE 256
 
@@ -46,10 +47,7 @@ struct fw_filter {
 #endif /* CONFIG_NET_CLS_IND */
 	struct tcf_exts		exts;
 	struct tcf_proto	*tp;
-	union {
-		struct work_struct	work;
-		struct rcu_head		rcu;
-	};
+	struct rcu_work		rwork;
 };
 
 static u32 fw_hash(u32 handle)
@@ -86,9 +84,15 @@ static int fw_classify(struct sk_buff *skb, const struct tcf_proto *tp,
 			}
 		}
 	} else {
+		struct Qdisc *q;
+
 		/* Old method: classify the packet using its skb mark. */
+		if (tcf_block_shared(tp->chain->block))
+			return -1;
+
+		q = tcf_block_q(tp->chain->block);
 		if (id && (TC_H_MAJ(id) == 0 ||
-			   !(TC_H_MAJ(id ^ tp->q->handle)))) {
+			   !(TC_H_MAJ(id ^ q->handle)))) {
 			res->classid = id;
 			res->class = 0;
 			return 0;
@@ -131,22 +135,15 @@ static void __fw_delete_filter(struct fw_filter *f)
 
 static void fw_delete_filter_work(struct work_struct *work)
 {
-	struct fw_filter *f = container_of(work, struct fw_filter, work);
-
+	struct fw_filter *f = container_of(to_rcu_work(work),
+					   struct fw_filter,
+					   rwork);
 	rtnl_lock();
 	__fw_delete_filter(f);
 	rtnl_unlock();
 }
 
-static void fw_delete_filter(struct rcu_head *head)
-{
-	struct fw_filter *f = container_of(head, struct fw_filter, rcu);
-
-	INIT_WORK(&f->work, fw_delete_filter_work);
-	tcf_queue_work(&f->work);
-}
-
-static void fw_destroy(struct tcf_proto *tp)
+static void fw_destroy(struct tcf_proto *tp, struct netlink_ext_ack *extack)
 {
 	struct fw_head *head = rtnl_dereference(tp->root);
 	struct fw_filter *f;
@@ -161,7 +158,7 @@ static void fw_destroy(struct tcf_proto *tp)
 					 rtnl_dereference(f->next));
 			tcf_unbind_filter(tp, &f->res);
 			if (tcf_exts_get_net(&f->exts))
-				call_rcu(&f->rcu, fw_delete_filter);
+				tcf_queue_work(&f->rwork, fw_delete_filter_work);
 			else
 				__fw_delete_filter(f);
 		}
@@ -169,7 +166,8 @@ static void fw_destroy(struct tcf_proto *tp)
 	kfree_rcu(head, rcu);
 }
 
-static int fw_delete(struct tcf_proto *tp, void *arg, bool *last)
+static int fw_delete(struct tcf_proto *tp, void *arg, bool *last,
+		     struct netlink_ext_ack *extack)
 {
 	struct fw_head *head = rtnl_dereference(tp->root);
 	struct fw_filter *f = arg;
@@ -189,7 +187,7 @@ static int fw_delete(struct tcf_proto *tp, void *arg, bool *last)
 			RCU_INIT_POINTER(*fp, rtnl_dereference(f->next));
 			tcf_unbind_filter(tp, &f->res);
 			tcf_exts_get_net(&f->exts);
-			call_rcu(&f->rcu, fw_delete_filter);
+			tcf_queue_work(&f->rwork, fw_delete_filter_work);
 			ret = 0;
 			break;
 		}
@@ -215,20 +213,22 @@ static const struct nla_policy fw_policy[TCA_FW_MAX + 1] = {
 
 static int fw_set_parms(struct net *net, struct tcf_proto *tp,
 			struct fw_filter *f, struct nlattr **tb,
-			struct nlattr **tca, unsigned long base, bool ovr)
+			struct nlattr **tca, unsigned long base, bool ovr,
+			struct netlink_ext_ack *extack)
 {
 	struct fw_head *head = rtnl_dereference(tp->root);
 	u32 mask;
 	int err;
 
-	err = tcf_exts_validate(net, tp, tb, tca[TCA_RATE], &f->exts, ovr);
+	err = tcf_exts_validate(net, tp, tb, tca[TCA_RATE], &f->exts, ovr,
+				extack);
 	if (err < 0)
 		return err;
 
 #ifdef CONFIG_NET_CLS_IND
 	if (tb[TCA_FW_INDEV]) {
 		int ret;
-		ret = tcf_change_indev(net, tb[TCA_FW_INDEV]);
+		ret = tcf_change_indev(net, tb[TCA_FW_INDEV], extack);
 		if (ret < 0)
 			return ret;
 		f->ifindex = ret;
@@ -254,7 +254,7 @@ static int fw_set_parms(struct net *net, struct tcf_proto *tp,
 static int fw_change(struct net *net, struct sk_buff *in_skb,
 		     struct tcf_proto *tp, unsigned long base,
 		     u32 handle, struct nlattr **tca, void **arg,
-		     bool ovr)
+		     bool ovr, struct netlink_ext_ack *extack)
 {
 	struct fw_head *head = rtnl_dereference(tp->root);
 	struct fw_filter *f = *arg;
@@ -262,10 +262,21 @@ static int fw_change(struct net *net, struct sk_buff *in_skb,
 	struct nlattr *tb[TCA_FW_MAX + 1];
 	int err;
 
-	if (!opt)
-		return handle ? -EINVAL : 0; /* Succeed if it is old method. */
+	if (!opt) {
+		if (handle)
+			return -EINVAL;
 
-	err = nla_parse_nested(tb, TCA_FW_MAX, opt, fw_policy, NULL);
+		if (tcf_block_shared(tp->chain->block)) {
+			NL_SET_ERR_MSG(extack,
+				       "Must specify mark when attaching fw filter to block");
+			return -EINVAL;
+		}
+
+		return 0; /* Succeed if it is old method. */
+	}
+
+	err = nla_parse_nested_deprecated(tb, TCA_FW_MAX, opt, fw_policy,
+					  NULL);
 	if (err < 0)
 		return err;
 
@@ -292,7 +303,7 @@ static int fw_change(struct net *net, struct sk_buff *in_skb,
 			return err;
 		}
 
-		err = fw_set_parms(net, tp, fnew, tb, tca, base, ovr);
+		err = fw_set_parms(net, tp, fnew, tb, tca, base, ovr, extack);
 		if (err < 0) {
 			tcf_exts_destroy(&fnew->exts);
 			kfree(fnew);
@@ -309,7 +320,7 @@ static int fw_change(struct net *net, struct sk_buff *in_skb,
 		rcu_assign_pointer(*fp, fnew);
 		tcf_unbind_filter(tp, &f->res);
 		tcf_exts_get_net(&f->exts);
-		call_rcu(&f->rcu, fw_delete_filter);
+		tcf_queue_work(&f->rwork, fw_delete_filter_work);
 
 		*arg = fnew;
 		return err;
@@ -341,7 +352,7 @@ static int fw_change(struct net *net, struct sk_buff *in_skb,
 	f->id = handle;
 	f->tp = tp;
 
-	err = fw_set_parms(net, tp, f, tb, tca, base, ovr);
+	err = fw_set_parms(net, tp, f, tb, tca, base, ovr, extack);
 	if (err < 0)
 		goto errout;
 
@@ -401,7 +412,7 @@ static int fw_dump(struct net *net, struct tcf_proto *tp, void *fh,
 	if (!f->res.classid && !tcf_exts_has_actions(&f->exts))
 		return skb->len;
 
-	nest = nla_nest_start(skb, TCA_OPTIONS);
+	nest = nla_nest_start_noflag(skb, TCA_OPTIONS);
 	if (nest == NULL)
 		goto nla_put_failure;
 
@@ -435,12 +446,17 @@ nla_put_failure:
 	return -1;
 }
 
-static void fw_bind_class(void *fh, u32 classid, unsigned long cl)
+static void fw_bind_class(void *fh, u32 classid, unsigned long cl, void *q,
+			  unsigned long base)
 {
 	struct fw_filter *f = fh;
 
-	if (f && f->res.classid == classid)
-		f->res.class = cl;
+	if (f && f->res.classid == classid) {
+		if (cl)
+			__tcf_bind_filter(q, &f->res, base);
+		else
+			__tcf_unbind_filter(q, &f->res);
+	}
 }
 
 static struct tcf_proto_ops cls_fw_ops __read_mostly = {

@@ -1,5 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -21,6 +22,8 @@
 #include <asm/div64.h>
 #include "msm_vidc_common.h"
 #include "vidc_hfi_api.h"
+#include "vidc_hfi_helper.h"
+#include "vidc_hfi.h"
 #include "msm_vidc_debug.h"
 #include "msm_vidc_dcvs.h"
 
@@ -659,6 +662,142 @@ struct msm_vidc_format *msm_comm_get_pixel_fmt_fourcc(
 	}
 	return &fmt[i];
 }
+struct msm_vidc_format_constraint *msm_comm_get_pixel_fmt_constraints(
+	struct msm_vidc_format_constraint fmt[], int size, int fourcc)
+{
+	int i;
+
+	if (!fmt) {
+		dprintk(VIDC_ERR, "Invalid inputs, fmt = %pK\n", fmt);
+		return NULL;
+	}
+	for (i = 0; i < size; i++) {
+		if (fmt[i].fourcc == fourcc)
+			break;
+	}
+	if (i == size) {
+		dprintk(VIDC_ERR, "Format constraint not found.\n");
+		return NULL;
+	}
+	return &fmt[i];
+}
+u32 msm_comm_convert_color_fmt(u32 v4l2_fmt)
+{
+	switch (v4l2_fmt) {
+	case V4L2_PIX_FMT_NV12:
+		return COLOR_FMT_NV12;
+	case V4L2_PIX_FMT_NV21:
+		return COLOR_FMT_NV21;
+	case V4L2_PIX_FMT_NV12_512:
+		return COLOR_FMT_NV12_512;
+	case V4L2_PIX_FMT_SDE_Y_CBCR_H2V2_P010_VENUS:
+		return COLOR_FMT_P010;
+	case V4L2_PIX_FMT_NV12_UBWC:
+		return COLOR_FMT_NV12_UBWC;
+	case V4L2_PIX_FMT_NV12_TP10_UBWC:
+		return COLOR_FMT_NV12_BPP10_UBWC;
+	default:
+		dprintk(VIDC_ERR,
+			"Invalid v4l2 color fmt FMT : %x, Set default(NV12)",
+			v4l2_fmt);
+		return COLOR_FMT_NV12;
+	}
+}
+static u32 get_hfi_buffer(int hal_buffer)
+{
+	u32 buffer;
+
+	switch (hal_buffer) {
+	case HAL_BUFFER_INPUT:
+		buffer = HFI_BUFFER_INPUT;
+		break;
+	case HAL_BUFFER_OUTPUT:
+		buffer = HFI_BUFFER_OUTPUT;
+		break;
+	case HAL_BUFFER_OUTPUT2:
+		buffer = HFI_BUFFER_OUTPUT2;
+		break;
+	case HAL_BUFFER_INTERNAL_PERSIST:
+		buffer = HFI_BUFFER_INTERNAL_PERSIST;
+		break;
+	case HAL_BUFFER_INTERNAL_PERSIST_1:
+		buffer = HFI_BUFFER_INTERNAL_PERSIST_1;
+		break;
+	default:
+		dprintk(VIDC_ERR, "Invalid buffer: %#x\n", hal_buffer);
+		buffer = 0;
+		break;
+	}
+	return buffer;
+}
+int msm_comm_set_color_format_constraints(struct msm_vidc_inst *inst,
+		enum hal_buffer buffer_type,
+		struct msm_vidc_format_constraint *pix_constraint)
+{
+	struct hfi_uncompressed_plane_actual_constraints_info
+		*pconstraint = NULL;
+	u32 num_planes = 2;
+	u32 size = 0;
+	int rc = 0;
+	struct hfi_device *hdev;
+	u32 hfi_fmt;
+
+	if (!inst || !inst->core || !inst->core->device) {
+		dprintk(VIDC_ERR, "%s: invalid params %pK\n", __func__, inst);
+		return -EINVAL;
+	}
+
+	hdev = inst->core->device;
+
+	size = 2 * sizeof(u32)
+			+ num_planes
+			* sizeof(struct hfi_uncompressed_plane_constraints);
+
+	pconstraint = kzalloc(size, GFP_KERNEL);
+	if (!pconstraint) {
+		dprintk(VIDC_ERR, "No memory cannot alloc constrain\n");
+		rc = -ENOMEM;
+		goto exit;
+	}
+
+	hfi_fmt = msm_comm_convert_color_fmt(pix_constraint->fourcc);
+	pconstraint->buffer_type = get_hfi_buffer(buffer_type);
+	pconstraint->num_planes = pix_constraint->num_planes;
+	//set Y plan constraints
+	pconstraint->rg_plane_format[0].stride_multiples =
+			VENUS_Y_STRIDE(hfi_fmt, 1);
+	pconstraint->rg_plane_format[0].max_stride =
+			pix_constraint->y_max_stride;
+	pconstraint->rg_plane_format[0].min_plane_buffer_height_multiple =
+			VENUS_Y_SCANLINES(hfi_fmt, 1);
+	pconstraint->rg_plane_format[0].buffer_alignment =
+			pix_constraint->y_buffer_alignment;
+
+	//set UV plan constraints
+	pconstraint->rg_plane_format[1].stride_multiples =
+			VENUS_UV_STRIDE(hfi_fmt, 1);
+	pconstraint->rg_plane_format[1].max_stride =
+			pix_constraint->uv_max_stride;
+	pconstraint->rg_plane_format[1].min_plane_buffer_height_multiple =
+			VENUS_UV_SCANLINES(hfi_fmt, 1);
+	pconstraint->rg_plane_format[1].buffer_alignment =
+			pix_constraint->uv_buffer_alignment;
+
+	rc = call_hfi_op(hdev,
+		session_set_property,
+		inst->session,
+		HFI_PROPERTY_PARAM_UNCOMPRESSED_PLANE_ACTUAL_CONSTRAINTS_INFO,
+		pconstraint);
+	if (rc)
+		dprintk(VIDC_ERR,
+			"Failed to set input color format constraint\n");
+	else
+		dprintk(VIDC_DBG, "Set color format constraint success\n");
+
+exit:
+	kfree(pconstraint);
+	return rc;
+}
 
 struct buf_queue *msm_comm_get_vb2q(
 		struct msm_vidc_inst *inst, enum v4l2_buf_type type)
@@ -704,9 +843,7 @@ static void handle_sys_init_done(enum hal_command_response cmd, void *data)
 	core->dec_codec_supported = sys_init_msg->dec_codec_supported;
 
 	/* This should come from sys_init_done */
-	core->resources.max_inst_count =
-		sys_init_msg->max_sessions_supported ? :
-		MAX_SUPPORTED_INSTANCES;
+	core->resources.max_inst_count = 16;
 
 	core->resources.max_secure_inst_count =
 		core->resources.max_secure_inst_count ? :
@@ -2692,35 +2829,15 @@ static int msm_vidc_deinit_core(struct msm_vidc_inst *inst)
 	if (core->state == VIDC_CORE_UNINIT) {
 		dprintk(VIDC_INFO, "Video core: %d is already in state: %d\n",
 				core->id, core->state);
+		mutex_unlock(&core->lock);
 		goto core_already_uninited;
 	}
 	mutex_unlock(&core->lock);
 
 	msm_comm_scale_clocks_and_bus(inst);
 
-	mutex_lock(&core->lock);
-
-	if (!core->resources.never_unload_fw) {
-		cancel_delayed_work(&core->fw_unload_work);
-
-		/*
-		 * Delay unloading of firmware. This is useful
-		 * in avoiding firmware download delays in cases where we
-		 * will have a burst of back to back video playback sessions
-		 * e.g. thumbnail generation.
-		 */
-		schedule_delayed_work(&core->fw_unload_work,
-			msecs_to_jiffies(core->state == VIDC_CORE_INVALID ?
-					0 : msm_vidc_firmware_unload_delay));
-
-		dprintk(VIDC_DBG, "firmware unload delayed by %u ms\n",
-			core->state == VIDC_CORE_INVALID ?
-			0 : msm_vidc_firmware_unload_delay);
-	}
-
 core_already_uninited:
 	change_inst_state(inst, MSM_VIDC_CORE_UNINIT);
-	mutex_unlock(&core->lock);
 	return 0;
 }
 
@@ -4731,7 +4848,7 @@ int msm_comm_flush(struct msm_vidc_inst *inst, u32 flags)
 
 		/*Do not send flush in case of session_error */
 		if (!(inst->state == MSM_VIDC_CORE_INVALID &&
-			  core->state != VIDC_CORE_INVALID))
+				core->state != VIDC_CORE_INVALID))
 			atomic_inc(&inst->in_flush);
 			dprintk(VIDC_DBG, "Send flush all to firmware\n");
 			rc = call_hfi_op(hdev, session_flush, inst->session,
@@ -4743,7 +4860,7 @@ int msm_comm_flush(struct msm_vidc_inst *inst, u32 flags)
 
 
 enum hal_extradata_id msm_comm_get_hal_extradata_index(
-	enum v4l2_mpeg_vidc_extradata index)
+	enum v4l2_mpeg_vidc3x_extradata index)
 {
 	int ret = 0;
 
@@ -4911,7 +5028,38 @@ static int msm_vidc_load_supported(struct msm_vidc_inst *inst)
 	}
 	return 0;
 }
+static int msm_vidc_check_mbpf_supported(struct msm_vidc_inst *inst)
+{
+	u32 mbpf = 0;
+	struct msm_vidc_core *core;
+	struct msm_vidc_inst *temp;
+	struct msm_vidc_capability *capability;
 
+	if (!inst || !inst->core)
+		return -EINVAL;
+
+	core = inst->core;
+	capability = &inst->capability;
+	mutex_lock(&core->lock);
+	list_for_each_entry(temp, &core->instances, list) {
+		/* ignore invalid and completed session */
+		if (temp->state == MSM_VIDC_CORE_INVALID ||
+			temp->state >= MSM_VIDC_STOP_DONE)
+			continue;
+		/* ignore thumbnail session */
+		if (is_thumbnail_session(temp))
+			continue;
+		 mbpf += NUM_MBS_PER_FRAME(inst->prop.width[OUTPUT_PORT],
+				inst->prop.height[OUTPUT_PORT]);
+	}
+	mutex_unlock(&core->lock);
+	if (mbpf > 2*capability->mbs_per_frame.max) {
+		msm_vidc_print_running_insts(inst->core);
+		return -EBUSY;
+	}
+
+	return 0;
+}
 int msm_vidc_check_scaling_supported(struct msm_vidc_inst *inst)
 {
 	u32 x_min, x_max, y_min, y_max;
@@ -5009,6 +5157,9 @@ int msm_vidc_check_session_supported(struct msm_vidc_inst *inst)
 			"%s: Hardware is overloaded\n", __func__);
 		return rc;
 	}
+	rc = msm_vidc_check_mbpf_supported(inst);
+	if (rc)
+		return rc;
 
 	if (!is_thermal_permissible(core)) {
 		dprintk(VIDC_WARN,
@@ -5172,43 +5323,6 @@ int msm_comm_smem_cache_operations(struct msm_vidc_inst *inst,
 	}
 	return msm_smem_cache_operations(mem->dma_buf, mem->offset,
 					mem->size, cache_ops);
-}
-
-void msm_vidc_fw_unload_handler(struct work_struct *work)
-{
-	struct msm_vidc_core *core = NULL;
-	struct hfi_device *hdev = NULL;
-	int rc = 0;
-
-	core = container_of(work, struct msm_vidc_core, fw_unload_work.work);
-	if (!core || !core->device) {
-		dprintk(VIDC_ERR, "%s - invalid work or core handle\n",
-				__func__);
-		return;
-	}
-
-	hdev = core->device;
-
-	mutex_lock(&core->lock);
-	if (list_empty(&core->instances) &&
-		core->state != VIDC_CORE_UNINIT) {
-		if (core->state > VIDC_CORE_INIT) {
-			dprintk(VIDC_DBG, "Calling vidc_hal_core_release\n");
-			rc = call_hfi_op(hdev, core_release,
-					hdev->hfi_device_data);
-			if (rc) {
-				dprintk(VIDC_ERR,
-					"Failed to release core, id = %d\n",
-					core->id);
-				mutex_unlock(&core->lock);
-				return;
-			}
-		}
-		core->state = VIDC_CORE_UNINIT;
-		kfree(core->capabilities);
-		core->capabilities = NULL;
-	}
-	mutex_unlock(&core->lock);
 }
 
 int msm_comm_set_color_format(struct msm_vidc_inst *inst,

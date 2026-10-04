@@ -1,13 +1,6 @@
-/* Copyright (c) 2015-2016, 2020, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2015-2016, 2020, The Linux Foundation. All rights reserved.
  */
 
 #include <linux/debugfs.h>
@@ -323,7 +316,7 @@ int ipa2_disconnect_mhi_pipe(u32 clnt_hdl)
 
 int ipa2_mhi_resume_channels_internal(enum ipa_client_type client,
 		bool LPTransitionRejected, bool brstmode_enabled,
-		union gsi_channel_scratch ch_scratch, u8 index)
+		union __packed gsi_channel_scratch ch_scratch, u8 index)
 {
 	int res;
 

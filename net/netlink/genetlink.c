@@ -352,8 +352,9 @@ int genl_register_family(struct genl_family *family)
 	}
 
 	if (family->maxattr && !family->parallel_ops) {
-		family->attrbuf = kmalloc((family->maxattr+1) *
-					sizeof(struct nlattr *), GFP_KERNEL);
+		family->attrbuf = kmalloc_array(family->maxattr + 1,
+						sizeof(struct nlattr *),
+						GFP_KERNEL);
 		if (family->attrbuf == NULL) {
 			err = -ENOMEM;
 			goto errout_locked;
@@ -567,16 +568,18 @@ static int genl_family_rcv_msg(const struct genl_family *family,
 		return -EOPNOTSUPP;
 
 	if (family->maxattr && family->parallel_ops) {
-		attrbuf = kmalloc((family->maxattr+1) *
-					sizeof(struct nlattr *), GFP_KERNEL);
+		attrbuf = kmalloc_array(family->maxattr + 1,
+					sizeof(struct nlattr *),
+					GFP_KERNEL);
 		if (attrbuf == NULL)
 			return -ENOMEM;
 	} else
 		attrbuf = family->attrbuf;
 
 	if (attrbuf) {
-		err = nlmsg_parse(nlh, hdrlen, attrbuf, family->maxattr,
-				  ops->policy, extack);
+		err = nlmsg_parse_deprecated(nlh, hdrlen, attrbuf,
+					     family->maxattr, ops->policy,
+					     extack);
 		if (err < 0)
 			goto out;
 	}
@@ -663,7 +666,7 @@ static int ctrl_fill_info(const struct genl_family *family, u32 portid, u32 seq,
 		struct nlattr *nla_ops;
 		int i;
 
-		nla_ops = nla_nest_start(skb, CTRL_ATTR_OPS);
+		nla_ops = nla_nest_start_noflag(skb, CTRL_ATTR_OPS);
 		if (nla_ops == NULL)
 			goto nla_put_failure;
 
@@ -679,7 +682,7 @@ static int ctrl_fill_info(const struct genl_family *family, u32 portid, u32 seq,
 			if (ops->policy)
 				op_flags |= GENL_CMD_CAP_HASPOL;
 
-			nest = nla_nest_start(skb, i + 1);
+			nest = nla_nest_start_noflag(skb, i + 1);
 			if (nest == NULL)
 				goto nla_put_failure;
 
@@ -697,7 +700,7 @@ static int ctrl_fill_info(const struct genl_family *family, u32 portid, u32 seq,
 		struct nlattr *nla_grps;
 		int i;
 
-		nla_grps = nla_nest_start(skb, CTRL_ATTR_MCAST_GROUPS);
+		nla_grps = nla_nest_start_noflag(skb, CTRL_ATTR_MCAST_GROUPS);
 		if (nla_grps == NULL)
 			goto nla_put_failure;
 
@@ -707,7 +710,7 @@ static int ctrl_fill_info(const struct genl_family *family, u32 portid, u32 seq,
 
 			grp = &family->mcgrps[i];
 
-			nest = nla_nest_start(skb, i + 1);
+			nest = nla_nest_start_noflag(skb, i + 1);
 			if (nest == NULL)
 				goto nla_put_failure;
 
@@ -747,11 +750,11 @@ static int ctrl_fill_mcgrp_info(const struct genl_family *family,
 	    nla_put_u16(skb, CTRL_ATTR_FAMILY_ID, family->id))
 		goto nla_put_failure;
 
-	nla_grps = nla_nest_start(skb, CTRL_ATTR_MCAST_GROUPS);
+	nla_grps = nla_nest_start_noflag(skb, CTRL_ATTR_MCAST_GROUPS);
 	if (nla_grps == NULL)
 		goto nla_put_failure;
 
-	nest = nla_nest_start(skb, 1);
+	nest = nla_nest_start_noflag(skb, 1);
 	if (nest == NULL)
 		goto nla_put_failure;
 
@@ -844,14 +847,12 @@ static const struct nla_policy ctrl_policy[CTRL_ATTR_MAX+1] = {
 	[CTRL_ATTR_FAMILY_NAME]	= { .type = NLA_NUL_STRING,
 				    .len = GENL_NAMSIZ - 1 },
 };
-char* search = "cld80211";
 
 static int ctrl_getfamily(struct sk_buff *skb, struct genl_info *info)
 {
 	struct sk_buff *msg;
 	const struct genl_family *res = NULL;
 	int err = -EINVAL;
-	char* sname = NULL;
 
 	if (info->attrs[CTRL_ATTR_FAMILY_ID]) {
 		u16 id = nla_get_u16(info->attrs[CTRL_ATTR_FAMILY_ID]);
@@ -863,12 +864,7 @@ static int ctrl_getfamily(struct sk_buff *skb, struct genl_info *info)
 		char *name;
 
 		name = nla_data(info->attrs[CTRL_ATTR_FAMILY_NAME]);
-		sname = name;
 		res = genl_family_find_byname(name);
-
-		if (res && !strncmp(name, search, strlen(search)))
-			pr_err("%s(%d) found  w/o mod res: %s\n", __func__, __LINE__, res->name);
-
 #ifdef CONFIG_MODULES
 		if (res == NULL) {
 			genl_unlock();
@@ -878,42 +874,25 @@ static int ctrl_getfamily(struct sk_buff *skb, struct genl_info *info)
 			down_read(&cb_lock);
 			genl_lock();
 			res = genl_family_find_byname(name);
-			if (res && !strncmp(name, search, strlen(search)))
-				pr_err("%s(%d) found mod res: %s\n", __func__, __LINE__, res->name);
 		}
 #endif
 		err = -ENOENT;
 	}
 
-	if (res == NULL) {
-		if (sname && !strncmp(sname, search, strlen(search)))
-			pr_err("%s(%d) no res found err: %d\n", __func__, __LINE__, err);
+	if (res == NULL)
 		return err;
-	}
 
 	if (!res->netnsok && !net_eq(genl_info_net(info), &init_net)) {
-		if (sname && !strncmp(sname, search, strlen(search)))
-			pr_err("%s(%d) ENONET\n", __func__, __LINE__);
 		/* family doesn't exist here */
 		return -ENOENT;
 	}
 
 	msg = ctrl_build_family_msg(res, info->snd_portid, info->snd_seq,
 				    CTRL_CMD_NEWFAMILY);
-	if (IS_ERR(msg)) {
-		if (sname && !strncmp(sname, search, strlen(search)))
-			pr_err("%s(%d) err on msg build : %ld\n", __func__, __LINE__, PTR_ERR(msg));
+	if (IS_ERR(msg))
 		return PTR_ERR(msg);
-	}
 
-	if (sname && !strncmp(sname, search, strlen(search)))
-		pr_err("%s(%d) skb: %p\n", __func__, __LINE__, msg);
-
-	err = genlmsg_reply(msg, info);
-	if (sname && !strncmp(sname, search, strlen(search)))
-		pr_err("%s(%d) reply err: %d\n", __func__, __LINE__, err);
-
-	return err;
+	return genlmsg_reply(msg, info);
 }
 
 static int genl_ctrl_event(int event, const struct genl_family *family,
@@ -983,46 +962,11 @@ static struct genl_family genl_ctrl __ro_after_init = {
 	.netnsok = true,
 };
 
-static int genl_bind(struct net *net, int group)
-{
-	const struct genl_family *family;
-	unsigned int id;
-	int ret = 0;
-
-	genl_lock_all();
-
-	idr_for_each_entry(&genl_fam_idr, family, id) {
-		const struct genl_multicast_group *grp;
-		int i;
-
-		if (family->n_mcgrps == 0)
-			continue;
-
-		i = group - family->mcgrp_offset;
-		if (i < 0 || i >= family->n_mcgrps)
-			continue;
-
-		grp = &family->mcgrps[i];
-		if ((grp->flags & GENL_UNS_ADMIN_PERM) &&
-		    !ns_capable(net->user_ns, CAP_NET_ADMIN))
-			ret = -EPERM;
-		if (grp->cap_sys_admin &&
-		    !ns_capable(net->user_ns, CAP_SYS_ADMIN))
-			ret = -EPERM;
-
-		break;
-	}
-
-	genl_unlock_all();
-	return ret;
-}
-
 static int __net_init genl_pernet_init(struct net *net)
 {
 	struct netlink_kernel_cfg cfg = {
 		.input		= genl_rcv,
 		.flags		= NL_CFG_F_NONROOT_RECV,
-		.bind		= genl_bind,
 	};
 
 	/* we'll bump the group number right afterwards */

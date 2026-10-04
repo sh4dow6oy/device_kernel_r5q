@@ -10,7 +10,7 @@
 #include <linux/mm_types.h>
 #include <linux/err.h>
 
-#include <asm/pgtable.h>
+#include <linux/pgtable.h>
 #include <asm/gmap.h>
 #include "kvm-s390.h"
 #include "gaccess.h"
@@ -903,7 +903,7 @@ int access_guest(struct kvm_vcpu *vcpu, unsigned long ga, u8 ar, void *data,
 	nr_pages = (((ga & ~PAGE_MASK) + len - 1) >> PAGE_SHIFT) + 1;
 	gpas = gpa_array;
 	if (nr_pages > ARRAY_SIZE(gpa_array))
-		gpas = vmalloc(nr_pages * sizeof(unsigned long));
+		gpas = vmalloc(array_size(nr_pages, sizeof(unsigned long)));
 	if (!gpas)
 		return -ENOMEM;
 	need_ipte_lock = psw_bits(*psw).dat && !asce.r;
@@ -1080,8 +1080,7 @@ shadow_r2t:
 		rc = gmap_shadow_r2t(sg, saddr, rfte.val, *fake);
 		if (rc)
 			return rc;
-		/* fallthrough */
-	}
+	} /* fallthrough */
 	case ASCE_TYPE_REGION2: {
 		union region2_table_entry rste;
 
@@ -1107,8 +1106,7 @@ shadow_r3t:
 		rc = gmap_shadow_r3t(sg, saddr, rste.val, *fake);
 		if (rc)
 			return rc;
-		/* fallthrough */
-	}
+	} /* fallthrough */
 	case ASCE_TYPE_REGION3: {
 		union region3_table_entry rtte;
 
@@ -1143,8 +1141,7 @@ shadow_sgt:
 		rc = gmap_shadow_sgt(sg, saddr, rtte.val, *fake);
 		if (rc)
 			return rc;
-		/* fallthrough */
-	}
+	} /* fallthrough */
 	case ASCE_TYPE_SEGMENT: {
 		union segment_table_entry ste;
 
@@ -1203,7 +1200,7 @@ int kvm_s390_shadow_fault(struct kvm_vcpu *vcpu, struct gmap *sg,
 	int dat_protection, fake;
 	int rc;
 
-	down_read(&sg->mm->mmap_sem);
+	mmap_read_lock(sg->mm);
 	/*
 	 * We don't want any guest-2 tables to change - so the parent
 	 * tables/pointers we read stay valid - unshadowing is however
@@ -1232,6 +1229,6 @@ shadow_page:
 	if (!rc)
 		rc = gmap_shadow_page(sg, saddr, __pte(pte.val));
 	ipte_unlock(vcpu);
-	up_read(&sg->mm->mmap_sem);
+	mmap_read_unlock(sg->mm);
 	return rc;
 }

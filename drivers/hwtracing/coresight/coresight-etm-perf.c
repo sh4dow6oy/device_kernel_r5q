@@ -1,18 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright(C) 2015 Linaro Limited. All rights reserved.
  * Author: Mathieu Poirier <mathieu.poirier@linaro.org>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published by
- * the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License along with
- * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <linux/coresight.h>
@@ -137,17 +126,14 @@ static void free_sink_buffer(struct etm_event_data *event_data)
 	cpumask_t *mask = &event_data->mask;
 	struct coresight_device *sink;
 
-	if (WARN_ON(cpumask_empty(mask)))
+	if (!event_data->snk_config)
 		return;
 
-	if (!event_data->snk_config)
+	if (WARN_ON(cpumask_empty(mask)))
 		return;
 
 	cpu = cpumask_first(mask);
 	sink = coresight_get_sink(etm_event_cpu_path(event_data, cpu));
-	if (!sink)
-		return;
-
 	sink_ops(sink)->free_buffer(event_data->snk_config);
 }
 
@@ -168,7 +154,7 @@ static void free_event_data(struct work_struct *work)
 		struct list_head **ppath;
 
 		ppath = etm_event_cpu_path_ptr(event_data, cpu);
-		source = coresight_get_source(event_data->path[cpu]);
+		source = coresight_get_source(*ppath);
 		if (!(IS_ERR_OR_NULL(*ppath)))
 			coresight_release_path(source, *ppath);
 		*ppath = NULL;
@@ -234,6 +220,8 @@ static void *etm_setup_aux(struct perf_event *event, void **pages,
 		return NULL;
 	INIT_WORK(&event_data->work, free_event_data);
 
+	mask = &event_data->mask;
+
 	/* First get the selected sink from user space. */
 	if (event->attr.config2) {
 		id = (u32)event->attr.config2;
@@ -242,11 +230,10 @@ static void *etm_setup_aux(struct perf_event *event, void **pages,
 		sink = coresight_get_enabled_sink(true);
 	}
 
-	if (!sink)
+	if (!sink) {
+		cpumask_clear(mask);
 		goto err;
-
-	mask = &event_data->mask;
-
+	}
 	/*
 	 * Setup the path for each CPU in a trace session. We try to build
 	 * trace path for each CPU in the mask. If we don't find an ETM
@@ -325,6 +312,16 @@ static void etm_event_start(struct perf_event *event, int flags)
 	event_data = perf_aux_output_begin(handle, event);
 	if (!event_data)
 		goto fail;
+
+	/*
+	 * Check if this ETM is allowed to trace, as decided
+	 * at etm_setup_aux(). This could be due to an unreachable
+	 * sink from this ETM. We can't do much in this case if
+	 * the sink was specified or hinted to the driver. For
+	 * now, simply don't record anything on this ETM.
+	 */
+	if (!cpumask_test_cpu(cpu, &event_data->mask))
+		goto fail_end_stop;
 
 	path = etm_event_cpu_path(event_data, cpu);
 	/* We need a sink, no need to continue without one */
@@ -437,35 +434,26 @@ static int etm_addr_filters_validate(struct list_head *filters)
 		if (++index > ETM_ADDR_CMP_MAX)
 			return -EOPNOTSUPP;
 
+		/* filter::size==0 means single address trigger */
+		if (filter->size) {
+			/*
+			 * The existing code relies on START/STOP filters
+			 * being address filters.
+			 */
+			if (filter->action == PERF_ADDR_FILTER_ACTION_START ||
+			    filter->action == PERF_ADDR_FILTER_ACTION_STOP)
+				return -EOPNOTSUPP;
+
+			range = true;
+		} else
+			address = true;
+
 		/*
-		 * As taken from the struct perf_addr_filter documentation:
-		 *	@range:	1: range, 0: address
-		 *
 		 * At this time we don't allow range and start/stop filtering
 		 * to cohabitate, they have to be mutually exclusive.
 		 */
-		if ((filter->range == 1) && address)
+		if (range && address)
 			return -EOPNOTSUPP;
-
-		if ((filter->range == 0) && range)
-			return -EOPNOTSUPP;
-
-		/*
-		 * For range filtering, the second address in the address
-		 * range comparator needs to be higher than the first.
-		 * Invalid otherwise.
-		 */
-		if (filter->range && filter->size == 0)
-			return -EINVAL;
-
-		/*
-		 * Everything checks out with this filter, record what we've
-		 * received before moving on to the next one.
-		 */
-		if (filter->range)
-			range = true;
-		else
-			address = true;
 	}
 
 	return 0;
@@ -486,18 +474,20 @@ static void etm_addr_filters_sync(struct perf_event *event)
 		stop = start + fr[i].size;
 		etm_filter = &filters->etm_filter[i];
 
-		if (filter->range == 1) {
+		switch (filter->action) {
+		case PERF_ADDR_FILTER_ACTION_FILTER:
 			etm_filter->start_addr = start;
 			etm_filter->stop_addr = stop;
 			etm_filter->type = ETM_ADDR_TYPE_RANGE;
-		} else {
-			if (filter->filter == 1) {
-				etm_filter->start_addr = start;
-				etm_filter->type = ETM_ADDR_TYPE_START;
-			} else {
-				etm_filter->stop_addr = stop;
-				etm_filter->type = ETM_ADDR_TYPE_STOP;
-			}
+			break;
+		case PERF_ADDR_FILTER_ACTION_START:
+			etm_filter->start_addr = start;
+			etm_filter->type = ETM_ADDR_TYPE_START;
+			break;
+		case PERF_ADDR_FILTER_ACTION_STOP:
+			etm_filter->stop_addr = stop;
+			etm_filter->type = ETM_ADDR_TYPE_STOP;
+			break;
 		}
 		i++;
 	}
@@ -512,7 +502,7 @@ int etm_perf_symlink(struct coresight_device *csdev, bool link)
 	struct device *pmu_dev = etm_pmu.dev;
 	struct device *cs_dev = &csdev->dev;
 
-	sprintf(entry, "cpu%d", cpu);
+	scnprintf(entry, PAGE_SIZE, "cpu%d", cpu);
 
 	if (!etm_perf_up)
 		return -EPROBE_DEFER;

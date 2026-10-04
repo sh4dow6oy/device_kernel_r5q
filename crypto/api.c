@@ -137,7 +137,7 @@ static struct crypto_alg *crypto_larval_add(const char *name, u32 type,
 	if (IS_ERR(larval))
 		return ERR_CAST(larval);
 
-	atomic_set(&larval->alg.cra_refcnt, 2);
+	refcount_set(&larval->alg.cra_refcnt, 2);
 
 	down_write(&crypto_alg_sem);
 	alg = __crypto_alg_lookup(name, type, mask);
@@ -193,19 +193,32 @@ static struct crypto_alg *crypto_larval_wait(struct crypto_alg *alg)
 	return alg;
 }
 
-struct crypto_alg *crypto_alg_lookup(const char *name, u32 type, u32 mask)
+static struct crypto_alg *crypto_alg_lookup(const char *name, u32 type,
+					    u32 mask)
 {
 	struct crypto_alg *alg;
+	u32 test = 0;
+
+	if (!((type | mask) & CRYPTO_ALG_TESTED))
+		test |= CRYPTO_ALG_TESTED;
 
 	down_read(&crypto_alg_sem);
-	alg = __crypto_alg_lookup(name, type, mask);
+	alg = __crypto_alg_lookup(name, type | test, mask | test);
+	if (!alg && test) {
+		alg = __crypto_alg_lookup(name, type, mask);
+		if (alg && !crypto_is_larval(alg)) {
+			/* Test failed */
+			crypto_mod_put(alg);
+			alg = ERR_PTR(-ELIBBAD);
+		}
+	}
 	up_read(&crypto_alg_sem);
 
 	return alg;
 }
-EXPORT_SYMBOL_GPL(crypto_alg_lookup);
 
-struct crypto_alg *crypto_larval_lookup(const char *name, u32 type, u32 mask)
+static struct crypto_alg *crypto_larval_lookup(const char *name, u32 type,
+					       u32 mask)
 {
 	struct crypto_alg *alg;
 
@@ -226,12 +239,13 @@ struct crypto_alg *crypto_larval_lookup(const char *name, u32 type, u32 mask)
 		alg = crypto_alg_lookup(name, type, mask);
 	}
 
-	if (alg)
-		return crypto_is_larval(alg) ? crypto_larval_wait(alg) : alg;
+	if (!IS_ERR_OR_NULL(alg) && crypto_is_larval(alg))
+		alg = crypto_larval_wait(alg);
+	else if (!alg)
+		alg = crypto_larval_add(name, type, mask);
 
-	return crypto_larval_add(name, type, mask);
+	return alg;
 }
-EXPORT_SYMBOL_GPL(crypto_larval_lookup);
 
 int crypto_probing_notify(unsigned long val, void *v)
 {
@@ -252,11 +266,6 @@ struct crypto_alg *crypto_alg_mod_lookup(const char *name, u32 type, u32 mask)
 	struct crypto_alg *alg;
 	struct crypto_alg *larval;
 	int ok;
-
-	if (!((type | mask) & CRYPTO_ALG_TESTED)) {
-		type |= CRYPTO_ALG_TESTED;
-		mask |= CRYPTO_ALG_TESTED;
-	}
 
 	/*
 	 * If the internal flag is set for a cipher, require a caller to
@@ -354,11 +363,6 @@ struct crypto_tfm *__crypto_alloc_tfm(struct crypto_alg *alg, u32 type,
 	unsigned int tfm_size;
 	int err = -ENOMEM;
 
-#ifdef CONFIG_CRYPTO_FIPS
-	if (unlikely(in_fips_err()))
-		return ERR_PTR(-EACCES);
-#endif
-
 	tfm_size = sizeof(*tfm) + crypto_ctxsize(alg, type, mask);
 	tfm = kzalloc(tfm_size, GFP_KERNEL);
 	if (tfm == NULL)
@@ -415,11 +419,6 @@ struct crypto_tfm *crypto_alloc_base(const char *alg_name, u32 type, u32 mask)
 	struct crypto_tfm *tfm;
 	int err;
 
-#ifdef CONFIG_CRYPTO_FIPS
-	if (unlikely(in_fips_err()))
-		return ERR_PTR(-EACCES);
-#endif
-
 	for (;;) {
 		struct crypto_alg *alg;
 
@@ -458,13 +457,6 @@ void *crypto_create_tfm(struct crypto_alg *alg,
 	unsigned int total;
 	int err = -ENOMEM;
 
-#ifdef CONFIG_CRYPTO_FIPS
-	if (unlikely(in_fips_err())) {
-		pr_err("Fail %s due to fips error state.\n", __func__);
-		return ERR_PTR(-EACCES);
-	}
-#endif
-
 	tfmsize = frontend->tfmsize;
 	total = tfmsize + sizeof(*tfm) + frontend->extsize(alg);
 
@@ -501,20 +493,14 @@ struct crypto_alg *crypto_find_alg(const char *alg_name,
 				   const struct crypto_type *frontend,
 				   u32 type, u32 mask)
 {
-	struct crypto_alg *(*lookup)(const char *name, u32 type, u32 mask) =
-		crypto_alg_mod_lookup;
-
 	if (frontend) {
 		type &= frontend->maskclear;
 		mask &= frontend->maskclear;
 		type |= frontend->type;
 		mask |= frontend->maskset;
-
-		if (frontend->lookup)
-			lookup = frontend->lookup;
 	}
 
-	return lookup(alg_name, type, mask);
+	return crypto_alg_mod_lookup(alg_name, type, mask);
 }
 EXPORT_SYMBOL_GPL(crypto_find_alg);
 
@@ -543,11 +529,6 @@ void *crypto_alloc_tfm(const char *alg_name,
 {
 	void *tfm;
 	int err;
-
-#ifdef CONFIG_CRYPTO_FIPS
-	if (unlikely(in_fips_err()))
-		return ERR_PTR(-EACCES);
-#endif
 
 	for (;;) {
 		struct crypto_alg *alg;
@@ -578,14 +559,6 @@ err:
 }
 EXPORT_SYMBOL_GPL(crypto_alloc_tfm);
 
-#ifdef CONFIG_CRYPTO_FIPS_FUNC_TEST
-static void hexdump(unsigned char *buf, unsigned int len)
-{
-	print_hex_dump(KERN_INFO, "FIPS FUNC : ", DUMP_PREFIX_OFFSET,
-			16, 1, buf, len, false);
-}
-#endif
-
 /*
  *	crypto_destroy_tfm - Free crypto transform
  *	@mem: Start of tfm slab
@@ -607,21 +580,7 @@ void crypto_destroy_tfm(void *mem, struct crypto_tfm *tfm)
 		alg->cra_exit(tfm);
 	crypto_exit_ops(tfm);
 	crypto_mod_put(alg);
-#ifdef CONFIG_CRYPTO_FIPS_FUNC_TEST
-	if (!strcmp("zeroization", get_fips_functest_mode())) {
-		int t = ksize(mem);
-
-		pr_err("FIPS FUNC : Zeroization %s %d\n", __func__, t);
-		hexdump(mem, t);
-		kzfree(mem);
-		pr_err("FIPS FUNC : Zeroization %s %d\n", __func__, t);
-		hexdump(mem, t);
-	} else {
-		kzfree(mem);
-	}
-#else
 	kzfree(mem);
-#endif /* CONFIG_CRYPTO_FIPS_FUNC_TEST */
 }
 EXPORT_SYMBOL_GPL(crypto_destroy_tfm);
 

@@ -1,13 +1,6 @@
-/* Copyright (c) 2012, 2014-2018, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+/* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * Copyright (c) 2012, 2014-2017, 2019, 2021, The Linux Foundation. All rights reserved.
  */
 
 #ifndef __MSM_MEMORY_DUMP_H
@@ -136,10 +129,16 @@ struct msm_mem_dump_vaddr_tbl {
 #ifdef CONFIG_QCOM_MEMORY_DUMP_V2
 extern int msm_dump_data_register(enum msm_dump_table_ids id,
 				  struct msm_dump_entry *entry);
-
+extern int msm_dump_data_register_nominidump(enum msm_dump_table_ids id,
+				  struct msm_dump_entry *entry);
 extern struct dump_vaddr_entry *get_msm_dump_ptr(enum msm_dump_data_ids id);
 #else
 static inline int msm_dump_data_register(enum msm_dump_table_ids id,
+					 struct msm_dump_entry *entry)
+{
+	return -EINVAL;
+}
+static inline int msm_dump_data_register_nominidump(enum msm_dump_table_ids id,
 					 struct msm_dump_entry *entry)
 {
 	return -EINVAL;

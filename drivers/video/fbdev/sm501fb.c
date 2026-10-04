@@ -329,6 +329,13 @@ static int sm501fb_check_var(struct fb_var_screeninfo *var,
 	if (var->xres_virtual > 4096 || var->yres_virtual > 2048)
 		return -EINVAL;
 
+	/* geometry sanity checks */
+	if (var->xres + var->xoffset > var->xres_virtual)
+		return -EINVAL;
+
+	if (var->yres + var->yoffset > var->yres_virtual)
+		return -EINVAL;
+
 	/* can cope with 8,16 or 32bpp */
 
 	if (var->bits_per_pixel <= 8)
@@ -1008,6 +1015,7 @@ static int sm501fb_blank_crt(int blank_mode, struct fb_info *info)
 	case FB_BLANK_POWERDOWN:
 		ctrl &= ~SM501_DC_CRT_CONTROL_ENABLE;
 		sm501_misc_control(fbi->dev->parent, SM501_MISC_DAC_POWER, 0);
+		/* fall through */
 
 	case FB_BLANK_NORMAL:
 		ctrl |= SM501_DC_CRT_CONTROL_BLANK;
@@ -1889,6 +1897,9 @@ static void sm501_free_init_fb(struct sm501fb_info *info,
 {
 	struct fb_info *fbi = info->fb[head];
 
+	if (!fbi)
+		return;
+
 	fb_dealloc_cmap(&fbi->cmap);
 }
 
@@ -1928,8 +1939,7 @@ static int sm501fb_probe(struct platform_device *pdev)
 	int ret;
 
 	/* allocate our framebuffers */
-
-	info = kzalloc(sizeof(struct sm501fb_info), GFP_KERNEL);
+	info = kzalloc(sizeof(*info), GFP_KERNEL);
 	if (!info) {
 		dev_err(dev, "failed to allocate state\n");
 		return -ENOMEM;
@@ -2076,8 +2086,10 @@ static int sm501fb_remove(struct platform_device *pdev)
 	sm501_free_init_fb(info, HEAD_CRT);
 	sm501_free_init_fb(info, HEAD_PANEL);
 
-	unregister_framebuffer(fbinfo_crt);
-	unregister_framebuffer(fbinfo_pnl);
+	if (fbinfo_crt)
+		unregister_framebuffer(fbinfo_crt);
+	if (fbinfo_pnl)
+		unregister_framebuffer(fbinfo_pnl);
 
 	sm501fb_stop(info);
 	kfree(info);
@@ -2094,8 +2106,12 @@ static int sm501fb_suspend_fb(struct sm501fb_info *info,
 			      enum sm501_controller head)
 {
 	struct fb_info *fbi = info->fb[head];
-	struct sm501fb_par *par = fbi->par;
+	struct sm501fb_par *par;
 
+	if (!fbi)
+		return 0;
+
+	par = fbi->par;
 	if (par->screen.size == 0)
 		return 0;
 
@@ -2141,8 +2157,12 @@ static void sm501fb_resume_fb(struct sm501fb_info *info,
 			      enum sm501_controller head)
 {
 	struct fb_info *fbi = info->fb[head];
-	struct sm501fb_par *par = fbi->par;
+	struct sm501fb_par *par;
 
+	if (!fbi)
+		return;
+
+	par = fbi->par;
 	if (par->screen.size == 0)
 		return;
 

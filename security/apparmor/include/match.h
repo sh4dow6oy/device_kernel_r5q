@@ -40,6 +40,7 @@
  */
 
 #define YYTH_MAGIC	0x1B5E783D
+#define YYTH_FLAG_DIFF_ENCODE	1
 
 struct table_set_header {
 	u32 th_magic;		/* YYTH_MAGIC */
@@ -137,6 +138,25 @@ unsigned int aa_dfa_matchn_until(struct aa_dfa *dfa, unsigned int start,
 
 void aa_dfa_free_kref(struct kref *kref);
 
+#define WB_HISTORY_SIZE 8
+struct match_workbuf {
+	unsigned int count;
+	unsigned int pos;
+	unsigned int len;
+	unsigned int size;	/* power of 2, same as history size */
+	unsigned int history[WB_HISTORY_SIZE];
+};
+#define DEFINE_MATCH_WB(N)		\
+struct match_workbuf N = {		\
+	.count = 0,			\
+	.pos = 0,			\
+	.len = 0,			\
+	.size = WB_HISTORY_SIZE,			\
+}
+
+unsigned int aa_dfa_leftmatch(struct aa_dfa *dfa, unsigned int start,
+			      const char *str, unsigned int *count);
+
 /**
  * aa_get_dfa - increment refcount on dfa @p
  * @dfa: dfa  (MAYBE NULL)
@@ -163,5 +183,9 @@ static inline void aa_put_dfa(struct aa_dfa *dfa)
 	if (dfa)
 		kref_put(&dfa->count, aa_dfa_free_kref);
 }
+
+#define MATCH_FLAG_DIFF_ENCODE 0x80000000
+#define MARK_DIFF_ENCODE 0x40000000
+#define MARK_DIFF_ENCODE_VERIFIED 0x10000000
 
 #endif /* __AA_MATCH_H */

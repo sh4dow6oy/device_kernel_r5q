@@ -3,7 +3,7 @@ menuconfig SND_SOC_SAMSUNG
 	depends on PLAT_SAMSUNG || ARCH_EXYNOS || COMPILE_TEST
 	depends on COMMON_CLK
 	select SND_SOC_GENERIC_DMAENGINE_PCM
-	---help---
+	help
 	  Say Y or M if you want to add support for codecs attached to
 	  the Samsung SoCs' Audio interfaces. You will also need to
 	  select the audio interfaces to support below.
@@ -210,18 +210,3 @@ config SND_SOC_SAMSUNG_TM2_WM5110
 	  Say Y if you want to add support for SoC audio on the TM2 board.
 
 endif #SND_SOC_SAMSUNG
-
-config SND_SOC_SAMSUNG_AUDIO
-	tristate "Audio support for Samsung Projects"
-	help
-	  Say Y here to enable audio support for the Samsung Audio.
-
-config SND_SOC_SAMSUNG_MBHC_SUPPORT
-	tristate "Audio support for Samsung MBHC"
-	help
-	  Say Y here to enable audio support for the Samsung MBHC.
-
-config SND_SOC_SAMSUNG_USB_HEADSET_ONLY
-	tristate "Audio sysfs support for Samsung USB HEADSET"
-	help
-	  Say Y here to enable audio sysfs support for the Samsung USB HEADSET.

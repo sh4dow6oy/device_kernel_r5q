@@ -200,14 +200,16 @@ static int uhdlc_init(struct ucc_hdlc_private *priv)
 		goto free_tx_bd;
 	}
 
-	priv->rx_skbuff = kzalloc(priv->rx_ring_size * sizeof(*priv->rx_skbuff),
+	priv->rx_skbuff = kcalloc(priv->rx_ring_size,
+				  sizeof(*priv->rx_skbuff),
 				  GFP_KERNEL);
 	if (!priv->rx_skbuff) {
 		ret = -ENOMEM;
 		goto free_ucc_pram;
 	}
 
-	priv->tx_skbuff = kzalloc(priv->tx_ring_size * sizeof(*priv->tx_skbuff),
+	priv->tx_skbuff = kcalloc(priv->tx_ring_size,
+				  sizeof(*priv->tx_skbuff),
 				  GFP_KERNEL);
 	if (!priv->tx_skbuff) {
 		ret = -ENOMEM;
@@ -281,19 +283,16 @@ static int uhdlc_init(struct ucc_hdlc_private *priv)
 	iowrite16be(DEFAULT_HDLC_ADDR, &priv->ucc_pram->haddr4);
 
 	/* Get BD buffer */
-	bd_buffer = dma_alloc_coherent(priv->dev,
-				       (RX_BD_RING_LEN + TX_BD_RING_LEN) *
-				       MAX_RX_BUF_LENGTH,
-				       &bd_dma_addr, GFP_KERNEL);
+	bd_buffer = dma_zalloc_coherent(priv->dev,
+					(RX_BD_RING_LEN + TX_BD_RING_LEN) *
+					MAX_RX_BUF_LENGTH,
+					&bd_dma_addr, GFP_KERNEL);
 
 	if (!bd_buffer) {
 		dev_err(priv->dev, "Could not allocate buffer descriptors\n");
 		ret = -ENOMEM;
 		goto free_tiptr;
 	}
-
-	memset(bd_buffer, 0, (RX_BD_RING_LEN + TX_BD_RING_LEN)
-			* MAX_RX_BUF_LENGTH);
 
 	priv->rx_buffer = bd_buffer;
 	priv->tx_buffer = bd_buffer + RX_BD_RING_LEN * MAX_RX_BUF_LENGTH;
@@ -743,18 +742,14 @@ static void uhdlc_memclean(struct ucc_hdlc_private *priv)
 
 	if (priv->rx_buffer) {
 		dma_free_coherent(priv->dev,
-				  RX_BD_RING_LEN * MAX_RX_BUF_LENGTH,
+				  (RX_BD_RING_LEN + TX_BD_RING_LEN) * MAX_RX_BUF_LENGTH,
 				  priv->rx_buffer, priv->dma_rx_addr);
 		priv->rx_buffer = NULL;
 		priv->dma_rx_addr = 0;
-	}
 
-	if (priv->tx_buffer) {
-		dma_free_coherent(priv->dev,
-				  TX_BD_RING_LEN * MAX_RX_BUF_LENGTH,
-				  priv->tx_buffer, priv->dma_tx_addr);
 		priv->tx_buffer = NULL;
 		priv->dma_tx_addr = 0;
+
 	}
 }
 

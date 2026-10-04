@@ -244,10 +244,10 @@ static int xdp_umem_pin_pages(struct xdp_umem *umem)
 	if (!umem->pgs)
 		return -ENOMEM;
 
-	down_write(&current->mm->mmap_sem);
+	mmap_write_lock(current->mm);
 	npgs = get_user_pages(umem->address, umem->npgs,
 			      gup_flags, &umem->pgs[0], NULL);
-	up_write(&current->mm->mmap_sem);
+	mmap_write_unlock(current->mm);
 
 	if (npgs != umem->npgs) {
 		if (npgs >= 0) {
@@ -335,7 +335,8 @@ static int xdp_umem_reg(struct xdp_umem *umem, struct xdp_umem_reg *mr)
 
 	headroom = ALIGN(headroom, 64);
 
-	if (headroom >= chunk_size - XDP_PACKET_HEADROOM)
+	if (headroom > chunk_size - XDP_PACKET_HEADROOM -
+		       SKB_DATA_ALIGN(sizeof(struct skb_shared_info)) - 128)
 		return -EINVAL;
 
 	umem->address = (unsigned long)addr;

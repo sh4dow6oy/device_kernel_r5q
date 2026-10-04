@@ -423,10 +423,10 @@ static int ocfs2_sync_fs(struct super_block *sb, int wait)
 		ocfs2_schedule_truncate_log_flush(osb, 0);
 	}
 
-	if (jbd2_journal_start_commit(OCFS2_SB(sb)->journal->j_journal,
+	if (jbd2_journal_start_commit(osb->journal->j_journal,
 				      &target)) {
 		if (wait)
-			jbd2_log_wait_commit(OCFS2_SB(sb)->journal->j_journal,
+			jbd2_log_wait_commit(osb->journal->j_journal,
 					     target);
 	}
 	return 0;
@@ -674,9 +674,9 @@ static int ocfs2_remount(struct super_block *sb, int *flags, char *data)
 	}
 
 	/* We're going to/from readonly mode. */
-	if ((bool)(*flags & MS_RDONLY) != sb_rdonly(sb)) {
+	if ((bool)(*flags & SB_RDONLY) != sb_rdonly(sb)) {
 		/* Disable quota accounting before remounting RO */
-		if (*flags & MS_RDONLY) {
+		if (*flags & SB_RDONLY) {
 			ret = ocfs2_susp_quotas(osb, 0);
 			if (ret < 0)
 				goto out;
@@ -690,8 +690,8 @@ static int ocfs2_remount(struct super_block *sb, int *flags, char *data)
 			goto unlock_osb;
 		}
 
-		if (*flags & MS_RDONLY) {
-			sb->s_flags |= MS_RDONLY;
+		if (*flags & SB_RDONLY) {
+			sb->s_flags |= SB_RDONLY;
 			osb->osb_flags |= OCFS2_OSB_SOFT_RO;
 		} else {
 			if (osb->osb_flags & OCFS2_OSB_ERROR_FS) {
@@ -708,14 +708,14 @@ static int ocfs2_remount(struct super_block *sb, int *flags, char *data)
 				ret = -EINVAL;
 				goto unlock_osb;
 			}
-			sb->s_flags &= ~MS_RDONLY;
+			sb->s_flags &= ~SB_RDONLY;
 			osb->osb_flags &= ~OCFS2_OSB_SOFT_RO;
 		}
 		trace_ocfs2_remount(sb->s_flags, osb->osb_flags, *flags);
 unlock_osb:
 		spin_unlock(&osb->osb_lock);
 		/* Enable quota accounting after remounting RW */
-		if (!ret && !(*flags & MS_RDONLY)) {
+		if (!ret && !(*flags & SB_RDONLY)) {
 			if (sb_any_quota_suspended(sb))
 				ret = ocfs2_susp_quotas(osb, 1);
 			else
@@ -723,7 +723,7 @@ unlock_osb:
 			if (ret < 0) {
 				/* Return back changes... */
 				spin_lock(&osb->osb_lock);
-				sb->s_flags |= MS_RDONLY;
+				sb->s_flags |= SB_RDONLY;
 				osb->osb_flags |= OCFS2_OSB_SOFT_RO;
 				spin_unlock(&osb->osb_lock);
 				goto out;
@@ -743,9 +743,9 @@ unlock_osb:
 		if (!ocfs2_is_hard_readonly(osb))
 			ocfs2_set_journal_params(osb);
 
-		sb->s_flags = (sb->s_flags & ~MS_POSIXACL) |
+		sb->s_flags = (sb->s_flags & ~SB_POSIXACL) |
 			((osb->s_mount_opt & OCFS2_MOUNT_POSIX_ACL) ?
-							MS_POSIXACL : 0);
+							SB_POSIXACL : 0);
 	}
 out:
 	return ret;
@@ -1058,10 +1058,10 @@ static int ocfs2_fill_super(struct super_block *sb, void *data, int silent)
 
 	sb->s_magic = OCFS2_SUPER_MAGIC;
 
-	sb->s_flags = (sb->s_flags & ~(MS_POSIXACL | MS_NOSEC)) |
-		((osb->s_mount_opt & OCFS2_MOUNT_POSIX_ACL) ? MS_POSIXACL : 0);
+	sb->s_flags = (sb->s_flags & ~(SB_POSIXACL | SB_NOSEC)) |
+		((osb->s_mount_opt & OCFS2_MOUNT_POSIX_ACL) ? SB_POSIXACL : 0);
 
-	/* Hard readonly mode only if: bdev_read_only, MS_RDONLY,
+	/* Hard readonly mode only if: bdev_read_only, SB_RDONLY,
 	 * heartbeat=none */
 	if (bdev_read_only(sb->s_bdev)) {
 		if (!sb_rdonly(sb)) {
@@ -1152,6 +1152,23 @@ static int ocfs2_fill_super(struct super_block *sb, void *data, int silent)
 		goto read_super_error;
 	}
 
+	osb->osb_dev_kset = kset_create_and_add(sb->s_id, NULL,
+						&ocfs2_kset->kobj);
+	if (!osb->osb_dev_kset) {
+		status = -ENOMEM;
+		mlog(ML_ERROR, "Unable to create device kset %s.\n", sb->s_id);
+		goto read_super_error;
+	}
+
+	/* Create filecheck sysfs related directories/files at
+	 * /sys/fs/ocfs2/<devname>/filecheck */
+	if (ocfs2_filecheck_create_sysfs(osb)) {
+		status = -ENOMEM;
+		mlog(ML_ERROR, "Unable to create filecheck sysfs directory at "
+			"/sys/fs/ocfs2/%s/filecheck.\n", sb->s_id);
+		goto read_super_error;
+	}
+
 	root = d_make_root(inode);
 	if (!root) {
 		status = -ENOMEM;
@@ -1201,13 +1218,13 @@ static int ocfs2_fill_super(struct super_block *sb, void *data, int silent)
 	/* Start this when the mount is almost sure of being successful */
 	ocfs2_orphan_scan_start(osb);
 
-	/* Create filecheck sysfile /sys/fs/ocfs2/<devname>/filecheck */
-	ocfs2_filecheck_create_sysfs(sb);
-
 	return status;
 
 read_super_error:
 	brelse(bh);
+
+	if (status)
+		mlog_errno(status);
 
 	if (osb) {
 		atomic_set(&osb->vol_state, VOLUME_DISABLED);
@@ -1215,8 +1232,6 @@ read_super_error:
 		ocfs2_dismount_volume(sb, 1);
 	}
 
-	if (status)
-		mlog_errno(status);
 	return status;
 }
 
@@ -1654,7 +1669,6 @@ static void ocfs2_put_super(struct super_block *sb)
 
 	ocfs2_sync_blockdev(sb);
 	ocfs2_dismount_volume(sb, 0);
-	ocfs2_filecheck_remove_sysfs(sb);
 }
 
 static int ocfs2_statfs(struct dentry *dentry, struct kstatfs *buf)
@@ -1770,12 +1784,9 @@ static int ocfs2_initialize_mem_caches(void)
 					NULL);
 	if (!ocfs2_inode_cachep || !ocfs2_dquot_cachep ||
 	    !ocfs2_qf_chunk_cachep) {
-		if (ocfs2_inode_cachep)
-			kmem_cache_destroy(ocfs2_inode_cachep);
-		if (ocfs2_dquot_cachep)
-			kmem_cache_destroy(ocfs2_dquot_cachep);
-		if (ocfs2_qf_chunk_cachep)
-			kmem_cache_destroy(ocfs2_qf_chunk_cachep);
+		kmem_cache_destroy(ocfs2_inode_cachep);
+		kmem_cache_destroy(ocfs2_dquot_cachep);
+		kmem_cache_destroy(ocfs2_qf_chunk_cachep);
 		return -ENOMEM;
 	}
 
@@ -1789,16 +1800,13 @@ static void ocfs2_free_mem_caches(void)
 	 * destroy cache.
 	 */
 	rcu_barrier();
-	if (ocfs2_inode_cachep)
-		kmem_cache_destroy(ocfs2_inode_cachep);
+	kmem_cache_destroy(ocfs2_inode_cachep);
 	ocfs2_inode_cachep = NULL;
 
-	if (ocfs2_dquot_cachep)
-		kmem_cache_destroy(ocfs2_dquot_cachep);
+	kmem_cache_destroy(ocfs2_dquot_cachep);
 	ocfs2_dquot_cachep = NULL;
 
-	if (ocfs2_qf_chunk_cachep)
-		kmem_cache_destroy(ocfs2_qf_chunk_cachep);
+	kmem_cache_destroy(ocfs2_qf_chunk_cachep);
 	ocfs2_qf_chunk_cachep = NULL;
 }
 
@@ -1845,6 +1853,9 @@ static int ocfs2_mount_volume(struct super_block *sb)
 	status = ocfs2_dlm_init(osb);
 	if (status < 0) {
 		mlog_errno(status);
+		if (status == -EBADR && ocfs2_userspace_stack(osb))
+			mlog(ML_ERROR, "couldn't mount because cluster name on"
+			" disk does not match the running cluster name.\n");
 		goto leave;
 	}
 
@@ -1898,10 +1909,19 @@ static void ocfs2_dismount_volume(struct super_block *sb, int mnt_err)
 	osb = OCFS2_SB(sb);
 	BUG_ON(!osb);
 
+	/* Remove file check sysfs related directores/files,
+	 * and wait for the pending file check operations */
+	ocfs2_filecheck_remove_sysfs(osb);
+
+	kset_unregister(osb->osb_dev_kset);
+
 	debugfs_remove(osb->osb_ctxt);
 
 	/* Orphan scan should be stopped as early as possible */
 	ocfs2_orphan_scan_stop(osb);
+
+	/* Stop quota recovery so that we can disable quotas */
+	ocfs2_recovery_disable_quota(osb);
 
 	ocfs2_disable_quotas(osb);
 
@@ -2059,7 +2079,7 @@ static int ocfs2_initialize_super(struct super_block *sb,
 	sb->s_quota_types = QTYPE_MASK_USR | QTYPE_MASK_GRP;
 	sb->s_xattr = ocfs2_xattr_handlers;
 	sb->s_time_gran = 1;
-	sb->s_flags |= MS_NOATIME;
+	sb->s_flags |= SB_NOATIME;
 	/* this is needed to support O_LARGEFILE */
 	cbits = le32_to_cpu(di->id2.i_super.s_clustersize_bits);
 	bbits = le32_to_cpu(di->id2.i_super.s_blocksize_bits);
@@ -2086,8 +2106,6 @@ static int ocfs2_initialize_super(struct super_block *sb,
 	spin_lock_init(&osb->osb_lock);
 	spin_lock_init(&osb->osb_xattr_lock);
 	ocfs2_init_steal_slots(osb);
-
-	mutex_init(&osb->system_file_mutex);
 
 	atomic_set(&osb->alloc_stats.moves, 0);
 	atomic_set(&osb->alloc_stats.local_data, 0);
@@ -2357,6 +2375,7 @@ static int ocfs2_verify_volume(struct ocfs2_dinode *di,
 			       struct ocfs2_blockcheck_stats *stats)
 {
 	int status = -EAGAIN;
+	u32 blksz_bits;
 
 	if (memcmp(di->i_signature, OCFS2_SUPER_BLOCK_SIGNATURE,
 		   strlen(OCFS2_SUPER_BLOCK_SIGNATURE)) == 0) {
@@ -2371,11 +2390,15 @@ static int ocfs2_verify_volume(struct ocfs2_dinode *di,
 				goto out;
 		}
 		status = -EINVAL;
-		if ((1 << le32_to_cpu(di->id2.i_super.s_blocksize_bits)) != blksz) {
+		/* Acceptable block sizes are 512 bytes, 1K, 2K and 4K. */
+		blksz_bits = le32_to_cpu(di->id2.i_super.s_blocksize_bits);
+		if (blksz_bits < 9 || blksz_bits > 12) {
 			mlog(ML_ERROR, "found superblock with incorrect block "
-			     "size: found %u, should be %u\n",
-			     1 << le32_to_cpu(di->id2.i_super.s_blocksize_bits),
-			       blksz);
+			     "size bits: found %u, should be 9, 10, 11, or 12\n",
+			     blksz_bits);
+		} else if ((1 << blksz_bits) != blksz) {
+			mlog(ML_ERROR, "found superblock with incorrect block "
+			     "size: found %u, should be %u\n", 1 << blksz_bits, blksz);
 		} else if (le16_to_cpu(di->id2.i_super.s_major_rev_level) !=
 			   OCFS2_MAJOR_REV_LEVEL ||
 			   le16_to_cpu(di->id2.i_super.s_minor_rev_level) !=
@@ -2529,10 +2552,8 @@ static void ocfs2_delete_osb(struct ocfs2_super *osb)
 	/* This function assumes that the caller has the main osb resource */
 
 	/* ocfs2_initializer_super have already created this workqueue */
-	if (osb->ocfs2_wq) {
-		flush_workqueue(osb->ocfs2_wq);
+	if (osb->ocfs2_wq)
 		destroy_workqueue(osb->ocfs2_wq);
-	}
 
 	ocfs2_free_slot_info(osb);
 
@@ -2578,7 +2599,7 @@ static int ocfs2_handle_error(struct super_block *sb)
 			return rv;
 
 		pr_crit("OCFS2: File system is now read-only.\n");
-		sb->s_flags |= MS_RDONLY;
+		sb->s_flags |= SB_RDONLY;
 		ocfs2_set_ro_flag(osb, 0);
 	}
 

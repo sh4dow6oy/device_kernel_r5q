@@ -1,13 +1,6 @@
-/* Copyright (c) 2012-2018, 2020, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+/* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * Copyright (c) 2012-2018, 2020, The Linux Foundation. All rights reserved.
  */
 
 #ifndef _IPA_I_H_
@@ -237,13 +230,24 @@ struct ipa_client_names {
 struct ipa_smmu_cb_ctx {
 	bool valid;
 	struct device *dev;
-	struct dma_iommu_mapping *mapping;
-	struct iommu_domain *iommu;
+	struct iommu_domain *iommu_domain;
 	unsigned long next_addr;
 	u32 va_start;
 	u32 va_size;
 	u32 va_end;
 };
+
+
+enum ipa_smmu_cb_type {
+	IPA_SMMU_CB_AP,
+	IPA_SMMU_CB_WLAN,
+	IPA_SMMU_CB_UC,
+	IPA_SMMU_CB_MAX
+
+};
+#define VALID_IPA_SMMU_CB_TYPE(t) \
+	((t) >= IPA_SMMU_CB_AP && (t) < IPA_SMMU_CB_MAX)
+
 
 /**
  * struct ipa_flt_entry - IPA filtering table entry
@@ -1216,7 +1220,7 @@ struct ipa_context {
 	u32 peer_bam_map_cnt;
 	u32 wdi_map_cnt;
 	bool use_dma_zone;
-	struct wakeup_source w_lock;
+	struct wakeup_source *w_lock;
 	struct ipa_wakelock_ref_cnt wakelock_ref_cnt;
 
 	/* RMNET_IOCTL_INGRESS_FORMAT_AGG_DATA */
@@ -1394,7 +1398,7 @@ struct ipa_controller {
 	struct msm_bus_scale_pdata *msm_bus_data_ptr;
 
 	void (*ipa_cfg_ep_metadata)(u32 pipe_number,
-			const struct ipa_ep_cfg_metadata *);
+			const struct ipa_ep_cfg_metadata *metadata);
 };
 
 extern struct ipa_context *ipa_ctx;
@@ -1705,7 +1709,7 @@ int ipa2_mhi_suspend_ul_channels(void);
 
 int ipa2_mhi_resume_channels_internal(enum ipa_client_type client,
 		bool LPTransitionRejected, bool brstmode_enabled,
-		union gsi_channel_scratch ch_scratch, u8 index);
+		union __packed gsi_channel_scratch ch_scratch, u8 index);
 
 /*
  * mux id
@@ -1953,7 +1957,7 @@ int ipa2_uc_mhi_print_stats(char *dbg_buff, int size);
 int ipa_uc_memcpy(phys_addr_t dest, phys_addr_t src, int len);
 u32 ipa_get_num_pipes(void);
 u32 ipa_get_sys_yellow_wm(struct ipa_sys_context *sys);
-struct ipa_smmu_cb_ctx *ipa2_get_smmu_ctx(void);
+struct ipa_smmu_cb_ctx *ipa2_get_smmu_ctx(enum ipa_smmu_cb_type cb_type);
 struct ipa_smmu_cb_ctx *ipa2_get_wlan_smmu_ctx(void);
 struct ipa_smmu_cb_ctx *ipa2_get_uc_smmu_ctx(void);
 struct iommu_domain *ipa_get_uc_smmu_domain(void);

@@ -383,7 +383,7 @@ nci_probe:
 
 	r = request_threaded_irq(client->irq, NULL,
 				 nxp_nci_i2c_irq_thread_fn,
-				 IRQF_TRIGGER_RISING | IRQF_ONESHOT,
+				 IRQF_ONESHOT,
 				 NXP_NCI_I2C_DRIVER_NAME, phy);
 	if (r < 0)
 		nfc_err(&client->dev, "Unable to register IRQ handler\n");
@@ -402,7 +402,7 @@ static int nxp_nci_i2c_remove(struct i2c_client *client)
 	return 0;
 }
 
-static struct i2c_device_id nxp_nci_i2c_id_table[] = {
+static const struct i2c_device_id nxp_nci_i2c_id_table[] = {
 	{"nxp-nci_i2c", 0},
 	{}
 };

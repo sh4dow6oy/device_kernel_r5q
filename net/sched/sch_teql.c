@@ -170,7 +170,8 @@ teql_destroy(struct Qdisc *sch)
 	}
 }
 
-static int teql_qdisc_init(struct Qdisc *sch, struct nlattr *opt)
+static int teql_qdisc_init(struct Qdisc *sch, struct nlattr *opt,
+			   struct netlink_ext_ack *extack)
 {
 	struct net_device *dev = qdisc_dev(sch);
 	struct teql_master *m = (struct teql_master *)sch->ops;
@@ -181,6 +182,11 @@ static int teql_qdisc_init(struct Qdisc *sch, struct nlattr *opt)
 
 	if (m->dev == dev)
 		return -ELOOP;
+
+	if (sch->parent != TC_H_ROOT) {
+		NL_SET_ERR_MSG_MOD(extack, "teql can only be used as root");
+		return -EOPNOTSUPP;
+	}
 
 	q->m = m;
 
@@ -314,6 +320,7 @@ restart:
 			if (__netif_tx_trylock(slave_txq)) {
 				unsigned int length = qdisc_pkt_len(skb);
 
+				skb->dev = slave;
 				if (!netif_xmit_frozen_or_stopped(slave_txq) &&
 				    netdev_start_xmit(skb, slave, slave_txq, false) ==
 				    NETDEV_TX_OK) {

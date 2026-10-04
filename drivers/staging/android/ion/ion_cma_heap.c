@@ -1,20 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
- * drivers/staging/android/ion/ion_cma_heap.c
- *
  * Copyright (C) Linaro 2012
  * Author: <benjamin.gaignard@linaro.org> for ST-Ericsson.
  *
  * Copyright (c) 2016-2020, The Linux Foundation. All rights reserved.
- *
- * This software is licensed under the terms of the GNU General Public
- * License version 2, as published by the Free Software Foundation, and
- * may be copied, distributed, and modified under those terms.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
  */
 
 #include <linux/device.h>
@@ -23,9 +12,9 @@
 #include <linux/err.h>
 #include <linux/cma.h>
 #include <linux/scatterlist.h>
-#include <linux/of.h>
 #include <soc/qcom/secure_buffer.h>
 #include <linux/highmem.h>
+#include <linux/of.h>
 
 #include "ion.h"
 #include "ion_secure_util.h"
@@ -40,7 +29,13 @@ struct ion_cma_buffer_info {
 	dma_addr_t handle;
 	struct page *pages;
 };
+
 #define to_cma_heap(x) container_of(x, struct ion_cma_heap, heap)
+
+static bool ion_heap_is_cma_heap_type(enum ion_heap_type type)
+{
+	return type == ION_HEAP_TYPE_DMA;
+}
 
 static bool ion_cma_has_kernel_mapping(struct ion_heap *heap)
 {
@@ -55,16 +50,12 @@ static bool ion_cma_has_kernel_mapping(struct ion_heap *heap)
 }
 
 /* ION CMA heap operations functions */
-static bool ion_heap_is_cma_heap_type(enum ion_heap_type type)
-{
-	return type == ION_HEAP_TYPE_DMA;
-}
-
 static int ion_cma_allocate(struct ion_heap *heap, struct ion_buffer *buffer,
 			    unsigned long len,
 			    unsigned long flags)
 {
 	struct ion_cma_heap *cma_heap = to_cma_heap(heap);
+	struct ion_cma_buffer_info *info;
 	struct sg_table *table;
 	struct page *pages = NULL;
 	unsigned long size = PAGE_ALIGN(len);
@@ -72,7 +63,6 @@ static int ion_cma_allocate(struct ion_heap *heap, struct ion_buffer *buffer,
 	unsigned long align = get_order(size);
 	int ret;
 	struct device *dev = heap->priv;
-	struct ion_cma_buffer_info *info;
 
 	info = kzalloc(sizeof(*info), GFP_KERNEL);
 	if (!info)
@@ -82,7 +72,7 @@ static int ion_cma_allocate(struct ion_heap *heap, struct ion_buffer *buffer,
 	    is_secure_allocation(buffer->flags)) {
 		pr_err("%s: CMA heap doesn't support secure allocations\n",
 		       __func__);
-		return -EINVAL;
+		goto free_info;
 	}
 
 	if (align > CONFIG_CMA_ALIGNMENT)
@@ -92,17 +82,15 @@ static int ion_cma_allocate(struct ion_heap *heap, struct ion_buffer *buffer,
 		flags &= ~((unsigned long)ION_FLAG_CACHED);
 		buffer->flags = flags;
 
-		info->cpu_addr = dma_alloc_writecombine(dev, size,
-							&info->handle,
-							GFP_KERNEL);
+		info->cpu_addr = dma_alloc_wc(dev, size, &info->handle,
+					      GFP_KERNEL);
 		if (!info->cpu_addr) {
 			dev_err(dev, "failed to allocate buffer\n");
 			goto free_info;
 		}
 		pages = pfn_to_page(PFN_DOWN(info->handle));
 	} else {
-		pages = cma_alloc(cma_heap->cma, nr_pages, align, GFP_KERNEL);
-
+		pages = cma_alloc(cma_heap->cma, nr_pages, align, false);
 		if (!pages)
 			goto free_info;
 
@@ -125,10 +113,10 @@ static int ion_cma_allocate(struct ion_heap *heap, struct ion_buffer *buffer,
 		}
 
 		if (MAKE_ION_ALLOC_DMA_READY ||
-		    (!hlos_accessible_buffer(buffer)) ||
-		    !ion_buffer_cached(buffer))
+			(!hlos_accessible_buffer(buffer)) ||
+			(!ion_buffer_cached(buffer)))
 			ion_pages_sync_for_device(dev, pages, size,
-						  DMA_BIDIRECTIONAL);
+						DMA_BIDIRECTIONAL);
 	}
 
 	table = kmalloc(sizeof(*table), GFP_KERNEL);
@@ -141,6 +129,7 @@ static int ion_cma_allocate(struct ion_heap *heap, struct ion_buffer *buffer,
 
 	sg_set_page(table->sgl, pages, size, 0);
 
+	buffer->priv_virt = pages;
 	info->pages = pages;
 	buffer->priv_virt = info;
 	buffer->sg_table = table;
@@ -153,7 +142,6 @@ err_alloc:
 		dma_free_attrs(dev, size, info->cpu_addr, info->handle, 0);
 	else
 		cma_release(cma_heap->cma, pages, nr_pages);
-
 free_info:
 	kfree(info);
 	return -ENOMEM;
@@ -170,7 +158,7 @@ static void ion_cma_free(struct ion_buffer *buffer)
 		dma_free_attrs(dev, PAGE_ALIGN(buffer->size), info->cpu_addr,
 			       info->handle, 0);
 	} else {
-		struct page *pages = info->pages;
+		struct page *pages = sg_page(buffer->sg_table->sgl);
 		unsigned long nr_pages = PAGE_ALIGN(buffer->size) >> PAGE_SHIFT;
 
 		/* release memory */
@@ -215,13 +203,13 @@ static void ion_secure_cma_free(struct ion_buffer *buffer)
 	if (ion_hyp_unassign_sg_from_flags(buffer->sg_table, buffer->flags,
 					   true))
 		return;
+
 	ion_cma_free(buffer);
 }
 
-static int ion_secure_cma_allocate(
-			struct ion_heap *heap,
-			struct ion_buffer *buffer, unsigned long len,
-			unsigned long flags)
+static int ion_secure_cma_allocate(struct ion_heap *heap,
+				   struct ion_buffer *buffer, unsigned long len,
+				   unsigned long flags)
 {
 	int ret;
 
@@ -237,7 +225,6 @@ static int ion_secure_cma_allocate(
 	ret = ion_hyp_assign_sg_from_flags(buffer->sg_table, flags, true);
 	if (ret) {
 		if (ret == -EADDRNOTAVAIL) {
-			BUG(); /* to debug */
 			goto out_free_buf;
 		} else {
 			ion_cma_free(buffer);
@@ -276,29 +263,12 @@ static int ion_secure_cma_map_user(struct ion_heap *mapper,
 	return ion_heap_map_user(mapper, buffer, vma);
 }
 
-static int ion_secure_cma_pm_freeze(struct ion_heap *heap)
-{
-	long sz;
-
-	sz = atomic_long_read(&heap->total_allocated);
-	if (sz) {
-		pr_err("%s: %lx bytes won't be saved across hibernation. Aborting.",
-		       __func__, sz);
-		return -EINVAL;
-	}
-
-	return 0;
-}
-
 static struct ion_heap_ops ion_secure_cma_ops = {
 	.allocate = ion_secure_cma_allocate,
 	.free = ion_secure_cma_free,
 	.map_user = ion_secure_cma_map_user,
 	.map_kernel = ion_secure_cma_map_kernel,
 	.unmap_kernel = ion_heap_unmap_kernel,
-	.pm = {
-		.freeze = ion_secure_cma_pm_freeze,
-	}
 };
 
 struct ion_heap *ion_cma_secure_heap_create(struct ion_platform_heap *data)

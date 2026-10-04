@@ -391,7 +391,7 @@ static struct device_node * __init omapdss_find_dss_of_node(void)
 	return NULL;
 }
 
-int __init omapdss_init_of(void)
+static int __init omapdss_init_of(void)
 {
 	int r;
 	struct device_node *node;
@@ -421,3 +421,4 @@ int __init omapdss_init_of(void)
 
 	return omapdss_init_fbdev();
 }
+omap_device_initcall(omapdss_init_of);

@@ -1,3 +1,9 @@
+/* SPDX-License-Identifier: GPL-2.0-only WITH Linux-syscall-note */
+/*
+ * Copyright (c) 2017-2018, 2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ */
+
 #ifndef _SDE_DRM_H_
 #define _SDE_DRM_H_
 
@@ -48,6 +54,8 @@
  *                                  alpha pre-multiplied. Apply
  *                                  pre-multiplication. If fg plane alpha is
  *                                  less than 0xff, apply modulation as well.
+ * @SDE_DRM_BLEND_OP_LAYER_COLOR:   Blend_op type for layer color component,
+ *                                  apply a constant blend operation.
  * @SDE_DRM_BLEND_OP_MAX:           Used to track maximum blend operation
  *                                  possible by mdp.
  */
@@ -55,7 +63,8 @@
 #define SDE_DRM_BLEND_OP_OPAQUE         1
 #define SDE_DRM_BLEND_OP_PREMULTIPLIED  2
 #define SDE_DRM_BLEND_OP_COVERAGE       3
-#define SDE_DRM_BLEND_OP_MAX            4
+#define SDE_DRM_BLEND_OP_LAYER_COLOR    4
+#define SDE_DRM_BLEND_OP_MAX            5
 
 /**
  * Bit masks for "src_config" property
@@ -221,6 +230,7 @@ struct sde_drm_de_v1 {
 
 #define SDE_DRM_QSEED3LITE
 #define SDE_DRM_QSEED4
+#define SDE_DRM_INLINE_PREDOWNSCALE
 
 /**
  * struct sde_drm_scaler_v2 - version 2 of struct sde_drm_scaler
@@ -254,6 +264,10 @@ struct sde_drm_de_v1 {
  * @unsharp_mask_blend: Unsharp Blend Filter Ratio
  * @de_blend:          Ratio of two unsharp mask filters
  * @flags:             Scaler configuration flags
+ * @pre_downscale_x_0  Pre-downscale ratio, x-direction, plane 0(Y/RGB)
+ * @pre_downscale_x_1  Pre-downscale ratio, x-direction, plane 1(UV)
+ * @pre_downscale_y_0  Pre-downscale ratio, y-direction, plane 0(Y/RGB)
+ * @pre_downscale_y_1  Pre-downscale ratio, y-direction, plane 1(UV)
  */
 struct sde_drm_scaler_v2 {
 	/*
@@ -311,6 +325,14 @@ struct sde_drm_scaler_v2 {
 	uint32_t unsharp_mask_blend;
 	uint32_t de_blend;
 	uint32_t flags;
+
+	/*
+	 * Inline pre-downscale settings
+	 */
+	uint32_t pre_downscale_x_0;
+	uint32_t pre_downscale_x_1;
+	uint32_t pre_downscale_y_0;
+	uint32_t pre_downscale_y_1;
 };
 
 /* Number of dest scalers supported */
@@ -455,30 +477,6 @@ struct sde_drm_roi_v1 {
 };
 
 /**
- * struct sde_drm_roi_misr_v1 - version 1 struct sde_drm_roi_misr
- *
- * @fence_fd_ptr:      roi misr fence fd pointer
- * @roi_rect_num:      number of roi should be enabled
- * @roi_ids:           the order number of every roi, this order
- *                     are matches with roi range index in mode_info
- * @roi_rects:         the rectangle information of every roi
- * @roi_golden_value:  golden value is used to compare with the
- *                     misr value calculated by h/w. if there is
- *                     a mismatch, the misr fence will be signaled
- *                     and the h/w calculated value will be returned
- *                     in the misr fence. NULL if using default
- *                     value of -1 for all roi misrs.
- */
-#define SDE_DRM_ROI_MISR_V1
-struct sde_drm_roi_misr_v1 {
-	int64_t *fence_fd_ptr;
-	uint32_t roi_rect_num;
-	uint32_t *roi_ids;
-	struct drm_clip_rect *roi_rects;
-	uint32_t *roi_golden_value;
-};
-
-/**
  * Define extended power modes supported by the SDE connectors.
  */
 #define SDE_MODE_DPMS_ON	0
@@ -495,4 +493,12 @@ struct sde_drm_roi_misr_v1 {
 #define SDE_RECOVERY_CAPTURE		1
 #define SDE_RECOVERY_HARD_RESET		2
 
+/* display format modifiers */
+/*
+ * QTI planar fsc Tile Format
+ *
+ * Refers to a tile variant of the planar format.
+ * Implementation may be platform and base-format specific.
+ */
+#define DRM_FORMAT_MOD_QCOM_FSC_TILE       fourcc_mod_code(QCOM, 0x10)
 #endif /* _SDE_DRM_H_ */

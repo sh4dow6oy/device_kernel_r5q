@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /* Copyright (c) 2013-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -97,7 +98,8 @@ enum {
 #define UFS_CNTLR_3_x_x_VEN_REGS_OFFSET(x)	(0x400 + x)
 
 /* bit definitions for REG_UFS_CFG1 register */
-#define QUNIPRO_SEL	UFS_BIT(0)
+#define QUNIPRO_SEL		0x1
+#define UTP_DBG_RAMS_EN		0x20000
 #define TEST_BUS_EN		BIT(18)
 #define TEST_BUS_SEL		0x780000
 #define UFS_REG_TEST_BUS_EN	BIT(30)
@@ -308,24 +310,25 @@ struct ufs_qcom_host {
 	 * Note: By default this capability will be kept enabled if host
 	 * controller supports the QUniPro mode.
 	 */
-	#define UFS_QCOM_CAP_QUNIPRO	UFS_BIT(0)
+	#define UFS_QCOM_CAP_QUNIPRO	0x1
 
 	/*
 	 * Set this capability if host controller can retain the secure
 	 * configuration even after UFS controller core power collapse.
 	 */
-	#define UFS_QCOM_CAP_RETAIN_SEC_CFG_AFTER_PWR_COLLAPSE	UFS_BIT(1)
+	#define UFS_QCOM_CAP_RETAIN_SEC_CFG_AFTER_PWR_COLLAPSE	0x2
 
 	/*
 	 * Set this capability if host controller supports Qunipro internal
 	 * clock gating.
 	 */
-	#define UFS_QCOM_CAP_QUNIPRO_CLK_GATING		UFS_BIT(2)
+	#define UFS_QCOM_CAP_QUNIPRO_CLK_GATING		0x4
 
 	/*
 	 * Set this capability if host controller supports SVS2 frequencies.
 	 */
-	#define UFS_QCOM_CAP_SVS2	UFS_BIT(3)
+	#define UFS_QCOM_CAP_SVS2	0x8
+
 	u32 caps;
 
 	struct phy *generic_phy;
@@ -360,18 +363,13 @@ struct ufs_qcom_host {
 	struct request *req_pending;
 	struct ufs_vreg *vddp_ref_clk;
 	struct ufs_vreg *vccq_parent;
+	struct ufs_vreg *vccq2_parent;
 	bool work_pending;
-
-	/* hw reset info. */
-	unsigned int hw_reset_count;
-	unsigned long last_hw_reset;
-	u32 hw_reset_saved_err;
-	u32 hw_reset_saved_uic_err;
-	unsigned long hw_reset_outstanding_tasks;
-	unsigned long hw_reset_outstanding_reqs;
-	struct ufs_stats hw_reset_ufs_stats;
-
-	bool enable_tw;
+	bool is_phy_pwr_on;
+	bool err_occurred;
+	/* FlashPVL entries */
+	atomic_t scale_up;
+	atomic_t clks_on;
 };
 
 static inline u32

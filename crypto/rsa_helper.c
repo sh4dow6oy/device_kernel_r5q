@@ -15,23 +15,20 @@
 #include <linux/err.h>
 #include <linux/fips.h>
 #include <crypto/internal/rsa.h>
-#include "rsapubkey-asn1.h"
-#include "rsaprivkey-asn1.h"
+#include "rsapubkey.asn1.h"
+#include "rsaprivkey.asn1.h"
 
 int rsa_get_n(void *context, size_t hdrlen, unsigned char tag,
 	      const void *value, size_t vlen)
 {
 	struct rsa_key *key = context;
-#ifndef CONFIG_CRYPTO_FIPS
 	const u8 *ptr = value;
 	size_t n_sz = vlen;
-#endif
 
 	/* invalid key provided */
 	if (!value || !vlen)
 		return -EINVAL;
 
-#ifndef CONFIG_CRYPTO_FIPS
 	if (fips_enabled) {
 		while (n_sz && !*ptr) {
 			ptr++;
@@ -44,7 +41,6 @@ int rsa_get_n(void *context, size_t hdrlen, unsigned char tag,
 			return -EINVAL;
 		}
 	}
-#endif
 
 	key->n = value;
 	key->n_sz = vlen;

@@ -13,8 +13,6 @@ subdir-$(CONFIG_SECURITY_LOADPIN)	+= loadpin
 subdir-$(CONFIG_SECURITY_SAFESETID)    += safesetid
 subdir-$(CONFIG_SECURITY_LOCKDOWN_LSM)	+= lockdown
 subdir-$(CONFIG_BPF_LSM)		+= bpf
-subdir-$(CONFIG_SECURITY_DEFEX)		+= samsung/defex_lsm
-subdir-$(CONFIG_SECURITY_DSMS)		+= samsung/dsms
 
 # always enable default capabilities
 obj-y					+= commoncap.o
@@ -34,20 +32,7 @@ obj-$(CONFIG_SECURITY_SAFESETID)       += safesetid/
 obj-$(CONFIG_SECURITY_LOCKDOWN_LSM)	+= lockdown/
 obj-$(CONFIG_CGROUP_DEVICE)		+= device_cgroup.o
 obj-$(CONFIG_BPF_LSM)			+= bpf/
-obj-$(CONFIG_SECURITY_DEFEX)		+= samsung/defex_lsm/built-in.o
-obj-$(CONFIG_SECURITY_DSMS)		+= samsung/dsms/
 
 # Object integrity file lists
 subdir-$(CONFIG_INTEGRITY)		+= integrity
 obj-$(CONFIG_INTEGRITY)			+= integrity/
-
-# Knox SDP
-obj-$(CONFIG_SDP) += sdp/
-obj-$(CONFIG_SDP) += sdp/built-in.a
-
-# MST driver
-obj-$(CONFIG_MST_LDO)	  += mstdrv/
-
-# QRNG
-subdir-$(CONFIG_HW_RANDOM_S2Q000) 	+= qrng/s2q000
-obj-$(CONFIG_HW_RANDOM_S2Q000)		+= qrng/s2q000/

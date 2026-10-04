@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * trace event based perf event profiling/tracing
  *
@@ -257,6 +258,8 @@ int perf_kprobe_init(struct perf_event *p_event, bool is_retprobe)
 		ret = strncpy_from_user(
 			func, u64_to_user_ptr(p_event->attr.kprobe_func),
 			KSYM_NAME_LEN);
+		if (ret == KSYM_NAME_LEN)
+			ret = -E2BIG;
 		if (ret < 0)
 			goto out;
 
@@ -274,9 +277,11 @@ int perf_kprobe_init(struct perf_event *p_event, bool is_retprobe)
 		goto out;
 	}
 
+	mutex_lock(&event_mutex);
 	ret = perf_trace_event_init(tp_event, p_event);
 	if (ret)
 		destroy_local_trace_kprobe(tp_event);
+	mutex_unlock(&event_mutex);
 out:
 	kfree(func);
 	return ret;
@@ -284,8 +289,10 @@ out:
 
 void perf_kprobe_destroy(struct perf_event *p_event)
 {
+	mutex_lock(&event_mutex);
 	perf_trace_event_close(p_event);
 	perf_trace_event_unreg(p_event);
+	mutex_unlock(&event_mutex);
 
 	destroy_local_trace_kprobe(p_event->tp_event);
 }
@@ -300,13 +307,13 @@ int perf_uprobe_init(struct perf_event *p_event, bool is_retprobe)
 
 	if (!p_event->attr.uprobe_path)
 		return -EINVAL;
-	path = kzalloc(PATH_MAX, GFP_KERNEL);
-	if (!path)
-		return -ENOMEM;
-	ret = strncpy_from_user(
-		path, u64_to_user_ptr(p_event->attr.uprobe_path), PATH_MAX);
-	if (ret < 0)
-		goto out;
+
+	path = strndup_user(u64_to_user_ptr(p_event->attr.uprobe_path),
+			    PATH_MAX);
+	if (IS_ERR(path)) {
+		ret = PTR_ERR(path);
+		return (ret == -EINVAL) ? -E2BIG : ret;
+	}
 	if (path[0] == '\0') {
 		ret = -EINVAL;
 		goto out;
@@ -347,9 +354,15 @@ void perf_uprobe_destroy(struct perf_event *p_event)
 int perf_trace_add(struct perf_event *p_event, int flags)
 {
 	struct trace_event_call *tp_event = p_event->tp_event;
+	struct hw_perf_event *hwc = &p_event->hw;
 
 	if (!(flags & PERF_EF_START))
 		p_event->hw.state = PERF_HES_STOPPED;
+
+	if (is_sampling_event(p_event)) {
+		hwc->last_period = hwc->sample_period;
+		perf_swevent_set_period(p_event);
+	}
 
 	/*
 	 * If TRACE_REG_PERF_ADD returns false; no custom action was performed
@@ -428,8 +441,8 @@ static void
 perf_ftrace_function_call(unsigned long ip, unsigned long parent_ip,
 			  struct ftrace_ops *ops, struct pt_regs *pt_regs)
 {
-	struct perf_event *event;
 	struct ftrace_entry *entry;
+	struct perf_event *event;
 	struct hlist_head head;
 	struct pt_regs regs;
 	int rctx;
@@ -461,9 +474,8 @@ perf_ftrace_function_call(unsigned long ip, unsigned long parent_ip,
 
 	entry->ip = ip;
 	entry->parent_ip = parent_ip;
-	event = container_of(ops, struct perf_event, ftrace_ops);
 	perf_trace_buf_submit(entry, ENTRY_SIZE, rctx, TRACE_FN,
-			      1, &regs, &head, NULL, event);
+			      1, &regs, &head, NULL);
 
 #undef ENTRY_SIZE
 }

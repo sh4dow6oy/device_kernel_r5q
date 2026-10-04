@@ -109,6 +109,7 @@ vti6_tnl_lookup(struct net *net, const struct in6_addr *remote,
 	hash = HASH(&any, local);
 	for_each_vti6_tunnel_rcu(ip6n->tnls_r_l[hash]) {
 		if (ipv6_addr_equal(local, &t->parms.laddr) &&
+		    ipv6_addr_any(&t->parms.raddr) &&
 		    (t->dev->flags & IFF_UP))
 			return t;
 	}
@@ -116,6 +117,7 @@ vti6_tnl_lookup(struct net *net, const struct in6_addr *remote,
 	hash = HASH(remote, &any);
 	for_each_vti6_tunnel_rcu(ip6n->tnls_r_l[hash]) {
 		if (ipv6_addr_equal(remote, &t->parms.raddr) &&
+		    ipv6_addr_any(&t->parms.laddr) &&
 		    (t->dev->flags & IFF_UP))
 			return t;
 	}
@@ -530,17 +532,9 @@ vti6_xmit(struct sk_buff *skb, struct net_device *dev, struct flowi *fl)
 	skb->dev = skb_dst(skb)->dev;
 
 	err = dst_output(t->net, skb->sk, skb);
-	if (net_xmit_eval(err) == 0) {
-		struct pcpu_sw_netstats *tstats = this_cpu_ptr(dev->tstats);
-
-		u64_stats_update_begin(&tstats->syncp);
-		tstats->tx_bytes += pkt_len;
-		tstats->tx_packets++;
-		u64_stats_update_end(&tstats->syncp);
-	} else {
-		stats->tx_errors++;
-		stats->tx_aborted_errors++;
-	}
+	if (net_xmit_eval(err) == 0)
+		err = pkt_len;
+	iptunnel_xmit_stats(dev, err);
 
 	return 0;
 tx_err_link_failure:
@@ -653,11 +647,12 @@ static int vti6_err(struct sk_buff *skb, struct inet6_skb_parm *opt,
 	return 0;
 }
 
-static void vti6_link_config(struct ip6_tnl *t)
+static void vti6_link_config(struct ip6_tnl *t, bool keep_mtu)
 {
 	struct net_device *dev = t->dev;
 	struct __ip6_tnl_parm *p = &t->parms;
 	struct net_device *tdev = NULL;
+	int mtu;
 
 	memcpy(dev->dev_addr, &p->laddr, sizeof(struct in6_addr));
 	memcpy(dev->broadcast, &p->raddr, sizeof(struct in6_addr));
@@ -670,6 +665,11 @@ static void vti6_link_config(struct ip6_tnl *t)
 		dev->flags |= IFF_POINTOPOINT;
 	else
 		dev->flags &= ~IFF_POINTOPOINT;
+
+	if (keep_mtu && dev->mtu) {
+		dev->mtu = clamp(dev->mtu, dev->min_mtu, dev->max_mtu);
+		return;
+	}
 
 	if (p->flags & IP6_TNL_F_CAP_XMIT) {
 		int strict = (ipv6_addr_type(&p->raddr) &
@@ -687,20 +687,25 @@ static void vti6_link_config(struct ip6_tnl *t)
 		tdev = __dev_get_by_index(t->net, p->link);
 
 	if (tdev)
-		dev->mtu = max_t(int, tdev->mtu - dev->hard_header_len,
-				 IPV6_MIN_MTU);
+		mtu = tdev->mtu - sizeof(struct ipv6hdr);
+	else
+		mtu = ETH_DATA_LEN - LL_MAX_HEADER - sizeof(struct ipv6hdr);
+
+	dev->mtu = max_t(int, mtu, IPV4_MIN_MTU);
 }
 
 /**
  * vti6_tnl_change - update the tunnel parameters
  *   @t: tunnel to be changed
  *   @p: tunnel configuration parameters
+ *   @keep_mtu: MTU was set from userspace, don't re-compute it
  *
  * Description:
  *   vti6_tnl_change() updates the tunnel parameters
  **/
 static int
-vti6_tnl_change(struct ip6_tnl *t, const struct __ip6_tnl_parm *p)
+vti6_tnl_change(struct ip6_tnl *t, const struct __ip6_tnl_parm *p,
+		bool keep_mtu)
 {
 	t->parms.laddr = p->laddr;
 	t->parms.raddr = p->raddr;
@@ -710,19 +715,21 @@ vti6_tnl_change(struct ip6_tnl *t, const struct __ip6_tnl_parm *p)
 	t->parms.proto = p->proto;
 	t->parms.fwmark = p->fwmark;
 	dst_cache_reset(&t->dst_cache);
-	vti6_link_config(t);
+	vti6_link_config(t, keep_mtu);
 	return 0;
 }
 
-static int vti6_update(struct ip6_tnl *t, struct __ip6_tnl_parm *p)
+static int vti6_update(struct ip6_tnl *t, struct __ip6_tnl_parm *p,
+		       bool keep_mtu)
 {
-	struct net *net = dev_net(t->dev);
-	struct vti6_net *ip6n = net_generic(net, vti6_net_id);
+	struct net *net = t->net;
+	struct vti6_net *ip6n;
 	int err;
 
+	ip6n = net_generic(net, vti6_net_id);
 	vti6_tnl_unlink(ip6n, t);
 	synchronize_net();
-	err = vti6_tnl_change(t, p);
+	err = vti6_tnl_change(t, p, keep_mtu);
 	vti6_tnl_link(ip6n, t);
 	netdev_state_change(t->dev);
 	return err;
@@ -759,7 +766,7 @@ vti6_parm_to_user(struct ip6_tnl_parm2 *u, const struct __ip6_tnl_parm *p)
 }
 
 /**
- * vti6_tnl_ioctl - configure vti6 tunnels from userspace
+ * vti6_ioctl - configure vti6 tunnels from userspace
  *   @dev: virtual device associated with tunnel
  *   @ifr: parameters passed from userspace
  *   @cmd: command to be performed
@@ -827,17 +834,24 @@ vti6_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 		if (p.proto != IPPROTO_IPV6  && p.proto != 0)
 			break;
 		vti6_parm_from_user(&p1, &p);
-		t = vti6_locate(net, &p1, cmd == SIOCADDTUNNEL);
 		if (dev != ip6n->fb_tnl_dev && cmd == SIOCCHGTUNNEL) {
+			struct ip6_tnl *self = netdev_priv(dev);
+
+			err = -EPERM;
+			if (!ns_capable(self->net->user_ns, CAP_NET_ADMIN))
+				break;
+			t = vti6_locate(self->net, &p1, false);
 			if (t) {
 				if (t->dev != dev) {
 					err = -EEXIST;
 					break;
 				}
 			} else
-				t = netdev_priv(dev);
+				t = self;
 
-			err = vti6_update(t, &p1);
+			err = vti6_update(t, &p1, false);
+		} else {
+			t = vti6_locate(net, &p1, cmd == SIOCADDTUNNEL);
 		}
 		if (t) {
 			err = 0;
@@ -899,9 +913,7 @@ static void vti6_dev_setup(struct net_device *dev)
 	dev->priv_destructor = vti6_dev_free;
 
 	dev->type = ARPHRD_TUNNEL6;
-	dev->hard_header_len = LL_MAX_HEADER + sizeof(struct ipv6hdr);
-	dev->mtu = ETH_DATA_LEN;
-	dev->min_mtu = IPV6_MIN_MTU;
+	dev->min_mtu = IPV4_MIN_MTU;
 	dev->max_mtu = IP_MAX_MTU - sizeof(struct ipv6hdr);
 	dev->flags |= IFF_NOARP;
 	dev->addr_len = sizeof(struct in6_addr);
@@ -939,7 +951,7 @@ static int vti6_dev_init(struct net_device *dev)
 
 	if (err)
 		return err;
-	vti6_link_config(t);
+	vti6_link_config(t, true);
 	return 0;
 }
 
@@ -1025,11 +1037,15 @@ static int vti6_changelink(struct net_device *dev, struct nlattr *tb[],
 			   struct nlattr *data[],
 			   struct netlink_ext_ack *extack)
 {
-	struct ip6_tnl *t;
+	struct ip6_tnl *t = netdev_priv(dev);
+	struct net *net = t->net;
 	struct __ip6_tnl_parm p;
-	struct net *net = dev_net(dev);
-	struct vti6_net *ip6n = net_generic(net, vti6_net_id);
+	struct vti6_net *ip6n;
 
+	if (!rtnl_dev_link_net_capable(dev, net))
+		return -EPERM;
+
+	ip6n = net_generic(net, vti6_net_id);
 	if (dev == ip6n->fb_tnl_dev)
 		return -EINVAL;
 
@@ -1043,7 +1059,7 @@ static int vti6_changelink(struct net_device *dev, struct nlattr *tb[],
 	} else
 		t = netdev_priv(dev);
 
-	return vti6_update(t, &p);
+	return vti6_update(t, &p, tb && tb[IFLA_MTU]);
 }
 
 static size_t vti6_get_size(const struct net_device *dev)
@@ -1121,7 +1137,8 @@ static void __net_exit vti6_destroy_tunnels(struct vti6_net *ip6n,
 	}
 
 	t = rtnl_dereference(ip6n->tnls_wc[0]);
-	unregister_netdevice_queue(t->dev, list);
+	if (t)
+		unregister_netdevice_queue(t->dev, list);
 }
 
 static int __net_init vti6_init_net(struct net *net)
@@ -1133,6 +1150,8 @@ static int __net_init vti6_init_net(struct net *net)
 	ip6n->tnls[0] = ip6n->tnls_wc;
 	ip6n->tnls[1] = ip6n->tnls_r_l;
 
+	if (!net_has_fallback_tunnels(net))
+		return 0;
 	err = -ENOMEM;
 	ip6n->fb_tnl_dev = alloc_netdev(sizeof(struct ip6_tnl), "ip6_vti0",
 					NET_NAME_UNKNOWN, vti6_dev_setup);
@@ -1141,6 +1160,7 @@ static int __net_init vti6_init_net(struct net *net)
 		goto err_alloc_dev;
 	dev_net_set(ip6n->fb_tnl_dev, net);
 	ip6n->fb_tnl_dev->rtnl_link_ops = &vti6_link_ops;
+	ip6n->fb_tnl_dev->features |= NETIF_F_NETNS_LOCAL;
 
 	err = vti6_fb_tnl_dev_init(ip6n->fb_tnl_dev);
 	if (err < 0)

@@ -3,14 +3,9 @@
 #error "Please don't include <linux/compiler-clang.h> directly, include <linux/compiler.h> instead."
 #endif
 
-/* Some compiler specific definitions are overwritten here
- * for Clang compiler
- */
+/* Compiler specific definitions for Clang compiler */
 
-#ifdef uninitialized_var
-#undef uninitialized_var
 #define uninitialized_var(x) x = *(&(x))
-#endif
 
 /* same as gcc, this was present in clang-2.6 so we can assume it works
  * with any version that can compile the kernel
@@ -32,18 +27,27 @@
 #define __no_sanitize_address
 #endif
 
-/* Clang doesn't have a way to turn it off per-function, yet. */
-#ifdef __noretpoline
-#undef __noretpoline
-#endif
+#if __has_feature(memory_sanitizer)
+#define __SANITIZE_MEMORY__
+/*
+ * Unlike other sanitizers, KMSAN still inserts code into functions marked with
+ * no_sanitize("kernel-memory"). Using disable_sanitizer_instrumentation
+ * provides the behavior consistent with other __no_sanitize_ attributes,
+ * guaranteeing that __no_sanitize_memory functions remain uninstrumented.
+ */
+#define __no_sanitize_memory __disable_sanitizer_instrumentation
 
-#ifdef CONFIG_LTO_CLANG
-#ifdef CONFIG_FTRACE_MCOUNT_RECORD
-#define __norecordmcount \
-	__attribute__((__section__(".text..ftrace")))
-#endif
-
-#define __nocfi		__attribute__((__no_sanitize__("cfi")))
+/*
+ * The __no_kmsan_checks attribute ensures that a function does not produce
+ * false positive reports by:
+ *  - initializing all local variables and memory stores in this function;
+ *  - skipping all shadow checks;
+ *  - passing initialized arguments to this function's callees.
+ */
+#define __no_kmsan_checks __attribute__((no_sanitize("kernel-memory")))
+#else
+#define __no_sanitize_memory
+#define __no_kmsan_checks
 #endif
 
 /*
@@ -53,11 +57,27 @@
  * checks. Unfortunately, we don't know which version of gcc clang
  * pretends to be, so the macro may or may not be defined.
  */
-#undef COMPILER_HAS_GENERIC_BUILTIN_OVERFLOW
 #if __has_builtin(__builtin_mul_overflow) && \
     __has_builtin(__builtin_add_overflow) && \
     __has_builtin(__builtin_sub_overflow)
 #define COMPILER_HAS_GENERIC_BUILTIN_OVERFLOW 1
+#endif
+
+/* The following are for compatibility with GCC, from compiler-gcc.h,
+ * and may be redefined here because they should not be shared with other
+ * compilers, like ICC.
+ */
+#define __must_be_array(a) BUILD_BUG_ON_ZERO(__same_type((a), &(a)[0]))
+
+#ifdef CONFIG_CFI_CLANG
+#define __nocfi		__attribute__((__no_sanitize__("cfi")))
+#endif
+
+#ifdef CONFIG_LTO_CLANG
+#ifdef CONFIG_FTRACE_MCOUNT_RECORD
+#define __norecordmcount \
+	__attribute__((__section__(".text..ftrace")))
+#endif
 #endif
 
 #if __has_feature(shadow_call_stack)

@@ -185,8 +185,8 @@ int mlx4_bitmap_init(struct mlx4_bitmap *bitmap, u32 num, u32 mask,
 	bitmap->avail = num - reserved_top - reserved_bot;
 	bitmap->effective_len = bitmap->avail;
 	spin_lock_init(&bitmap->lock);
-	bitmap->table = kzalloc(BITS_TO_LONGS(bitmap->max) *
-				sizeof(long), GFP_KERNEL);
+	bitmap->table = kcalloc(BITS_TO_LONGS(bitmap->max), sizeof(long),
+				GFP_KERNEL);
 	if (!bitmap->table)
 		return -ENOMEM;
 
@@ -683,9 +683,9 @@ static struct mlx4_db_pgdir *mlx4_alloc_db_pgdir(struct device *dma_device)
 }
 
 static int mlx4_alloc_db_from_pgdir(struct mlx4_db_pgdir *pgdir,
-				    struct mlx4_db *db, int order)
+				    struct mlx4_db *db, unsigned int order)
 {
-	int o;
+	unsigned int o;
 	int i;
 
 	for (o = order; o <= 1; ++o) {
@@ -713,7 +713,7 @@ found:
 	return 0;
 }
 
-int mlx4_db_alloc(struct mlx4_dev *dev, struct mlx4_db *db, int order)
+int mlx4_db_alloc(struct mlx4_dev *dev, struct mlx4_db *db, unsigned int order)
 {
 	struct mlx4_priv *priv = mlx4_priv(dev);
 	struct mlx4_db_pgdir *pgdir;

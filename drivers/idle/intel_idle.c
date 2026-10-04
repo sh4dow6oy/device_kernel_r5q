@@ -99,8 +99,6 @@ static const struct idle_cpu *icpu;
 static struct cpuidle_device __percpu *intel_idle_cpuidle_devices;
 static int intel_idle(struct cpuidle_device *dev,
 			struct cpuidle_driver *drv, int index);
-static int intel_idle_ibrs(struct cpuidle_device *dev,
-			   struct cpuidle_driver *drv, int index);
 static void intel_idle_s2idle(struct cpuidle_device *dev,
 			      struct cpuidle_driver *drv, int index);
 static struct cpuidle_state *cpuidle_state_table;
@@ -128,6 +126,24 @@ static struct cpuidle_state *cpuidle_state_table;
  */
 #define flg2MWAIT(flags) (((flags) >> 24) & 0xFF)
 #define MWAIT2flg(eax) ((eax & 0xFF) << 24)
+
+static __cpuidle int intel_idle_ibrs(struct cpuidle_device *dev,
+				     struct cpuidle_driver *drv, int index)
+{
+	bool smt_active = sched_smt_active();
+	u64 spec_ctrl = spec_ctrl_current();
+	int ret;
+
+	if (smt_active)
+		wrmsrl(MSR_IA32_SPEC_CTRL, 0);
+
+	ret = intel_idle(dev, drv, index);
+
+	if (smt_active)
+		wrmsrl(MSR_IA32_SPEC_CTRL, spec_ctrl);
+
+	return ret;
+}
 
 /*
  * States are indexed by the cstate number,
@@ -923,9 +939,8 @@ static __cpuidle int intel_idle(struct cpuidle_device *dev,
 	struct cpuidle_state *state = &drv->states[index];
 	unsigned long eax = flg2MWAIT(state->flags);
 	unsigned int cstate;
+	bool uninitialized_var(tick);
 	int cpu = smp_processor_id();
-
-	cstate = (((eax) >> MWAIT_SUBSTATE_SIZE) & MWAIT_CSTATE_MASK) + 1;
 
 	/*
 	 * leave_mm() to avoid costly and often unnecessary wakeups
@@ -934,33 +949,22 @@ static __cpuidle int intel_idle(struct cpuidle_device *dev,
 	if (state->flags & CPUIDLE_FLAG_TLB_FLUSHED)
 		leave_mm(cpu);
 
-	if (!(lapic_timer_reliable_states & (1 << (cstate))))
-		tick_broadcast_enter();
+	if (!static_cpu_has(X86_FEATURE_ARAT)) {
+		cstate = (((eax) >> MWAIT_SUBSTATE_SIZE) &
+				MWAIT_CSTATE_MASK) + 1;
+		tick = false;
+		if (!(lapic_timer_reliable_states & (1 << (cstate)))) {
+			tick = true;
+			tick_broadcast_enter();
+		}
+	}
 
 	mwait_idle_with_hints(eax, ecx);
 
-	if (!(lapic_timer_reliable_states & (1 << (cstate))))
+	if (!static_cpu_has(X86_FEATURE_ARAT) && tick)
 		tick_broadcast_exit();
 
 	return index;
-}
-
-static __cpuidle int intel_idle_ibrs(struct cpuidle_device *dev,
-				     struct cpuidle_driver *drv, int index)
-{
-	bool smt_active = sched_smt_active();
-	u64 spec_ctrl = spec_ctrl_current();
-	int ret;
-
-	if (smt_active)
-		wrmsrl(MSR_IA32_SPEC_CTRL, 0);
-
-	ret = intel_idle(dev, drv, index);
-
-	if (smt_active)
-		wrmsrl(MSR_IA32_SPEC_CTRL, spec_ctrl);
-
-	return ret;
 }
 
 /**
@@ -1403,13 +1407,13 @@ static void __init intel_idle_cpuidle_driver_init(void)
 			mark_tsc_unstable("TSC halts in idle"
 					" states deeper than C2");
 
+		drv->states[drv->state_count] =	/* structure copy */
+			cpuidle_state_table[cstate];
+
 		if (cpu_feature_enabled(X86_FEATURE_KERNEL_IBRS) &&
 		    cpuidle_state_table[cstate].flags & CPUIDLE_FLAG_IBRS) {
 			drv->states[drv->state_count].enter = intel_idle_ibrs;
 		}
-
-		drv->states[drv->state_count] =	/* structure copy */
-			cpuidle_state_table[cstate];
 
 		drv->state_count += 1;
 	}

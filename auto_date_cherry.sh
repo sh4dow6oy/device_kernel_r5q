@@ -1,0 +1,16 @@
+#!/bin/bash
+
+COMMITS=$(git log alfcraft/oneui/android16 --since="2026-04-27" --until="2026-09-25" --reverse --format="%H")
+
+for commit in $COMMITS; do
+    echo "=================================================="
+    echo "Aplicăm commitul: $commit"
+    echo "=================================================="
+    git cherry-pick "$commit"
+    if [ $? -ne 0 ]; then
+        echo ""
+        echo "[!] CONFLICT DETECTAT la commitul $commit!"
+        echo "Rezolvă conflictul, dă git add, git cherry-pick --continue, apoi rulează din nou scriptul."
+        exit 1
+    fi
+done

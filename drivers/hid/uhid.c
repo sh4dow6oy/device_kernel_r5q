@@ -12,6 +12,7 @@
 
 #include <linux/atomic.h>
 #include <linux/compat.h>
+#include <linux/cred.h>
 #include <linux/device.h>
 #include <linux/fs.h>
 #include <linux/hid.h>
@@ -24,8 +25,6 @@
 #include <linux/spinlock.h>
 #include <linux/uhid.h>
 #include <linux/wait.h>
-#include <linux/eventpoll.h>
-#include <linux/msm_drm_notify.h>
 
 #define UHID_NAME	"uhid"
 #define UHID_BUFSIZE	32
@@ -68,8 +67,6 @@ struct uhid_device {
 };
 
 static struct miscdevice uhid_misc;
-
-bool lcd_is_on = true;
 
 static void uhid_device_add_worker(struct work_struct *work)
 {
@@ -521,6 +518,7 @@ static int uhid_dev_create2(struct uhid_device *uhid,
 		goto err_free;
 	}
 
+	/* @hid is zero-initialized, strncpy() is correct, strlcpy() not */
 	len = min(sizeof(hid->name), sizeof(ev->u.create2.name)) - 1;
 	strncpy(hid->name, ev->u.create2.name, len);
 	len = min(sizeof(hid->phys), sizeof(ev->u.create2.phys)) - 1;
@@ -748,6 +746,17 @@ static ssize_t uhid_char_write(struct file *file, const char __user *buffer,
 
 	switch (uhid->input_buf.type) {
 	case UHID_CREATE:
+		/*
+		 * 'struct uhid_create_req' contains a __user pointer which is
+		 * copied from, so it's unsafe to allow this with elevated
+		 * privileges (e.g. from a setuid binary) or via kernel_write().
+		 */
+		if (file->f_cred != current_cred() || uaccess_kernel()) {
+			pr_err_once("UHID_CREATE from different security context by process %d (%s), this is not allowed.\n",
+				    task_tgid_vnr(current), current->comm);
+			ret = -EACCES;
+			goto unlock;
+		}
 		ret = uhid_dev_create(uhid, &uhid->input_buf);
 		break;
 	case UHID_CREATE2:
@@ -779,15 +788,15 @@ unlock:
 	return ret ? ret : count;
 }
 
-static unsigned int uhid_char_poll(struct file *file, poll_table *wait)
+static __poll_t uhid_char_poll(struct file *file, poll_table *wait)
 {
 	struct uhid_device *uhid = file->private_data;
-	unsigned int mask = POLLOUT | POLLWRNORM; /* uhid is always writable */
+	__poll_t mask = EPOLLOUT | EPOLLWRNORM; /* uhid is always writable */
 
 	poll_wait(file, &uhid->waitq, wait);
 
 	if (uhid->head != uhid->tail)
-		mask |= POLLIN | POLLRDNORM;
+		mask |= EPOLLIN | EPOLLRDNORM;
 
 	return mask;
 }
@@ -807,50 +816,7 @@ static struct miscdevice uhid_misc = {
 	.minor		= UHID_MINOR,
 	.name		= UHID_NAME,
 };
-
-static int drm_state_change(struct notifier_block *nb,
-	unsigned long val, void *data)
-{
-	struct msm_drm_notifier *evdata = data;
-	unsigned int blank;
-
-	dbg_hid("drm_state_change");
-	if (val != MSM_DRM_EVENT_BLANK)
-		return 0;
-
-	blank = *(int *)evdata->data;
-
-	switch (blank) {
-	case MSM_DRM_BLANK_POWERDOWN:
-		lcd_is_on = false;
-		break;
-	case MSM_DRM_BLANK_UNBLANK:
-		lcd_is_on = true;
-		break;
-	default:
-		break;
-	}
-
-	return NOTIFY_OK;
-}
-static struct notifier_block msm_drm_block = {
-	.notifier_call = drm_state_change,
-};
-
-static int __init uhid_init(void)
-{
-	msm_drm_register_client(&msm_drm_block);
-	return misc_register(&uhid_misc);
-}
-
-static void __exit uhid_exit(void)
-{
-	msm_drm_unregister_client(&msm_drm_block);
-	misc_deregister(&uhid_misc);
-}
-
-module_init(uhid_init);
-module_exit(uhid_exit);
+module_misc_device(uhid_misc);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("David Herrmann <dh.herrmann@gmail.com>");

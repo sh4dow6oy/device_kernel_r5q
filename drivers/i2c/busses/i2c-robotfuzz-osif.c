@@ -62,27 +62,24 @@ static int osif_xfer(struct i2c_adapter *adapter, struct i2c_msg *msgs,
 {
 	struct osif_priv *priv = adapter->algo_data;
 	struct i2c_msg *pmsg;
-	int ret = 0;
-	int i, cmd;
+	int ret;
+	int i;
 
-	for (i = 0; ret >= 0 && i < num; i++) {
+	for (i = 0; i < num; i++) {
 		pmsg = &msgs[i];
 
 		if (pmsg->flags & I2C_M_RD) {
-			cmd = OSIFI2C_READ;
-
-			ret = osif_usb_read(adapter, cmd, pmsg->flags,
-					    pmsg->addr, pmsg->buf,
-					    pmsg->len);
+			ret = osif_usb_read(adapter, OSIFI2C_READ,
+					    pmsg->flags, pmsg->addr,
+					    pmsg->buf, pmsg->len);
 			if (ret != pmsg->len) {
 				dev_err(&adapter->dev, "failure reading data\n");
 				return -EREMOTEIO;
 			}
 		} else {
-			cmd = OSIFI2C_WRITE;
-
-			ret = osif_usb_write(adapter, cmd, pmsg->flags,
-					     pmsg->addr, pmsg->buf, pmsg->len);
+			ret = osif_usb_write(adapter, OSIFI2C_WRITE,
+					     pmsg->flags, pmsg->addr,
+					     pmsg->buf, pmsg->len);
 			if (ret != pmsg->len) {
 				dev_err(&adapter->dev, "failure writing data\n");
 				return -EREMOTEIO;
@@ -117,6 +114,11 @@ static u32 osif_func(struct i2c_adapter *adapter)
 	return I2C_FUNC_I2C | I2C_FUNC_SMBUS_EMUL;
 }
 
+/* prevent invalid 0-length usb_control_msg */
+static const struct i2c_adapter_quirks osif_quirks = {
+	.flags = I2C_AQ_NO_ZERO_LEN_READ,
+};
+
 static const struct i2c_algorithm osif_algorithm = {
 	.master_xfer	= osif_xfer,
 	.functionality	= osif_func,
@@ -149,6 +151,7 @@ static int osif_probe(struct usb_interface *interface,
 
 	priv->adapter.owner = THIS_MODULE;
 	priv->adapter.class = I2C_CLASS_HWMON;
+	priv->adapter.quirks = &osif_quirks;
 	priv->adapter.algo = &osif_algorithm;
 	priv->adapter.algo_data = priv;
 	snprintf(priv->adapter.name, sizeof(priv->adapter.name),

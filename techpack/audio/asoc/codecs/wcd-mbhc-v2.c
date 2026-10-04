@@ -1,15 +1,6 @@
-/* Copyright (c) 2015-2018, 2020, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+// SPDX-License-Identifier: GPL-2.0-only
+/* Copyright (c) 2015-2020, The Linux Foundation. All rights reserved.
  */
-#define DEBUG
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/slab.h>
@@ -29,15 +20,11 @@
 #include <linux/soc/qcom/fsa4480-i2c.h>
 #include <sound/soc.h>
 #include <sound/jack.h>
-#include "msm-cdc-pinctrl.h"
-#include "wcdcal-hwdep.h"
+#include <asoc/msm-cdc-pinctrl.h>
+#include <asoc/wcdcal-hwdep.h>
 #include "wcd-mbhc-legacy.h"
 #include "wcd-mbhc-adc.h"
-#include "wcd-mbhc-v2-api.h"
-#include "msm-cdc-pinctrl.h"
-#if defined(CONFIG_SND_SOC_WCD_MBHC_SLOW_DET)
-#include "pdata.h"
-#endif
+#include <asoc/wcd-mbhc-v2-api.h>
 
 void wcd_mbhc_jack_report(struct wcd_mbhc *mbhc,
 			  struct snd_soc_jack *jack, int status, int mask)
@@ -49,9 +36,9 @@ EXPORT_SYMBOL(wcd_mbhc_jack_report);
 static void __hphocp_off_report(struct wcd_mbhc *mbhc, u32 jack_status,
 				int irq)
 {
-	struct snd_soc_codec *codec = mbhc->codec;
+	struct snd_soc_component *component = mbhc->component;
 
-	dev_dbg(codec->dev, "%s: clear ocp status %x\n",
+	dev_dbg(component->dev, "%s: clear ocp status %x\n",
 		__func__, jack_status);
 
 	if (mbhc->hph_status & jack_status) {
@@ -68,7 +55,7 @@ static void __hphocp_off_report(struct wcd_mbhc *mbhc, u32 jack_status,
 			mbhc->hphlocp_cnt = 0;
 		else
 			mbhc->hphrocp_cnt = 0;
-		mbhc->mbhc_cb->irq_control(codec, irq, true);
+		mbhc->mbhc_cb->irq_control(component, irq, true);
 	}
 }
 
@@ -87,21 +74,23 @@ static void hphlocp_off_report(struct wcd_mbhc *mbhc, u32 jack_status)
 static void wcd_program_hs_vref(struct wcd_mbhc *mbhc)
 {
 	struct wcd_mbhc_plug_type_cfg *plug_type_cfg;
-	struct snd_soc_codec *codec = mbhc->codec;
+	struct snd_soc_component *component = mbhc->component;
 	u32 reg_val;
 
-	plug_type_cfg = WCD_MBHC_CAL_PLUG_TYPE_PTR(mbhc->mbhc_cfg->calibration);
+	plug_type_cfg = WCD_MBHC_CAL_PLUG_TYPE_PTR(
+				mbhc->mbhc_cfg->calibration);
 	reg_val = ((plug_type_cfg->v_hs_max - HS_VREF_MIN_VAL) / 100);
 
-	dev_dbg(codec->dev, "%s: reg_val  = %x\n", __func__, reg_val);
+	dev_dbg(component->dev, "%s: reg_val  = %x\n",
+		__func__, reg_val);
 	WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_HS_VREF, reg_val);
 }
 
 static void wcd_program_btn_threshold(const struct wcd_mbhc *mbhc, bool micbias)
 {
 	struct wcd_mbhc_btn_detect_cfg *btn_det;
-	struct snd_soc_codec *codec = mbhc->codec;
-	struct snd_soc_card *card = codec->component.card;
+	struct snd_soc_component *component = mbhc->component;
+	struct snd_soc_card *card = component->card;
 	s16 *btn_low, *btn_high;
 
 	if (mbhc->mbhc_cfg->calibration == NULL) {
@@ -114,8 +103,8 @@ static void wcd_program_btn_threshold(const struct wcd_mbhc *mbhc, bool micbias)
 	btn_high = ((void *)&btn_det->_v_btn_low) +
 			(sizeof(btn_det->_v_btn_low[0]) * btn_det->num_btn);
 
-	mbhc->mbhc_cb->set_btn_thr(codec, btn_low, btn_high, btn_det->num_btn,
-				   micbias);
+	mbhc->mbhc_cb->set_btn_thr(component, btn_low, btn_high,
+				btn_det->num_btn, micbias);
 }
 
 void wcd_enable_curr_micbias(const struct wcd_mbhc *mbhc,
@@ -216,7 +205,7 @@ static int wcd_event_notify(struct notifier_block *self, unsigned long val,
 {
 	struct wcd_mbhc *mbhc = (struct wcd_mbhc *)data;
 	enum wcd_notify_event event = (enum wcd_notify_event)val;
-	struct snd_soc_codec *codec = mbhc->codec;
+	struct snd_soc_component *component = mbhc->component;
 	bool micbias2 = false;
 	bool micbias1 = false;
 	u8 fsm_en = 0;
@@ -240,10 +229,10 @@ static int wcd_event_notify(struct notifier_block *self, unsigned long val,
 		if (!mbhc->micbias_enable)
 			goto out_micb_en;
 		if (mbhc->mbhc_cb->mbhc_common_micb_ctrl) {
-			mbhc->mbhc_cb->mbhc_common_micb_ctrl(codec,
+			mbhc->mbhc_cb->mbhc_common_micb_ctrl(component,
 					MBHC_COMMON_MICB_PRECHARGE,
 					true);
-			mbhc->mbhc_cb->mbhc_common_micb_ctrl(codec,
+			mbhc->mbhc_cb->mbhc_common_micb_ctrl(component,
 					MBHC_COMMON_MICB_SET_VAL,
 					true);
 			/*
@@ -253,9 +242,9 @@ static int wcd_event_notify(struct notifier_block *self, unsigned long val,
 			msleep(50);
 		}
 		if (mbhc->mbhc_cb->set_auto_zeroing)
-			mbhc->mbhc_cb->set_auto_zeroing(codec, true);
+			mbhc->mbhc_cb->set_auto_zeroing(component, true);
 		if (mbhc->mbhc_cb->mbhc_common_micb_ctrl)
-			mbhc->mbhc_cb->mbhc_common_micb_ctrl(codec,
+			mbhc->mbhc_cb->mbhc_common_micb_ctrl(component,
 					MBHC_COMMON_MICB_PRECHARGE,
 					false);
 out_micb_en:
@@ -271,7 +260,7 @@ out_micb_en:
 		}
 		/* configure cap settings properly when micbias is enabled */
 		if (mbhc->mbhc_cb->set_cap_mode)
-			mbhc->mbhc_cb->set_cap_mode(codec, micbias1, true);
+			mbhc->mbhc_cb->set_cap_mode(component, micbias1, true);
 		break;
 	case WCD_EVENT_PRE_MICBIAS_2_OFF:
 		/*
@@ -302,9 +291,9 @@ out_micb_en:
 		}
 
 		if (mbhc->mbhc_cb->set_auto_zeroing)
-			mbhc->mbhc_cb->set_auto_zeroing(codec, false);
+			mbhc->mbhc_cb->set_auto_zeroing(component, false);
 		if (mbhc->mbhc_cb->set_micbias_value && !mbhc->micbias_enable)
-			mbhc->mbhc_cb->set_micbias_value(codec);
+			mbhc->mbhc_cb->set_micbias_value(component);
 		/* Enable PULL UP if PA's are enabled */
 		if ((test_bit(WCD_MBHC_EVENT_PA_HPHL, &mbhc->event_state)) ||
 				(test_bit(WCD_MBHC_EVENT_PA_HPHR,
@@ -317,7 +306,7 @@ out_micb_en:
 
 		/* configure cap settings properly when micbias is disabled */
 		if (mbhc->mbhc_cb->set_cap_mode)
-			mbhc->mbhc_cb->set_cap_mode(codec, micbias1, false);
+			mbhc->mbhc_cb->set_cap_mode(component, micbias1, false);
 		break;
 	case WCD_EVENT_PRE_HPHL_PA_OFF:
 		mutex_lock(&mbhc->hphl_pa_lock);
@@ -376,12 +365,12 @@ out_micb_en:
 			wcd_enable_curr_micbias(mbhc, WCD_MBHC_EN_PULLUP);
 		break;
 	case WCD_EVENT_OCP_OFF:
-		mbhc->mbhc_cb->irq_control(mbhc->codec,
+		mbhc->mbhc_cb->irq_control(mbhc->component,
 					   mbhc->intr_ids->hph_left_ocp,
 					   false);
 		break;
 	case WCD_EVENT_OCP_ON:
-		mbhc->mbhc_cb->irq_control(mbhc->codec,
+		mbhc->mbhc_cb->irq_control(mbhc->component,
 					   mbhc->intr_ids->hph_left_ocp,
 					   true);
 		break;
@@ -428,7 +417,6 @@ static void wcd_mbhc_clr_and_turnon_hph_padac(struct wcd_mbhc *mbhc)
 			       &mbhc->hph_pa_dac_state)) {
 		pr_debug("%s: HPHR clear flag and enable PA\n", __func__);
 		WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_HPHR_PA_EN, 1);
-		WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_HPHR_OCP_DET_EN, 1);
 		pa_turned_on = true;
 	}
 	mutex_unlock(&mbhc->hphr_pa_lock);
@@ -437,7 +425,6 @@ static void wcd_mbhc_clr_and_turnon_hph_padac(struct wcd_mbhc *mbhc)
 			       &mbhc->hph_pa_dac_state)) {
 		pr_debug("%s: HPHL clear flag and enable PA\n", __func__);
 		WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_HPHL_PA_EN, 1);
-		WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_HPHL_OCP_DET_EN, 1);
 		pa_turned_on = true;
 	}
 	mutex_unlock(&mbhc->hphl_pa_lock);
@@ -454,7 +441,8 @@ static void wcd_mbhc_clr_and_turnon_hph_padac(struct wcd_mbhc *mbhc)
 		pr_debug("%s: HPHL ANC clear flag and enable ANC_EN\n",
 			__func__);
 		if (mbhc->mbhc_cb->update_anc_state)
-			mbhc->mbhc_cb->update_anc_state(mbhc->codec, true, 0);
+			mbhc->mbhc_cb->update_anc_state(mbhc->component,
+						true, 0);
 	}
 
 	if (test_and_clear_bit(WCD_MBHC_ANC1_OFF_ACK,
@@ -463,7 +451,8 @@ static void wcd_mbhc_clr_and_turnon_hph_padac(struct wcd_mbhc *mbhc)
 		pr_debug("%s: HPHR ANC clear flag and enable ANC_EN\n",
 			__func__);
 		if (mbhc->mbhc_cb->update_anc_state)
-			mbhc->mbhc_cb->update_anc_state(mbhc->codec, true, 1);
+			mbhc->mbhc_cb->update_anc_state(mbhc->component,
+						true, 1);
 	}
 
 }
@@ -506,8 +495,10 @@ static void wcd_mbhc_set_and_turnoff_hph_padac(struct wcd_mbhc *mbhc)
 		set_bit(WCD_MBHC_ANC0_OFF_ACK, &mbhc->hph_anc_state);
 		set_bit(WCD_MBHC_ANC1_OFF_ACK, &mbhc->hph_anc_state);
 		if (mbhc->mbhc_cb->update_anc_state) {
-			mbhc->mbhc_cb->update_anc_state(mbhc->codec, false, 0);
-			mbhc->mbhc_cb->update_anc_state(mbhc->codec, false, 1);
+			mbhc->mbhc_cb->update_anc_state(mbhc->component,
+						false, 0);
+			mbhc->mbhc_cb->update_anc_state(mbhc->component,
+						false, 1);
 		} else {
 			pr_debug("%s ANC is off\n", __func__);
 		}
@@ -547,7 +538,7 @@ void wcd_mbhc_hs_elec_irq(struct wcd_mbhc *mbhc, int irq_type,
 	pr_debug("%s: irq: %d, enable: %d, intr_status:%lu\n",
 		 __func__, irq, enable, mbhc->intr_status);
 	if ((test_bit(irq_type, &mbhc->intr_status)) != enable) {
-		mbhc->mbhc_cb->irq_control(mbhc->codec, irq, enable);
+		mbhc->mbhc_cb->irq_control(mbhc->component, irq, enable);
 		if (enable)
 			set_bit(irq_type, &mbhc->intr_status);
 		else
@@ -559,7 +550,7 @@ EXPORT_SYMBOL(wcd_mbhc_hs_elec_irq);
 void wcd_mbhc_report_plug(struct wcd_mbhc *mbhc, int insertion,
 				enum snd_jack_types jack_type)
 {
-	struct snd_soc_codec *codec = mbhc->codec;
+	struct snd_soc_component *component = mbhc->component;
 	bool is_pa_on = false;
 	u8 fsm_en = 0;
 
@@ -569,13 +560,6 @@ void wcd_mbhc_report_plug(struct wcd_mbhc *mbhc, int insertion,
 		 __func__, insertion, mbhc->hph_status);
 	if (!insertion) {
 		/* Report removal */
-#if defined(CONFIG_SND_SOC_WCD_MBHC_SLOW_DET)
-		if (mbhc->slow_insertion && mbhc->mbhc_cfg->gnd_det_en) {
-			WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_GND_DET_EN, 1);
-			pr_info("%s: slow: Set G_DET to default state\n",
-				__func__);
-		}
-#endif
 		mbhc->hph_status &= ~jack_type;
 		/*
 		 * cancel possibly scheduled btn work and
@@ -595,14 +579,14 @@ void wcd_mbhc_report_plug(struct wcd_mbhc *mbhc, int insertion,
 		if (mbhc->micbias_enable) {
 			if (mbhc->mbhc_cb->mbhc_micbias_control)
 				mbhc->mbhc_cb->mbhc_micbias_control(
-						codec, MIC_BIAS_2,
+						component, MIC_BIAS_2,
 						MICB_DISABLE);
 			if (mbhc->mbhc_cb->mbhc_micb_ctrl_thr_mic)
 				mbhc->mbhc_cb->mbhc_micb_ctrl_thr_mic(
-						codec,
+						component,
 						MIC_BIAS_2, false);
 			if (mbhc->mbhc_cb->set_micbias_value) {
-				mbhc->mbhc_cb->set_micbias_value(codec);
+				mbhc->mbhc_cb->set_micbias_value(component);
 				WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_MICB_CTRL, 0);
 			}
 			mbhc->micbias_enable = false;
@@ -634,15 +618,15 @@ void wcd_mbhc_report_plug(struct wcd_mbhc *mbhc, int insertion,
 			    mbhc->hph_status == SND_JACK_HEADSET) {
 				if (mbhc->mbhc_cb->mbhc_micbias_control)
 					mbhc->mbhc_cb->mbhc_micbias_control(
-						codec, MIC_BIAS_2,
+						component, MIC_BIAS_2,
 						MICB_DISABLE);
 				if (mbhc->mbhc_cb->mbhc_micb_ctrl_thr_mic)
 					mbhc->mbhc_cb->mbhc_micb_ctrl_thr_mic(
-						codec,
+						component,
 						MIC_BIAS_2, false);
 				if (mbhc->mbhc_cb->set_micbias_value) {
 					mbhc->mbhc_cb->set_micbias_value(
-							codec);
+							component);
 					WCD_MBHC_REG_UPDATE_BITS(
 							WCD_MBHC_MICB_CTRL, 0);
 				}
@@ -650,11 +634,12 @@ void wcd_mbhc_report_plug(struct wcd_mbhc *mbhc, int insertion,
 			}
 			mbhc->hph_type = WCD_MBHC_HPH_NONE;
 			mbhc->zl = mbhc->zr = 0;
-			pr_debug("%s: Reporting removal (%x)\n",
-				 __func__, mbhc->hph_status);
-			wcd_mbhc_jack_report(mbhc, &mbhc->headset_jack,
-					    0, WCD_MBHC_JACK_MASK);
-
+			if (!mbhc->force_linein) {
+				pr_debug("%s: Reporting removal (%x)\n",
+					 __func__, mbhc->hph_status);
+				wcd_mbhc_jack_report(mbhc, &mbhc->headset_jack,
+					0, WCD_MBHC_JACK_MASK);
+			}
 			if (mbhc->hph_status == SND_JACK_LINEOUT) {
 
 				pr_debug("%s: Enable micbias\n", __func__);
@@ -691,7 +676,7 @@ void wcd_mbhc_report_plug(struct wcd_mbhc *mbhc, int insertion,
 		}
 
 		if (mbhc->mbhc_cb->hph_pa_on_status)
-			is_pa_on = mbhc->mbhc_cb->hph_pa_on_status(codec);
+			is_pa_on = mbhc->mbhc_cb->hph_pa_on_status(component);
 
 		if (mbhc->impedance_detect &&
 			mbhc->mbhc_cb->compute_impedance &&
@@ -703,22 +688,12 @@ void wcd_mbhc_report_plug(struct wcd_mbhc *mbhc, int insertion,
 			WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_MUX_CTL,
 						 MUX_CTL_AUTO);
 			WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_FSM_EN, 1);
-#if defined(CONFIG_SND_SOC_WCD_MBHC_SLOW_DET)
-			if (!mbhc->slow_insertion)
-				mbhc->mbhc_cb->compute_impedance(mbhc,
-						&mbhc->zl, &mbhc->zr);
-			else
-				mbhc->impedance_offset = mbhc->default_impedance_offset;
-#else
 			mbhc->mbhc_cb->compute_impedance(mbhc,
 					&mbhc->zl, &mbhc->zr);
-#endif
 			WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_FSM_EN,
 						 fsm_en);
-			if ((mbhc->zl > mbhc->mbhc_cfg->linein_th &&
-				mbhc->zl < MAX_IMPED) &&
-				(mbhc->zr > mbhc->mbhc_cfg->linein_th &&
-				 mbhc->zr < MAX_IMPED) &&
+			if ((mbhc->zl > mbhc->mbhc_cfg->linein_th) &&
+				(mbhc->zr > mbhc->mbhc_cfg->linein_th) &&
 				(jack_type == SND_JACK_HEADPHONE)) {
 				jack_type = SND_JACK_LINEOUT;
 				mbhc->force_linein = true;
@@ -757,6 +732,10 @@ void wcd_mbhc_report_plug(struct wcd_mbhc *mbhc, int insertion,
 		}
 
 		mbhc->hph_status |= jack_type;
+
+		if (jack_type == SND_JACK_HEADPHONE &&
+		    mbhc->mbhc_cb->mbhc_micb_ramp_control)
+			mbhc->mbhc_cb->mbhc_micb_ramp_control(component, false);
 
 		pr_debug("%s: Reporting insertion %d(%x)\n", __func__,
 			 jack_type, mbhc->hph_status);
@@ -890,7 +869,7 @@ static bool wcd_mbhc_moisture_detect(struct wcd_mbhc *mbhc, bool detection_type)
 {
 	bool ret = false;
 
-	if (!mbhc->mbhc_cfg->moisture_en ||
+	if (!mbhc->mbhc_cfg->moisture_en &&
 	    !mbhc->mbhc_cfg->moisture_duty_cycle_en)
 		return ret;
 
@@ -907,7 +886,8 @@ static bool wcd_mbhc_moisture_detect(struct wcd_mbhc *mbhc, bool detection_type)
 					detection_type);
 		ret = true;
 		WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_L_DET_EN, 1);
-		WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_GND_DET_EN, 1);
+		if (mbhc->mbhc_cfg->gnd_det_en)
+			WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_GND_DET_EN, 1);
 	} else {
 		mbhc->mbhc_cb->mbhc_moisture_polling_ctrl(mbhc, false);
 		mbhc->mbhc_cb->mbhc_moisture_detect_en(mbhc, false);
@@ -920,10 +900,10 @@ static void wcd_mbhc_swch_irq_handler(struct wcd_mbhc *mbhc)
 {
 	bool detection_type = 0;
 	bool micbias1 = false;
-	struct snd_soc_codec *codec = mbhc->codec;
+	struct snd_soc_component *component = mbhc->component;
 	enum snd_jack_types jack_type;
 
-	dev_dbg(codec->dev, "%s: enter\n", __func__);
+	dev_dbg(component->dev, "%s: enter\n", __func__);
 	WCD_MBHC_RSC_LOCK(mbhc);
 	mbhc->in_swch_irq_handler = true;
 
@@ -945,6 +925,10 @@ static void wcd_mbhc_swch_irq_handler(struct wcd_mbhc *mbhc)
 	else
 		pr_info("%s: hs_detect_plug work not cancelled\n", __func__);
 
+	/* Enable micbias ramp */
+	if (mbhc->mbhc_cb->mbhc_micb_ramp_control)
+		mbhc->mbhc_cb->mbhc_micb_ramp_control(component, true);
+
 	if (mbhc->mbhc_cb->micbias_enable_status)
 		micbias1 = mbhc->mbhc_cb->micbias_enable_status(mbhc,
 						MIC_BIAS_1);
@@ -959,10 +943,10 @@ static void wcd_mbhc_swch_irq_handler(struct wcd_mbhc *mbhc)
 			goto done;
 
 		/* Make sure MASTER_BIAS_CTL is enabled */
-		mbhc->mbhc_cb->mbhc_bias(codec, true);
+		mbhc->mbhc_cb->mbhc_bias(component, true);
 
 		if (mbhc->mbhc_cb->mbhc_common_micb_ctrl)
-			mbhc->mbhc_cb->mbhc_common_micb_ctrl(codec,
+			mbhc->mbhc_cb->mbhc_common_micb_ctrl(component,
 					MBHC_COMMON_MICB_TAIL_CURR, true);
 
 		if (!mbhc->mbhc_cfg->hs_ext_micbias &&
@@ -971,13 +955,13 @@ static void wcd_mbhc_swch_irq_handler(struct wcd_mbhc *mbhc)
 			 * Enable Tx2 RBias if the headset
 			 * is using internal micbias
 			 */
-			mbhc->mbhc_cb->micb_internal(codec, 1, true);
+			mbhc->mbhc_cb->micb_internal(component, 1, true);
 
 		/* Remove micbias pulldown */
 		WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_PULLDOWN_CTRL, 0);
 		/* Apply trim if needed on the device */
 		if (mbhc->mbhc_cb->trim_btn_reg)
-			mbhc->mbhc_cb->trim_btn_reg(codec);
+			mbhc->mbhc_cb->trim_btn_reg(component);
 		/* Enable external voltage source to micbias if present */
 		if (mbhc->mbhc_cb->enable_mb_source)
 			mbhc->mbhc_cb->enable_mb_source(mbhc, true);
@@ -993,18 +977,12 @@ static void wcd_mbhc_swch_irq_handler(struct wcd_mbhc *mbhc)
 		/* Disable HW FSM */
 		WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_FSM_EN, 0);
 		WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_BTN_ISRC_CTL, 0);
-		if (mbhc->pullup_enable == true) {
-			mbhc->mbhc_cb->mbhc_micbias_control(mbhc->codec,
-					MIC_BIAS_2, MICB_PULLUP_DISABLE);
-			mbhc->pullup_enable = false;
-		}
-
 		if (mbhc->mbhc_cb->mbhc_common_micb_ctrl)
-			mbhc->mbhc_cb->mbhc_common_micb_ctrl(codec,
+			mbhc->mbhc_cb->mbhc_common_micb_ctrl(component,
 					MBHC_COMMON_MICB_TAIL_CURR, false);
 
 		if (mbhc->mbhc_cb->set_cap_mode)
-			mbhc->mbhc_cb->set_cap_mode(codec, micbias1, false);
+			mbhc->mbhc_cb->set_cap_mode(component, micbias1, false);
 
 		mbhc->btn_press_intr = false;
 		mbhc->is_btn_press = false;
@@ -1018,7 +996,8 @@ static void wcd_mbhc_swch_irq_handler(struct wcd_mbhc *mbhc)
 		case MBHC_PLUG_TYPE_HEADSET:
 			/* make sure to turn off Rbias */
 			if (mbhc->mbhc_cb->micb_internal)
-				mbhc->mbhc_cb->micb_internal(codec, 1, false);
+				mbhc->mbhc_cb->micb_internal(component,
+							1, false);
 			/* Pulldown micbias */
 			WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_PULLDOWN_CTRL, 1);
 			jack_type = SND_JACK_HEADSET;
@@ -1046,10 +1025,11 @@ static void wcd_mbhc_swch_irq_handler(struct wcd_mbhc *mbhc)
 			mbhc->mbhc_cfg->fsa_enable) {
 			WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_L_DET_EN, 0);
 			if (mbhc->mbhc_cb->clk_setup)
-				mbhc->mbhc_cb->clk_setup(mbhc->codec, false);
+				mbhc->mbhc_cb->clk_setup(
+					mbhc->component, false);
 		}
 
-		if (mbhc->mbhc_cfg->moisture_en &&
+		if (mbhc->mbhc_cfg->moisture_en ||
 		    mbhc->mbhc_cfg->moisture_duty_cycle_en) {
 			if (mbhc->mbhc_cb->mbhc_moisture_polling_ctrl)
 				mbhc->mbhc_cb->mbhc_moisture_polling_ctrl(mbhc,
@@ -1102,34 +1082,31 @@ int wcd_mbhc_get_button_mask(struct wcd_mbhc *mbhc)
 	int mask = 0;
 	int btn;
 
-	btn = mbhc->mbhc_cb->map_btn_code_to_num(mbhc->codec);
+	btn = mbhc->mbhc_cb->map_btn_code_to_num(mbhc->component);
 
 	switch (btn) {
 	case 0:
-	case 1:
 		mask = SND_JACK_BTN_0;
 		break;
-	case 2:
+	case 1:
 		mask = SND_JACK_BTN_1;
 		break;
-	case 3:
+	case 2:
 		mask = SND_JACK_BTN_2;
 		break;
-	case 4:
+	case 3:
 		mask = SND_JACK_BTN_3;
 		break;
-	case 5:
+	case 4:
 		mask = SND_JACK_BTN_4;
 		break;
-	case 6:
-	case 7:
+	case 5:
 		mask = SND_JACK_BTN_5;
 		break;
 	default:
 		break;
 	}
 
-	pr_info("%s: button %d\n", __func__, btn);
 	return mask;
 }
 EXPORT_SYMBOL(wcd_mbhc_get_button_mask);
@@ -1320,7 +1297,7 @@ static irqreturn_t wcd_mbhc_hphl_ocp_irq(int irq, void *data)
 			WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_OCP_FSM_EN, 0);
 			WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_OCP_FSM_EN, 1);
 		} else {
-			mbhc->mbhc_cb->irq_control(mbhc->codec,
+			mbhc->mbhc_cb->irq_control(mbhc->component,
 						   mbhc->intr_ids->hph_left_ocp,
 						   false);
 			mbhc->hph_status |= SND_JACK_OC_HPHL;
@@ -1363,7 +1340,7 @@ static irqreturn_t wcd_mbhc_hphr_ocp_irq(int irq, void *data)
 		WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_OCP_FSM_EN, 0);
 		WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_OCP_FSM_EN, 1);
 	} else {
-		mbhc->mbhc_cb->irq_control(mbhc->codec,
+		mbhc->mbhc_cb->irq_control(mbhc->component,
 					   mbhc->intr_ids->hph_right_ocp,
 					   false);
 		mbhc->hph_status |= SND_JACK_OC_HPHR;
@@ -1377,23 +1354,28 @@ done:
 static int wcd_mbhc_initialise(struct wcd_mbhc *mbhc)
 {
 	int ret = 0;
-	struct snd_soc_codec *codec = mbhc->codec;
+	struct snd_soc_component *component = mbhc->component;
 
 	pr_debug("%s: enter\n", __func__);
 	WCD_MBHC_RSC_LOCK(mbhc);
 
 	/* enable HS detection */
 	if (mbhc->mbhc_cb->hph_pull_up_control_v2)
-		mbhc->mbhc_cb->hph_pull_up_control_v2(codec,
+		mbhc->mbhc_cb->hph_pull_up_control_v2(component,
 						      HS_PULLUP_I_DEFAULT);
 	else if (mbhc->mbhc_cb->hph_pull_up_control)
-		mbhc->mbhc_cb->hph_pull_up_control(codec, I_DEFAULT);
+		mbhc->mbhc_cb->hph_pull_up_control(component, I_DEFAULT);
 	else
 		WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_HS_L_DET_PULL_UP_CTRL, 3);
 
+	/* Configure for moisture detection when duty cycle is not enabled.
+	 * Otherwise disable moisture detection.
+	 */
 	if (mbhc->mbhc_cfg->moisture_en && mbhc->mbhc_cb->mbhc_moisture_config
 		&& !mbhc->mbhc_cfg->moisture_duty_cycle_en)
 		mbhc->mbhc_cb->mbhc_moisture_config(mbhc);
+	else if (mbhc->mbhc_cb->mbhc_moisture_detect_en)
+		mbhc->mbhc_cb->mbhc_moisture_detect_en(mbhc, false);
 
 	/*
 	 * For USB analog we need to override the switch configuration.
@@ -1402,10 +1384,10 @@ static int wcd_mbhc_initialise(struct wcd_mbhc *mbhc)
 	 */
 	if (mbhc->mbhc_cfg->enable_usbc_analog) {
 		if (mbhc->mbhc_cb->hph_pull_up_control_v2)
-			mbhc->mbhc_cb->hph_pull_up_control_v2(codec,
+			mbhc->mbhc_cb->hph_pull_up_control_v2(component,
 							      HS_PULLUP_I_OFF);
 		else if (mbhc->mbhc_cb->hph_pull_up_control)
-			mbhc->mbhc_cb->hph_pull_up_control(codec, I_OFF);
+			mbhc->mbhc_cb->hph_pull_up_control(component, I_OFF);
 		else
 			WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_HS_L_DET_PULL_UP_CTRL,
 						 0);
@@ -1415,7 +1397,7 @@ static int wcd_mbhc_initialise(struct wcd_mbhc *mbhc)
 	WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_GND_PLUG_TYPE, mbhc->gnd_swh);
 	WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_SW_HPH_LP_100K_TO_GND, 1);
 	if (mbhc->mbhc_cfg->gnd_det_en && mbhc->mbhc_cb->mbhc_gnd_det_ctrl)
-		mbhc->mbhc_cb->mbhc_gnd_det_ctrl(codec, true);
+		mbhc->mbhc_cb->mbhc_gnd_det_ctrl(component, true);
 	WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_HS_L_DET_PULL_UP_COMP_CTRL, 1);
 
 	/*
@@ -1432,41 +1414,23 @@ static int wcd_mbhc_initialise(struct wcd_mbhc *mbhc)
 		/* Insertion debounce set to 48ms */
 		WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_INSREM_DBNC, 4);
 	} else {
-		/* Insertion debounce set to 256ms */
-		WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_INSREM_DBNC, 9);
+		/* Insertion debounce set to 96ms */
+		WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_INSREM_DBNC, 6);
 	}
 
-	/* Button Debounce set to 8ms */
-	WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_BTN_DBNC, 1);
+	/* Button Debounce set to 16ms */
+	WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_BTN_DBNC, 2);
 
-	/* Enable micbias ramp */
-	if (mbhc->mbhc_cb->mbhc_micb_ramp_control)
-		mbhc->mbhc_cb->mbhc_micb_ramp_control(codec, true);
 	/* enable bias */
-	mbhc->mbhc_cb->mbhc_bias(codec, true);
+	mbhc->mbhc_cb->mbhc_bias(component, true);
 	/* enable MBHC clock */
 	if (mbhc->mbhc_cb->clk_setup) {
 		if (mbhc->mbhc_cfg->enable_usbc_analog &&
 			mbhc->mbhc_cfg->fsa_enable)
-			mbhc->mbhc_cb->clk_setup(codec, false);
+			mbhc->mbhc_cb->clk_setup(component, false);
 		else
-			mbhc->mbhc_cb->clk_setup(codec, true);
+			mbhc->mbhc_cb->clk_setup(component, true);
 	}
-
-#ifndef CONFIG_SEC_FACTORY
-	/* Samsung external cable ADC detection flag check */
-	if (of_find_property(codec->component.card->dev->of_node, "detect-extn-cable", NULL))
-		mbhc->mbhc_cfg->detect_extn_cable = true;
-	pr_debug("%s: external cable support : %s\n", __func__,
-		mbhc->mbhc_cfg->detect_extn_cable ? "true" : "false");
-#endif
-
-	/* Noise filter type control */
-	if (of_find_property(codec->component.card->dev->of_node,
-		"qcom,noise-filter-cfilt-ref", NULL))
-		WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_NOISE_FILT_CTRL, 1);
-	else
-		WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_NOISE_FILT_CTRL, 0);
 
 	/* program HS_VREF value */
 	wcd_program_hs_vref(mbhc);
@@ -1485,7 +1449,7 @@ static void wcd_mbhc_fw_read(struct work_struct *work)
 {
 	struct delayed_work *dwork;
 	struct wcd_mbhc *mbhc;
-	struct snd_soc_codec *codec;
+	struct snd_soc_component *component;
 	const struct firmware *fw;
 	struct firmware_cal *fw_data = NULL;
 	int ret = -1, retry = 0;
@@ -1493,7 +1457,7 @@ static void wcd_mbhc_fw_read(struct work_struct *work)
 
 	dwork = to_delayed_work(work);
 	mbhc = container_of(dwork, struct wcd_mbhc, mbhc_firmware_dwork);
-	codec = mbhc->codec;
+	component = mbhc->component;
 
 	while (retry < FW_READ_ATTEMPTS) {
 		retry++;
@@ -1504,7 +1468,7 @@ static void wcd_mbhc_fw_read(struct work_struct *work)
 					WCD9XXX_MBHC_CAL);
 		if (!fw_data)
 			ret = request_firmware(&fw, "wcd9320/wcd9320_mbhc.bin",
-				       codec->dev);
+				       component->dev);
 		/*
 		 * if request_firmware and hwdep cal both fail then
 		 * sleep for 4sec for the userspace to send data to kernel
@@ -1625,11 +1589,11 @@ static int wcd_mbhc_usbc_ana_event_handler(struct notifier_block *nb,
 	if (!mbhc)
 		return -EINVAL;
 
-	dev_dbg(mbhc->codec->dev, "%s: mode = %lu\n", __func__, mode);
+	dev_dbg(mbhc->component->dev, "%s: mode = %lu\n", __func__, mode);
 
 	if (mode == POWER_SUPPLY_TYPEC_SINK_AUDIO_ADAPTER) {
 		if (mbhc->mbhc_cb->clk_setup)
-			mbhc->mbhc_cb->clk_setup(mbhc->codec, true);
+			mbhc->mbhc_cb->clk_setup(mbhc->component, true);
 		/* insertion detected, enable L_DET_EN */
 		WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_L_DET_EN, 1);
 	}
@@ -1643,10 +1607,10 @@ static int wcd_mbhc_init_gpio(struct wcd_mbhc *mbhc,
 				struct device_node **gpio_dn)
 {
 	int rc = 0;
-	struct snd_soc_codec *codec = mbhc->codec;
-	struct snd_soc_card *card = codec->component.card;
+	struct snd_soc_component *component = mbhc->component;
+	struct snd_soc_card *card = component->card;
 
-	dev_dbg(mbhc->codec->dev, "%s: gpio %s\n", __func__, gpio_dt_str);
+	dev_dbg(mbhc->component->dev, "%s: gpio %s\n", __func__, gpio_dt_str);
 
 	*gpio_dn = of_parse_phandle(card->dev->of_node, gpio_dt_str, 0);
 
@@ -1670,7 +1634,7 @@ static int wcd_mbhc_usb_c_analog_setup_gpios(struct wcd_mbhc *mbhc, bool active)
 			&mbhc->mbhc_cfg->usbc_analog_cfg;
 	union power_supply_propval pval;
 
-	dev_dbg(mbhc->codec->dev, "%s: setting GPIOs active = %d\n",
+	dev_dbg(mbhc->component->dev, "%s: setting GPIOs active = %d\n",
 			__func__, active);
 
 	memset(&pval, 0, sizeof(pval));
@@ -1679,7 +1643,7 @@ static int wcd_mbhc_usb_c_analog_setup_gpios(struct wcd_mbhc *mbhc, bool active)
 		pval.intval = POWER_SUPPLY_TYPEC_PR_SOURCE;
 		if (power_supply_set_property(mbhc->usb_psy,
 				POWER_SUPPLY_PROP_TYPEC_POWER_ROLE, &pval))
-			dev_info(mbhc->codec->dev, "%s: force PR_SOURCE mode unsuccessful\n",
+			dev_info(mbhc->component->dev, "%s: force PR_SOURCE mode unsuccessful\n",
 					__func__);
 		else
 			mbhc->usbc_force_pr_mode = true;
@@ -1710,7 +1674,7 @@ static int wcd_mbhc_usb_c_analog_setup_gpios(struct wcd_mbhc *mbhc, bool active)
 			pval.intval = POWER_SUPPLY_TYPEC_PR_DUAL;
 			if (power_supply_set_property(mbhc->usb_psy,
 				POWER_SUPPLY_PROP_TYPEC_POWER_ROLE, &pval))
-				dev_info(mbhc->codec->dev, "%s: force PR_DUAL mode unsuccessful\n",
+				dev_info(mbhc->component->dev, "%s: force PR_DUAL mode unsuccessful\n",
 						__func__);
 			mbhc->usbc_force_pr_mode = false;
 		}
@@ -1719,7 +1683,6 @@ static int wcd_mbhc_usb_c_analog_setup_gpios(struct wcd_mbhc *mbhc, bool active)
 
 	return rc;
 }
-
 
 /* workqueue */
 static void wcd_mbhc_usbc_analog_work_fn(struct work_struct *work)
@@ -1738,7 +1701,7 @@ static int wcd_mbhc_usb_c_event_changed(struct notifier_block *nb,
 	int ret;
 	union power_supply_propval mode;
 	struct wcd_mbhc *mbhc = container_of(nb, struct wcd_mbhc, psy_nb);
-	struct snd_soc_codec *codec = mbhc->codec;
+	struct snd_soc_component *component = mbhc->component;
 
 	if (ptr != mbhc->usb_psy || evt != PSY_EVENT_PROP_CHANGED)
 		return 0;
@@ -1746,20 +1709,20 @@ static int wcd_mbhc_usb_c_event_changed(struct notifier_block *nb,
 	ret = power_supply_get_property(mbhc->usb_psy,
 					POWER_SUPPLY_PROP_TYPEC_MODE, &mode);
 	if (ret) {
-		dev_err(codec->dev, "%s: Unable to read USB TYPEC_MODE: %d\n",
+		dev_err(component->dev, "%s: Unable to read USB TYPEC_MODE: %d\n",
 			__func__, ret);
 		return ret;
 	}
 
-	dev_dbg(codec->dev, "%s: USB change event received\n",
+	dev_dbg(component->dev, "%s: USB change event received\n",
 			__func__);
-	dev_dbg(codec->dev, "%s: supply mode %d, expected %d\n", __func__,
+	dev_dbg(component->dev, "%s: supply mode %d, expected %d\n", __func__,
 			mode.intval, POWER_SUPPLY_TYPEC_SINK_AUDIO_ADAPTER);
 
 	switch (mode.intval) {
 	case POWER_SUPPLY_TYPEC_SINK_AUDIO_ADAPTER:
 	case POWER_SUPPLY_TYPEC_NONE:
-			dev_dbg(codec->dev, "%s: usbc_mode: %d; mode.intval: %d\n",
+			dev_dbg(component->dev, "%s: usbc_mode: %d; mode.intval: %d\n",
 				__func__, mbhc->usbc_mode, mode.intval);
 
 			/* filter notifications received before */
@@ -1767,7 +1730,7 @@ static int wcd_mbhc_usb_c_event_changed(struct notifier_block *nb,
 				break;
 			mbhc->usbc_mode = mode.intval;
 
-			dev_dbg(codec->dev, "%s: queueing usbc_analog_work\n",
+			dev_dbg(component->dev, "%s: queueing usbc_analog_work\n",
 					__func__);
 			schedule_work(&mbhc->usbc_analog_work);
 			break;
@@ -1781,14 +1744,14 @@ static int wcd_mbhc_usb_c_event_changed(struct notifier_block *nb,
 static int wcd_mbhc_usb_c_analog_init(struct wcd_mbhc *mbhc)
 {
 	int ret = 0;
-	struct snd_soc_codec *codec = mbhc->codec;
+	struct snd_soc_component *component = mbhc->component;
 
-	dev_dbg(mbhc->codec->dev, "%s: usb-c analog setup start\n", __func__);
+	dev_dbg(mbhc->component->dev, "%s: usb-c analog setup start\n", __func__);
 	INIT_WORK(&mbhc->usbc_analog_work, wcd_mbhc_usbc_analog_work_fn);
 
 	mbhc->usb_psy = power_supply_get_by_name("usb");
 	if (IS_ERR_OR_NULL(mbhc->usb_psy)) {
-		dev_err(codec->dev, "%s: could not get USB psy info\n",
+		dev_err(component->dev, "%s: could not get USB psy info\n",
 			__func__);
 		ret = -EPROBE_DEFER;
 		if (IS_ERR(mbhc->usb_psy))
@@ -1798,7 +1761,7 @@ static int wcd_mbhc_usb_c_analog_init(struct wcd_mbhc *mbhc)
 	}
 	ret = wcd_mbhc_usb_c_analog_setup_gpios(mbhc, false);
 	if (ret) {
-		dev_err(codec->dev, "%s: error while setting USBC ana gpios\n",
+		dev_err(component->dev, "%s: error while setting USBC ana gpios\n",
 			__func__);
 		goto err;
 	}
@@ -1807,7 +1770,7 @@ static int wcd_mbhc_usb_c_analog_init(struct wcd_mbhc *mbhc)
 	mbhc->psy_nb.priority = 0;
 	ret = power_supply_reg_notifier(&mbhc->psy_nb);
 	if (ret) {
-		dev_err(codec->dev, "%s: power supply registration failed\n",
+		dev_err(component->dev, "%s: power supply registration failed\n",
 			__func__);
 		goto err;
 	}
@@ -1816,7 +1779,7 @@ static int wcd_mbhc_usb_c_analog_init(struct wcd_mbhc *mbhc)
 	 * as part of the init sequence check if there is a connected
 	 * USB C analog adapter
 	 */
-	dev_dbg(mbhc->codec->dev, "%s: verify if USB adapter is already inserted\n",
+	dev_dbg(mbhc->component->dev, "%s: verify if USB adapter is already inserted\n",
 		__func__);
 	ret = wcd_mbhc_usb_c_event_changed(&mbhc->psy_nb,
 					   PSY_EVENT_PROP_CHANGED,
@@ -1839,7 +1802,7 @@ int wcd_mbhc_start(struct wcd_mbhc *mbhc, struct wcd_mbhc_config *mbhc_cfg)
 {
 	int rc = 0;
 	struct usbc_ana_audio_config *config;
-	struct snd_soc_codec *codec;
+	struct snd_soc_component *component;
 	struct snd_soc_card *card;
 	const char *usb_c_dt = "qcom,msm-mbhc-usbc-audio-supported";
 
@@ -1847,13 +1810,13 @@ int wcd_mbhc_start(struct wcd_mbhc *mbhc, struct wcd_mbhc_config *mbhc_cfg)
 		return -EINVAL;
 
 	config = &mbhc_cfg->usbc_analog_cfg;
-	codec = mbhc->codec;
-	card = codec->component.card;
+	component = mbhc->component;
+	card = component->card;
 
 	/* update the mbhc config */
 	mbhc->mbhc_cfg = mbhc_cfg;
 
-	dev_dbg(mbhc->codec->dev, "%s: enter\n", __func__);
+	dev_dbg(mbhc->component->dev, "%s: enter\n", __func__);
 
 	/* check if USB C analog is defined on device tree */
 	mbhc_cfg->enable_usbc_analog = 0;
@@ -1871,7 +1834,7 @@ int wcd_mbhc_start(struct wcd_mbhc *mbhc, struct wcd_mbhc_config *mbhc_cfg)
 
 	/* Parse fsa switch handle */
 	if (mbhc_cfg->enable_usbc_analog) {
-		dev_dbg(mbhc->codec->dev, "%s: usbc analog enabled\n",
+		dev_dbg(mbhc->component->dev, "%s: usbc analog enabled\n",
 				__func__);
 		mbhc->swap_thr = GND_MIC_USBC_SWAP_THRESHOLD;
 		mbhc->fsa_np = of_parse_phandle(card->dev->of_node,
@@ -1908,7 +1871,7 @@ int wcd_mbhc_start(struct wcd_mbhc *mbhc, struct wcd_mbhc_config *mbhc_cfg)
 					goto err;
 			}
 
-			dev_dbg(mbhc->codec->dev, "%s: calling usb_c_analog_init\n",
+			dev_dbg(mbhc->component->dev, "%s: calling usb_c_analog_init\n",
 				__func__);
 			/* init PMI notifier */
 			rc = wcd_mbhc_usb_c_analog_init(mbhc);
@@ -1918,6 +1881,7 @@ int wcd_mbhc_start(struct wcd_mbhc *mbhc, struct wcd_mbhc_config *mbhc_cfg)
 			}
 		}
 	}
+
 	/* Set btn key code */
 	if ((!mbhc->is_btn_already_regd) && wcd_mbhc_set_keycode(mbhc))
 		pr_err("Set btn key code error!!!\n");
@@ -1949,7 +1913,7 @@ int wcd_mbhc_start(struct wcd_mbhc *mbhc, struct wcd_mbhc_config *mbhc_cfg)
 
 	return rc;
 err:
-	dev_dbg(mbhc->codec->dev, "%s: leave %d\n", __func__, rc);
+	dev_dbg(mbhc->component->dev, "%s: leave %d\n", __func__, rc);
 	return rc;
 }
 EXPORT_SYMBOL(wcd_mbhc_start);
@@ -1964,15 +1928,15 @@ void wcd_mbhc_stop(struct wcd_mbhc *mbhc)
 
 	if (mbhc->current_plug != MBHC_PLUG_TYPE_NONE) {
 		if (mbhc->mbhc_cb && mbhc->mbhc_cb->skip_imped_detect)
-			mbhc->mbhc_cb->skip_imped_detect(mbhc->codec);
+			mbhc->mbhc_cb->skip_imped_detect(mbhc->component);
 	}
 	mbhc->current_plug = MBHC_PLUG_TYPE_NONE;
 	mbhc->hph_status = 0;
 	if (mbhc->mbhc_cb && mbhc->mbhc_cb->irq_control) {
-		mbhc->mbhc_cb->irq_control(mbhc->codec,
+		mbhc->mbhc_cb->irq_control(mbhc->component,
 				mbhc->intr_ids->hph_left_ocp,
 				false);
-		mbhc->mbhc_cb->irq_control(mbhc->codec,
+		mbhc->mbhc_cb->irq_control(mbhc->component,
 				mbhc->intr_ids->hph_right_ocp,
 				false);
 	}
@@ -2005,7 +1969,6 @@ void wcd_mbhc_stop(struct wcd_mbhc *mbhc)
 		}
 	}
 
-
 	pr_debug("%s: leave\n", __func__);
 }
 EXPORT_SYMBOL(wcd_mbhc_stop);
@@ -2015,7 +1978,7 @@ EXPORT_SYMBOL(wcd_mbhc_stop);
  *
  * NOTE: mbhc->mbhc_cfg is not YET configure so shouldn't be used
  */
-int wcd_mbhc_init(struct wcd_mbhc *mbhc, struct snd_soc_codec *codec,
+int wcd_mbhc_init(struct wcd_mbhc *mbhc, struct snd_soc_component *component,
 		      const struct wcd_mbhc_cb *mbhc_cb,
 		      const struct wcd_mbhc_intr *mbhc_cdc_intr_ids,
 		      struct wcd_mbhc_register *wcd_mbhc_regs,
@@ -2025,14 +1988,11 @@ int wcd_mbhc_init(struct wcd_mbhc *mbhc, struct snd_soc_codec *codec,
 	int hph_swh = 0;
 	int gnd_swh = 0;
 	u32 hph_moist_config[3];
-	struct snd_soc_card *card = codec->component.card;
+	struct snd_soc_card *card = component->card;
 	const char *hph_switch = "qcom,msm-mbhc-hphl-swh";
 	const char *gnd_switch = "qcom,msm-mbhc-gnd-swh";
 	const char *hs_thre = "qcom,msm-mbhc-hs-mic-max-threshold-mv";
 	const char *hph_thre = "qcom,msm-mbhc-hs-mic-min-threshold-mv";
-#if defined(CONFIG_SND_SOC_WCD_MBHC_SLOW_DET)
-	struct wcd9xxx_pdata *pdata = dev_get_platdata(codec->dev->parent);
-#endif
 
 	pr_debug("%s: enter\n", __func__);
 
@@ -2080,7 +2040,7 @@ int wcd_mbhc_init(struct wcd_mbhc *mbhc, struct snd_soc_codec *codec,
 	mbhc->in_swch_irq_handler = false;
 	mbhc->current_plug = MBHC_PLUG_TYPE_NONE;
 	mbhc->is_btn_press = false;
-	mbhc->codec = codec;
+	mbhc->component = component;
 	mbhc->intr_ids = mbhc_cdc_intr_ids;
 	mbhc->impedance_detect = impedance_det_en;
 	mbhc->hphl_swh = hph_swh;
@@ -2094,20 +2054,15 @@ int wcd_mbhc_init(struct wcd_mbhc *mbhc, struct snd_soc_codec *codec,
 	mbhc->hph_type = WCD_MBHC_HPH_NONE;
 	mbhc->wcd_mbhc_regs = wcd_mbhc_regs;
 	mbhc->swap_thr = GND_MIC_SWAP_THRESHOLD;
-	mbhc->impedance_offset = 0;
-	mbhc->pullup_enable = false;
-#if defined(CONFIG_SND_SOC_WCD_MBHC_SLOW_DET)
-	mbhc->slow_insertion = false;
-	mbhc->default_impedance_offset =
-		pdata->imp_table[SND_JACK_HEADSET].gain;
-#endif
+	mbhc->hphl_cross_conn_thr = HPHL_CROSS_CONN_THRESHOLD;
+	mbhc->hphr_cross_conn_thr = HPHR_CROSS_CONN_THRESHOLD;
 
 	if (mbhc->intr_ids == NULL) {
 		pr_err("%s: Interrupt mapping not provided\n", __func__);
 		return -EINVAL;
 	}
 	if (!mbhc->wcd_mbhc_regs) {
-		dev_err(codec->dev, "%s: mbhc registers are not defined\n",
+		dev_err(component->dev, "%s: mbhc registers are not defined\n",
 			__func__);
 		return -EINVAL;
 	}
@@ -2117,14 +2072,14 @@ int wcd_mbhc_init(struct wcd_mbhc *mbhc, struct snd_soc_codec *codec,
 	    !mbhc_cb->free_irq || !mbhc_cb->map_btn_code_to_num ||
 	    !mbhc_cb->lock_sleep || !mbhc_cb->mbhc_bias ||
 	    !mbhc_cb->set_btn_thr) {
-		dev_err(codec->dev, "%s: required mbhc callbacks are not defined\n",
+		dev_err(component->dev, "%s: required mbhc callbacks are not defined\n",
 			__func__);
 		return -EINVAL;
 	}
 
 	/* No need to create new sound card jacks if is is already created */
 	if (mbhc->headset_jack.jack == NULL) {
-		ret = snd_soc_card_jack_new(codec->component.card,
+		ret = snd_soc_card_jack_new(component->card,
 					    "Headset Jack", WCD_MBHC_JACK_MASK,
 					    &mbhc->headset_jack, NULL, 0);
 		if (ret) {
@@ -2132,7 +2087,7 @@ int wcd_mbhc_init(struct wcd_mbhc *mbhc, struct snd_soc_codec *codec,
 			return ret;
 		}
 
-		ret = snd_soc_card_jack_new(codec->component.card,
+		ret = snd_soc_card_jack_new(component->card,
 					    "Button Jack",
 					    WCD_MBHC_JACK_BUTTON_MASK,
 					    &mbhc->button_jack, NULL, 0);
@@ -2194,16 +2149,17 @@ int wcd_mbhc_init(struct wcd_mbhc *mbhc, struct snd_soc_codec *codec,
 		pr_err("%s: mbhc function pointer is NULL\n", __func__);
 		goto err_mbhc_sw_irq;
 	}
-	ret = mbhc->mbhc_cb->request_irq(codec, mbhc->intr_ids->mbhc_sw_intr,
-				  wcd_mbhc_mech_plug_detect_irq,
-				  "mbhc sw intr", mbhc);
+	ret = mbhc->mbhc_cb->request_irq(component,
+				mbhc->intr_ids->mbhc_sw_intr,
+				wcd_mbhc_mech_plug_detect_irq,
+				"mbhc sw intr", mbhc);
 	if (ret) {
 		pr_err("%s: Failed to request irq %d, ret = %d\n", __func__,
 		       mbhc->intr_ids->mbhc_sw_intr, ret);
 		goto err_mbhc_sw_irq;
 	}
 
-	ret = mbhc->mbhc_cb->request_irq(codec,
+	ret = mbhc->mbhc_cb->request_irq(component,
 					 mbhc->intr_ids->mbhc_btn_press_intr,
 					 wcd_mbhc_btn_press_handler,
 					 "Button Press detect", mbhc);
@@ -2213,7 +2169,7 @@ int wcd_mbhc_init(struct wcd_mbhc *mbhc, struct snd_soc_codec *codec,
 		goto err_btn_press_irq;
 	}
 
-	ret = mbhc->mbhc_cb->request_irq(codec,
+	ret = mbhc->mbhc_cb->request_irq(component,
 					 mbhc->intr_ids->mbhc_btn_release_intr,
 					 wcd_mbhc_release_handler,
 					 "Button Release detect", mbhc);
@@ -2223,7 +2179,7 @@ int wcd_mbhc_init(struct wcd_mbhc *mbhc, struct snd_soc_codec *codec,
 		goto err_btn_release_irq;
 	}
 
-	ret = mbhc->mbhc_cb->request_irq(codec,
+	ret = mbhc->mbhc_cb->request_irq(component,
 					 mbhc->intr_ids->mbhc_hs_ins_intr,
 					 mbhc->mbhc_fn->wcd_mbhc_hs_ins_irq,
 					 "Elect Insert", mbhc);
@@ -2232,11 +2188,11 @@ int wcd_mbhc_init(struct wcd_mbhc *mbhc, struct snd_soc_codec *codec,
 		       mbhc->intr_ids->mbhc_hs_ins_intr);
 		goto err_mbhc_hs_ins_irq;
 	}
-	mbhc->mbhc_cb->irq_control(codec, mbhc->intr_ids->mbhc_hs_ins_intr,
+	mbhc->mbhc_cb->irq_control(component, mbhc->intr_ids->mbhc_hs_ins_intr,
 				   false);
 	clear_bit(WCD_MBHC_ELEC_HS_INS, &mbhc->intr_status);
 
-	ret = mbhc->mbhc_cb->request_irq(codec,
+	ret = mbhc->mbhc_cb->request_irq(component,
 					 mbhc->intr_ids->mbhc_hs_rem_intr,
 					 mbhc->mbhc_fn->wcd_mbhc_hs_rem_irq,
 					 "Elect Remove", mbhc);
@@ -2245,22 +2201,24 @@ int wcd_mbhc_init(struct wcd_mbhc *mbhc, struct snd_soc_codec *codec,
 		       mbhc->intr_ids->mbhc_hs_rem_intr);
 		goto err_mbhc_hs_rem_irq;
 	}
-	mbhc->mbhc_cb->irq_control(codec, mbhc->intr_ids->mbhc_hs_rem_intr,
+	mbhc->mbhc_cb->irq_control(component, mbhc->intr_ids->mbhc_hs_rem_intr,
 				   false);
 	clear_bit(WCD_MBHC_ELEC_HS_REM, &mbhc->intr_status);
 
-	ret = mbhc->mbhc_cb->request_irq(codec, mbhc->intr_ids->hph_left_ocp,
-				  wcd_mbhc_hphl_ocp_irq, "HPH_L OCP detect",
-				  mbhc);
+	ret = mbhc->mbhc_cb->request_irq(component,
+				mbhc->intr_ids->hph_left_ocp,
+				wcd_mbhc_hphl_ocp_irq, "HPH_L OCP detect",
+				mbhc);
 	if (ret) {
 		pr_err("%s: Failed to request irq %d\n", __func__,
 		       mbhc->intr_ids->hph_left_ocp);
 		goto err_hphl_ocp_irq;
 	}
 
-	ret = mbhc->mbhc_cb->request_irq(codec, mbhc->intr_ids->hph_right_ocp,
-				  wcd_mbhc_hphr_ocp_irq, "HPH_R OCP detect",
-				  mbhc);
+	ret = mbhc->mbhc_cb->request_irq(component,
+				mbhc->intr_ids->hph_right_ocp,
+				wcd_mbhc_hphr_ocp_irq, "HPH_R OCP detect",
+				mbhc);
 	if (ret) {
 		pr_err("%s: Failed to request irq %d\n", __func__,
 		       mbhc->intr_ids->hph_right_ocp);
@@ -2272,19 +2230,22 @@ int wcd_mbhc_init(struct wcd_mbhc *mbhc, struct snd_soc_codec *codec,
 	return ret;
 
 err_hphr_ocp_irq:
-	mbhc->mbhc_cb->free_irq(codec, mbhc->intr_ids->hph_left_ocp, mbhc);
+	mbhc->mbhc_cb->free_irq(component, mbhc->intr_ids->hph_left_ocp, mbhc);
 err_hphl_ocp_irq:
-	mbhc->mbhc_cb->free_irq(codec, mbhc->intr_ids->mbhc_hs_rem_intr, mbhc);
+	mbhc->mbhc_cb->free_irq(component, mbhc->intr_ids->mbhc_hs_rem_intr,
+				mbhc);
 err_mbhc_hs_rem_irq:
-	mbhc->mbhc_cb->free_irq(codec, mbhc->intr_ids->mbhc_hs_ins_intr, mbhc);
+	mbhc->mbhc_cb->free_irq(component, mbhc->intr_ids->mbhc_hs_ins_intr,
+				mbhc);
 err_mbhc_hs_ins_irq:
-	mbhc->mbhc_cb->free_irq(codec, mbhc->intr_ids->mbhc_btn_release_intr,
+	mbhc->mbhc_cb->free_irq(component,
+				mbhc->intr_ids->mbhc_btn_release_intr,
 				mbhc);
 err_btn_release_irq:
-	mbhc->mbhc_cb->free_irq(codec, mbhc->intr_ids->mbhc_btn_press_intr,
+	mbhc->mbhc_cb->free_irq(component, mbhc->intr_ids->mbhc_btn_press_intr,
 				mbhc);
 err_btn_press_irq:
-	mbhc->mbhc_cb->free_irq(codec, mbhc->intr_ids->mbhc_sw_intr, mbhc);
+	mbhc->mbhc_cb->free_irq(component, mbhc->intr_ids->mbhc_sw_intr, mbhc);
 err_mbhc_sw_irq:
 	if (mbhc->mbhc_cb->register_notifier)
 		mbhc->mbhc_cb->register_notifier(mbhc, &mbhc->nblock, false);
@@ -2297,17 +2258,20 @@ EXPORT_SYMBOL(wcd_mbhc_init);
 
 void wcd_mbhc_deinit(struct wcd_mbhc *mbhc)
 {
-	struct snd_soc_codec *codec = mbhc->codec;
+	struct snd_soc_component *component = mbhc->component;
 
-	mbhc->mbhc_cb->free_irq(codec, mbhc->intr_ids->mbhc_sw_intr, mbhc);
-	mbhc->mbhc_cb->free_irq(codec, mbhc->intr_ids->mbhc_btn_press_intr,
+	mbhc->mbhc_cb->free_irq(component, mbhc->intr_ids->mbhc_sw_intr, mbhc);
+	mbhc->mbhc_cb->free_irq(component, mbhc->intr_ids->mbhc_btn_press_intr,
 				mbhc);
-	mbhc->mbhc_cb->free_irq(codec, mbhc->intr_ids->mbhc_btn_release_intr,
+	mbhc->mbhc_cb->free_irq(component,
+				mbhc->intr_ids->mbhc_btn_release_intr,
 				mbhc);
-	mbhc->mbhc_cb->free_irq(codec, mbhc->intr_ids->mbhc_hs_ins_intr, mbhc);
-	mbhc->mbhc_cb->free_irq(codec, mbhc->intr_ids->mbhc_hs_rem_intr, mbhc);
-	mbhc->mbhc_cb->free_irq(codec, mbhc->intr_ids->hph_left_ocp, mbhc);
-	mbhc->mbhc_cb->free_irq(codec, mbhc->intr_ids->hph_right_ocp, mbhc);
+	mbhc->mbhc_cb->free_irq(component, mbhc->intr_ids->mbhc_hs_ins_intr,
+				mbhc);
+	mbhc->mbhc_cb->free_irq(component, mbhc->intr_ids->mbhc_hs_rem_intr,
+				mbhc);
+	mbhc->mbhc_cb->free_irq(component, mbhc->intr_ids->hph_left_ocp, mbhc);
+	mbhc->mbhc_cb->free_irq(component, mbhc->intr_ids->hph_right_ocp, mbhc);
 	if (mbhc->mbhc_cb && mbhc->mbhc_cb->register_notifier)
 		mbhc->mbhc_cb->register_notifier(mbhc, &mbhc->nblock, false);
 	if (mbhc->mbhc_fn->wcd_cancel_hs_detect_plug) {

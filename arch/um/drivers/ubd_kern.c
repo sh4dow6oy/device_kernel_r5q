@@ -208,19 +208,6 @@ static int fake_ide_media_proc_show(struct seq_file *m, void *v)
 	return 0;
 }
 
-static int fake_ide_media_proc_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, fake_ide_media_proc_show, NULL);
-}
-
-static const struct file_operations fake_ide_media_proc_fops = {
-	.owner		= THIS_MODULE,
-	.open		= fake_ide_media_proc_open,
-	.read		= seq_read,
-	.llseek		= seq_lseek,
-	.release	= single_release,
-};
-
 static void make_ide_entries(const char *dev_name)
 {
 	struct proc_dir_entry *dir, *ent;
@@ -231,7 +218,8 @@ static void make_ide_entries(const char *dev_name)
 	dir = proc_mkdir(dev_name, proc_ide);
 	if(!dir) return;
 
-	ent = proc_create("media", S_IRUGO, dir, &fake_ide_media_proc_fops);
+	ent = proc_create_single("media", S_IRUGO, dir,
+			fake_ide_media_proc_show);
 	if(!ent) return;
 	snprintf(name, sizeof(name), "ide0/%s", dev_name);
 	proc_symlink(dev_name, proc_ide_root, name);
@@ -866,7 +854,7 @@ static int ubd_open_dev(struct ubd *ubd_dev)
 
 static void ubd_device_release(struct device *dev)
 {
-	struct ubd *ubd_dev = dev_get_drvdata(dev);
+	struct ubd *ubd_dev = container_of(dev, struct ubd, pdev.dev);
 
 	blk_cleanup_queue(ubd_dev->queue);
 	*ubd_dev = ((struct ubd) DEFAULT_UBD);
@@ -1139,9 +1127,9 @@ static int __init ubd_init(void)
 			return -1;
 	}
 
-	irq_req_buffer = kmalloc(
-			sizeof(struct io_thread_req *) * UBD_REQ_BUFFER_SIZE,
-			GFP_KERNEL
+	irq_req_buffer = kmalloc_array(UBD_REQ_BUFFER_SIZE,
+				       sizeof(struct io_thread_req *),
+				       GFP_KERNEL
 		);
 	irq_remainder = 0;
 
@@ -1149,9 +1137,9 @@ static int __init ubd_init(void)
 		printk(KERN_ERR "Failed to initialize ubd buffering\n");
 		return -ENOMEM;
 	}
-	io_req_buffer = kmalloc(
-			sizeof(struct io_thread_req *) * UBD_REQ_BUFFER_SIZE,
-			GFP_KERNEL
+	io_req_buffer = kmalloc_array(UBD_REQ_BUFFER_SIZE,
+				      sizeof(struct io_thread_req *),
+				      GFP_KERNEL
 		);
 
 	io_remainder = 0;
@@ -1586,12 +1574,14 @@ int io_thread(void *arg)
 		written = 0;
 
 		do {
-			res = os_write_file(kernel_fd, ((char *) io_req_buffer) + written, n);
-			if (res > 0) {
+			res = os_write_file(kernel_fd,
+					    ((char *) io_req_buffer) + written,
+					    n - written);
+			if (res >= 0) {
 				written += res;
 			} else {
 				if (res != -EAGAIN) {
-					printk("io_thread - read failed, fd = %d, "
+					printk("io_thread - write failed, fd = %d, "
 					       "err = %d\n", kernel_fd, -n);
 				}
 			}

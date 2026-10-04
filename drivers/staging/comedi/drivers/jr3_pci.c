@@ -1,19 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * comedi/drivers/jr3_pci.c
  * hardware driver for JR3/PCI force sensor board
  *
  * COMEDI - Linux Control and Measurement Device Interface
  * Copyright (C) 2007 Anders Blomdell <anders.blomdell@control.lth.se>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 /*
  * Driver: jr3_pci
@@ -96,6 +87,8 @@ struct jr3_pci_poll_delay {
 
 struct jr3_pci_dev_private {
 	struct timer_list timer;
+	struct comedi_device *dev;
+	bool timer_enable;
 };
 
 union jr3_pci_single_range {
@@ -303,7 +296,6 @@ static int jr3_pci_open(struct comedi_device *dev)
 	struct comedi_subdevice *s;
 	int i;
 
-	dev_dbg(dev->class_dev, "jr3_pci_open\n");
 	for (i = 0; i < dev->n_subdevices; i++) {
 		s = &dev->subdevices[i];
 		spriv = s->private;
@@ -585,10 +577,10 @@ jr3_pci_poll_subdevice(struct comedi_subdevice *s)
 	return result;
 }
 
-static void jr3_pci_poll_dev(unsigned long data)
+static void jr3_pci_poll_dev(struct timer_list *t)
 {
-	struct comedi_device *dev = (struct comedi_device *)data;
-	struct jr3_pci_dev_private *devpriv = dev->private;
+	struct jr3_pci_dev_private *devpriv = from_timer(devpriv, t, timer);
+	struct comedi_device *dev = devpriv->dev;
 	struct jr3_pci_subdev_private *spriv;
 	struct comedi_subdevice *s;
 	unsigned long flags;
@@ -621,10 +613,11 @@ static void jr3_pci_poll_dev(unsigned long data)
 				delay = sub_delay.max;
 		}
 	}
+	if (devpriv->timer_enable) {
+		devpriv->timer.expires = jiffies + msecs_to_jiffies(delay);
+		add_timer(&devpriv->timer);
+	}
 	spin_unlock_irqrestore(&dev->spinlock, flags);
-
-	devpriv->timer.expires = jiffies + msecs_to_jiffies(delay);
-	add_timer(&devpriv->timer);
 }
 
 static struct jr3_pci_subdev_private *
@@ -770,8 +763,10 @@ static int jr3_pci_auto_attach(struct comedi_device *dev,
 		spriv->next_time_min = jiffies + msecs_to_jiffies(500);
 	}
 
-	setup_timer(&devpriv->timer, jr3_pci_poll_dev, (unsigned long)dev);
+	devpriv->dev = dev;
+	timer_setup(&devpriv->timer, jr3_pci_poll_dev, 0);
 	devpriv->timer.expires = jiffies + msecs_to_jiffies(1000);
+	devpriv->timer_enable = true;
 	add_timer(&devpriv->timer);
 
 	return 0;
@@ -781,8 +776,12 @@ static void jr3_pci_detach(struct comedi_device *dev)
 {
 	struct jr3_pci_dev_private *devpriv = dev->private;
 
-	if (devpriv)
+	if (devpriv) {
+		spin_lock_bh(&dev->spinlock);
+		devpriv->timer_enable = false;
+		spin_unlock_bh(&dev->spinlock);
 		del_timer_sync(&devpriv->timer);
+	}
 
 	comedi_pci_detach(dev);
 }

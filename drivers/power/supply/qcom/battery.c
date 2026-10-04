@@ -1,17 +1,11 @@
-/* Copyright (c) 2017-2020 The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2017-2020 The Linux Foundation. All rights reserved.
  */
 
 #define pr_fmt(fmt) "QCOM-BATT: %s: " fmt, __func__
 
+#include <linux/debugfs.h>
 #include <linux/device.h>
 #include <linux/delay.h>
 #include <linux/module.h>
@@ -106,11 +100,10 @@ struct pl_data {
 	bool			cp_disabled;
 	int			taper_entry_fv;
 	int			main_fcc_max;
-	u32			float_voltage_uv;
 	enum power_supply_type	charger_type;
 	/* debugfs directory */
 	struct dentry		*dfs_root;
-
+	u32			float_voltage_uv;
 };
 
 struct pl_data *the_chip;
@@ -125,7 +118,6 @@ enum {
 };
 
 static int debug_mask;
-module_param_named(debug_mask, debug_mask, int, 0600);
 
 #define pl_dbg(chip, reason, fmt, ...)				\
 	do {								\
@@ -1283,7 +1275,7 @@ static int usb_icl_vote_callback(struct votable *votable, void *data,
 	int rc;
 	struct pl_data *chip = data;
 	union power_supply_propval pval = {0, };
-	bool rerun_aicl = false;
+	bool rerun_aicl = false, dc_present = false;
 
 	if (!chip->main_psy)
 		return 0;
@@ -1345,8 +1337,21 @@ static int usb_icl_vote_callback(struct votable *votable, void *data,
 
 	/* Configure ILIM based on AICL result only if input mode is USBMID */
 	if (cp_get_parallel_mode(chip, PARALLEL_INPUT_MODE)
-					== POWER_SUPPLY_PL_USBMID_USBMID)
-		cp_configure_ilim(chip, ICL_CHANGE_VOTER, icl_ua);
+					== POWER_SUPPLY_PL_USBMID_USBMID) {
+		if (chip->dc_psy) {
+			rc = power_supply_get_property(chip->dc_psy,
+					POWER_SUPPLY_PROP_PRESENT, &pval);
+			if (rc < 0) {
+				pr_err("Couldn't get DC PRESENT rc=%d\n", rc);
+				return rc;
+			}
+			dc_present = pval.intval;
+		}
+
+		/* Don't configure ILIM if DC is present */
+		if (!dc_present)
+			cp_configure_ilim(chip, ICL_CHANGE_VOTER, icl_ua);
+	}
 
 	return 0;
 }
@@ -1948,6 +1953,24 @@ static void pl_config_init(struct pl_data *chip, int smb_version)
 	}
 }
 
+static void qcom_batt_create_debugfs(struct pl_data *chip)
+{
+	struct dentry *entry;
+
+	chip->dfs_root = debugfs_create_dir("battery", NULL);
+	if (IS_ERR_OR_NULL(chip->dfs_root)) {
+		pr_err("Couldn't create battery debugfs rc=%ld\n",
+			(long)chip->dfs_root);
+		return;
+	}
+
+	entry = debugfs_create_u32("debug_mask", 0600, chip->dfs_root,
+			&debug_mask);
+	if (IS_ERR_OR_NULL(entry))
+		pr_err("Couldn't create force_dc_psy_update file rc=%ld\n",
+			(long)entry);
+}
+
 #define DEFAULT_RESTRICTED_CURRENT_UA	1000000
 int qcom_batt_init(struct charger_param *chg_param)
 {
@@ -1968,6 +1991,9 @@ int qcom_batt_init(struct charger_param *chg_param)
 	chip = kzalloc(sizeof(*chip), GFP_KERNEL);
 	if (!chip)
 		return -ENOMEM;
+
+	qcom_batt_create_debugfs(chip);
+
 	chip->slave_pct = 50;
 	chip->chg_param = chg_param;
 	pl_config_init(chip, chg_param->smb_version);
@@ -1976,6 +2002,11 @@ int qcom_batt_init(struct charger_param *chg_param)
 	chip->pl_ws = wakeup_source_register(NULL, "qcom-battery");
 	if (!chip->pl_ws)
 		goto cleanup;
+
+	INIT_DELAYED_WORK(&chip->status_change_work, status_change_work);
+	INIT_WORK(&chip->pl_taper_work, pl_taper_work);
+	INIT_WORK(&chip->pl_disable_forever_work, pl_disable_forever_work);
+	INIT_DELAYED_WORK(&chip->fcc_stepper_work, fcc_stepper_work);
 
 	chip->fcc_main_votable = create_votable("FCC_MAIN", VOTE_MIN,
 					pl_fcc_main_vote_callback,
@@ -2045,11 +2076,6 @@ int qcom_batt_init(struct charger_param *chg_param)
 	}
 
 	vote(chip->pl_disable_votable, PL_INDIRECT_VOTER, true, 0);
-
-	INIT_DELAYED_WORK(&chip->status_change_work, status_change_work);
-	INIT_WORK(&chip->pl_taper_work, pl_taper_work);
-	INIT_WORK(&chip->pl_disable_forever_work, pl_disable_forever_work);
-	INIT_DELAYED_WORK(&chip->fcc_stepper_work, fcc_stepper_work);
 
 	rc = pl_register_notifier(chip);
 	if (rc < 0) {

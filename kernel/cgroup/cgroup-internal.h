@@ -214,7 +214,7 @@ int cgroup_path_ns_locked(struct cgroup *cgrp, char *buf, size_t buflen,
 
 void cgroup_free_root(struct cgroup_root *root);
 void init_cgroup_root(struct cgroup_root *root, struct cgroup_sb_opts *opts);
-int cgroup_setup_root(struct cgroup_root *root, u16 ss_mask, int ref_flags);
+int cgroup_setup_root(struct cgroup_root *root, u16 ss_mask);
 int rebind_subsystems(struct cgroup_root *dst_root, u16 ss_mask);
 struct dentry *cgroup_do_mount(struct file_system_type *fs_type, int flags,
 			       struct cgroup_root *root, unsigned long magic,
@@ -246,6 +246,14 @@ int __cgroup_task_count(const struct cgroup *cgrp);
 int cgroup_task_count(const struct cgroup *cgrp);
 
 /*
+ * rstat.c
+ */
+int cgroup_rstat_init(struct cgroup *cgrp);
+void cgroup_rstat_exit(struct cgroup *cgrp);
+void cgroup_rstat_boot(void);
+void cgroup_base_stat_cputime_show(struct seq_file *seq);
+
+/*
  * namespace.c
  */
 extern const struct proc_ns_operations cgroupns_operations;
@@ -254,9 +262,9 @@ extern const struct proc_ns_operations cgroupns_operations;
  * cgroup-v1.c
  */
 extern struct cftype cgroup1_base_files[];
-extern const struct file_operations proc_cgroupstats_operations;
 extern struct kernfs_syscall_ops cgroup1_kf_syscall_ops;
 
+int proc_cgroupstats_show(struct seq_file *m, void *v);
 bool cgroup1_ssid_disabled(int ssid);
 void cgroup1_pidlist_destroy_all(struct cgroup *cgrp);
 void cgroup1_release_agent(struct work_struct *work);

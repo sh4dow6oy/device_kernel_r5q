@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * ci13xxx_udc.h - structures, registers, and macros MIPS USB IP core
  *
@@ -255,28 +256,8 @@ struct ci13xxx {
 /******************************************************************************
  * LOGGING
  *****************************************************************************/
-#define ci13xxx_printk(level, format, args...) \
-do { \
-	if (_udc == NULL) \
-		printk(level "[%s] " format "\n", __func__, ## args); \
-	else \
-		dev_printk(level, _udc->gadget.dev.parent, \
-			   "[%s] " format "\n", __func__, ## args); \
-} while (0)
 
-#ifndef err
-#define err(format, args...)    ci13xxx_printk(KERN_ERR, format, ## args)
-#endif
-
-#define warn(format, args...)   ci13xxx_printk(KERN_WARNING, format, ## args)
-#define info(format, args...)   ci13xxx_printk(KERN_INFO, format, ## args)
-
-#ifdef TRACE
-#define trace(format, args...)      ci13xxx_printk(KERN_DEBUG, format, ## args)
-#define dbg_trace(format, args...)  dev_dbg(dev, format, ##args)
-#else
 #define trace(format, args...)      do {} while (0)
-#define dbg_trace(format, args...)  do {} while (0)
-#endif
+#define dbg_trace(format, args...)  dev_dbg(dev, format, ##args)
 
 #endif	/* _CI13XXX_h_ */

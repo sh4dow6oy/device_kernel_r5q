@@ -1,14 +1,8 @@
-/* Copyright (c) 2015-2020, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
+/* SPDX-License-Identifier: GPL-2.0 */
+/*
+ * Copyright (c) 2015-2020, The Linux Foundation. All rights reserved.
  */
+
 #ifndef GSI_H
 #define GSI_H
 
@@ -28,10 +22,12 @@
 # include "gsi_emulation_stubs.h"
 #endif
 
+#define GSI_ASSERT() \
+	BUG()
+
 #define GSI_CHAN_MAX      31
 #define GSI_EVT_RING_MAX  24
 #define GSI_NO_EVT_ERINDEX 31
-#define MAX_DEBUG_CHAN_CNT 15
 
 #define gsi_readl(c)	(readl(c))
 #define gsi_writel(v, c)	({ __iowmb(); writel_relaxed((v), (c)); })
@@ -205,6 +201,11 @@ struct gsi_generic_ee_cmd_debug_stats {
 	unsigned long flow_ctrl_channel;
 };
 
+struct gsi_coal_chan_info {
+	uint8_t ch_id;
+	uint8_t evchid;
+};
+
 struct gsi_ctx {
 	void __iomem *base;
 	struct device *dev;
@@ -228,6 +229,7 @@ struct gsi_ctx {
 	struct completion gen_ee_cmd_compl;
 	void *ipc_logbuf;
 	void *ipc_logbuf_low;
+	struct gsi_coal_chan_info coal_info;
 	/*
 	 * The following used only on emulation systems.
 	 */
@@ -237,9 +239,6 @@ struct gsi_ctx {
 	irq_handler_t intcntrlr_client_isr;
 
 	atomic_t num_unclock_irq;
-	u32 debug_chan;
-	u32 ctx_channel[MAX_DEBUG_CHAN_CNT];
-	u32 event_channel[MAX_DEBUG_CHAN_CNT];
 };
 
 enum gsi_re_type {

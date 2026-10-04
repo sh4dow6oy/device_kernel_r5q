@@ -1,4 +1,5 @@
-/* Copyright (c) 2013-2019, The Linux Foundation. All rights reserved.
+// SPDX-License-Identifier: GPL-2.0-only
+/* Copyright (c) 2013-2021, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -281,14 +282,14 @@ static void msm_buf_mngr_contq_listdel(struct msm_buf_mngr_device *dev,
 		cont_save, &dev->cont_qhead, entry) {
 		if ((cont_bufs->sessid == session) &&
 		(cont_bufs->strid == stream)) {
-			if (cnt == 1 && unmap == 1) {
+			if (cnt == 1 && unmap) {
 				/* dma_buf_vunmap ignored vaddr(2nd argument) */
 				dma_buf_vunmap(cont_bufs->dmabuf,
 					cont_bufs->paddr);
 				rc = dma_buf_end_cpu_access(cont_bufs->dmabuf,
 					DMA_BIDIRECTIONAL);
 				if (rc) {
-					pr_err("Failed in end cpu access, dmabuf=%pK",
+					pr_err("Failed in end cpu access, dmabuf=%pK\n",
 						cont_bufs->dmabuf);
 					return;
 				}
@@ -411,7 +412,7 @@ static int msm_buf_mngr_handle_cont_cmd(struct msm_buf_mngr_device *dev,
 		 */
 		rc = dma_buf_begin_cpu_access(dmabuf, DMA_BIDIRECTIONAL);
 		if (rc) {
-			pr_err("dma begin access failed rc=%d", rc);
+			pr_err("dma begin access failed rc=%d\n", rc);
 			return rc;
 		}
 		iaddr = dma_buf_vmap(dmabuf);
@@ -471,7 +472,7 @@ free_list:
 	dma_buf_vunmap(dmabuf, iaddr);
 	rc = dma_buf_end_cpu_access(dmabuf, DMA_BIDIRECTIONAL);
 	if (rc) {
-		pr_err("Failed in end cpu access, dmabuf=%pK", dmabuf);
+		pr_err("Failed in end cpu access, dmabuf=%pK\n", dmabuf);
 		return rc;
 	}
 free_ion_handle:
@@ -551,7 +552,7 @@ static int msm_cam_buf_mgr_ops(unsigned int cmd, void *argp)
 			}
 			break;
 		default:
-			pr_debug("unimplemented id %d", k_ioctl->id);
+			pr_debug("unimplemented id %d\n", k_ioctl->id);
 			return -EINVAL;
 		}
 	break;
@@ -617,7 +618,7 @@ static long msm_buf_mngr_subdev_ioctl(struct v4l2_subdev *sd,
 			}
 			break;
 		default:
-			pr_debug("unimplemented id %d", k_ioctl.id);
+			pr_debug("unimplemented id %d\n", k_ioctl.id);
 			return -EINVAL;
 		}
 		break;
@@ -721,12 +722,12 @@ static long msm_camera_buf_mgr_internal_compat_ioctl(struct file *file,
 		struct msm_buf_mngr_info buf_info;
 
 		if (k_ioctl.size != sizeof(struct msm_buf_mngr_info32_t)) {
-			pr_err("Invalid size for id %d with size %d",
+			pr_err("Invalid size for id %d with size %d\n",
 				k_ioctl.id, k_ioctl.size);
 			return -EINVAL;
 		}
 		if (!tmp_compat_ioctl_ptr) {
-			pr_err("Invalid ptr for id %d", k_ioctl.id);
+			pr_err("Invalid ptr for id %d\n", k_ioctl.id);
 			return -EINVAL;
 		}
 		k_ioctl.ioctl_ptr = (__u64)&buf_info;
@@ -734,19 +735,19 @@ static long msm_camera_buf_mgr_internal_compat_ioctl(struct file *file,
 		rc = msm_camera_buf_mgr_fetch_buf_info(&buf_info32, &buf_info,
 			(unsigned long)tmp_compat_ioctl_ptr);
 		if (rc < 0) {
-			pr_err("Fetch buf info failed for cmd=%d", cmd);
+			pr_err("Fetch buf info failed for cmd=%d\n", cmd);
 			return rc;
 		}
 		rc = v4l2_subdev_call(sd, core, ioctl, cmd, &k_ioctl);
 		if (rc < 0) {
-			pr_err("Subdev cmd %d failed for id %d", cmd,
+			pr_err("Subdev cmd %d failed for id %d\n", cmd,
 				k_ioctl.id);
 			return rc;
 		}
 		}
 		break;
 	default:
-		pr_debug("unimplemented id %d", k_ioctl.id);
+		pr_debug("unimplemented id %d\n", k_ioctl.id);
 		return -EINVAL;
 	}
 
@@ -890,7 +891,7 @@ static int32_t __init msm_buf_mngr_init(void)
 	msm_buf_mngr_dev = kzalloc(sizeof(*msm_buf_mngr_dev),
 		GFP_KERNEL);
 	if (WARN_ON(!msm_buf_mngr_dev)) {
-		pr_err("%s: not enough memory", __func__);
+		pr_err("%s: not enough memory\n", __func__);
 		return -ENOMEM;
 	}
 	/* Sub-dev */

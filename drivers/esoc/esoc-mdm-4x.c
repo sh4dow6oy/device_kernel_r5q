@@ -1,13 +1,6 @@
-/* Copyright (c) 2014-2015, 2017-2018, 2020, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2014-2015, 2017-2019, The Linux Foundation. All rights reserved.
  */
 
 #include <linux/coresight.h>
@@ -16,10 +9,6 @@
 #include <linux/sched/clock.h>
 #include <soc/qcom/sysmon.h>
 #include "esoc-mdm.h"
-
-#ifdef CONFIG_SEC_DEBUG
-#include <linux/sec_debug.h>
-#endif
 
 enum gpio_update_config {
 	GPIO_UPDATE_BOOTING_CONFIG = 1,
@@ -39,7 +28,6 @@ static struct gpio_map {
 } gpio_map[] = {
 	{"qcom,mdm2ap-errfatal-gpio",   MDM2AP_ERRFATAL},
 	{"qcom,ap2mdm-errfatal-gpio",   AP2MDM_ERRFATAL},
-	{"qcom,ap2mdm-errfatal2-gpio",  AP2MDM_ERRFATAL2},
 	{"qcom,mdm2ap-status-gpio",     MDM2AP_STATUS},
 	{"qcom,ap2mdm-status-gpio",     AP2MDM_STATUS},
 	{"qcom,mdm2ap-pblrdy-gpio",     MDM2AP_PBLRDY},
@@ -70,8 +58,6 @@ static void mdm_debug_gpio_show(struct mdm_ctrl *mdm)
 			__func__, MDM_GPIO(mdm, MDM2AP_ERRFATAL));
 	dev_dbg(dev, "%s: AP2MDM_ERRFATAL gpio = %d\n",
 			__func__, MDM_GPIO(mdm, AP2MDM_ERRFATAL));
-	dev_dbg(dev, "%s: AP2MDM_ERRFATAL2 gpio = %d\n",
-			__func__, MDM_GPIO(mdm, AP2MDM_ERRFATAL2));			
 	dev_dbg(dev, "%s: MDM2AP_STATUS gpio = %d\n",
 			__func__, MDM_GPIO(mdm, MDM2AP_STATUS));
 	dev_dbg(dev, "%s: AP2MDM_STATUS gpio = %d\n",
@@ -98,8 +84,6 @@ static void mdm_debug_gpio_ipc_log(struct mdm_ctrl *mdm)
 			MDM_GPIO(mdm, MDM2AP_ERRFATAL));
 	esoc_mdm_log("AP2MDM_ERRFATAL gpio = %d\n",
 			MDM_GPIO(mdm, AP2MDM_ERRFATAL));
-	esoc_mdm_log("AP2MDM_ERRFATAL2 gpio = %d\n",
-			MDM_GPIO(mdm, AP2MDM_ERRFATAL2));			
 	esoc_mdm_log("MDM2AP_STATUS gpio = %d\n",
 			MDM_GPIO(mdm, MDM2AP_STATUS));
 	esoc_mdm_log("AP2MDM_STATUS gpio = %d\n",
@@ -221,8 +205,6 @@ static int mdm_cmd_exe(enum esoc_cmd cmd, struct esoc_clink *esoc)
 		}
 		esoc_mdm_log("ESOC_PWR_ON: Setting AP2MDM_ERRFATAL = 0\n");
 		gpio_set_value(MDM_GPIO(mdm, AP2MDM_ERRFATAL), 0);
-		esoc_mdm_log("ESOC_PWR_ON: Setting AP2MDM_ERRFATAL2 = 0\n");
-		gpio_set_value(MDM_GPIO(mdm, AP2MDM_ERRFATAL2), 0);
 		mdm->init = 1;
 		mdm_do_first_power_on(mdm);
 		mdm_enable_irqs(mdm);
@@ -504,19 +486,6 @@ static void mdm_notify(enum esoc_notify notify, struct esoc_clink *esoc)
 		"ESOC_PRIMARY_REBOOT: Powering down the modem\n");
 		mdm_power_down(mdm);
 		break;
-	case ESOC_FORCE_CRASH:
-		esoc_mdm_log(
-			"ESOC_FORCE_CRASH: setting AP2MDM_ERRFATAL2 = 1\n");
-		subsys_set_modem_silent_ssr(false, ESOC_SSR);
-		gpio_set_value(MDM_GPIO(mdm, AP2MDM_ERRFATAL2), 1);
-		break;
-	case ESOC_FORCE_SILENT_RESET:
-		esoc_mdm_log(
-			"ESOC_FORCE_SILENT_RESET: setting AP2MDM_ERRFATAL & 2= 1\n");
-		subsys_set_modem_silent_ssr(true, ESOC_SSR);
-		gpio_set_value(MDM_GPIO(mdm, AP2MDM_ERRFATAL2), 1);
-		gpio_set_value(MDM_GPIO(mdm, AP2MDM_ERRFATAL), 1);
-		break;
 	};
 }
 
@@ -587,6 +556,7 @@ static irqreturn_t mdm_status_change(int irq, void *dev_id)
 		cancel_delayed_work(&mdm->mdm2ap_status_check_work);
 		dev_dbg(dev, "status = 1: mdm is now ready\n");
 		mdm->ready = true;
+		esoc_clink_evt_notify(ESOC_BOOT_STATE, esoc);
 		mdm_trigger_dbg(mdm);
 		queue_work(mdm->mdm_queue, &mdm->mdm_status_work);
 		if (mdm->get_restart_reason)
@@ -682,12 +652,6 @@ static int mdm_configure_ipc(struct mdm_ctrl *mdm, struct platform_device *pdev)
 						&mdm->ramdump_delay_ms);
 	if (ret)
 		mdm->ramdump_delay_ms = DEF_RAMDUMP_DELAY;
-
-#ifdef CONFIG_SEC_DEBUG
-	if (sec_debug_level() == ANDROID_DEBUG_LEVEL_LOW) 
-		mdm->ramdump_delay_ms = DEF_RAMDUMP_DELAY;
-#endif
-
 	/*
 	 * In certain scenarios, multiple esoc devices are monitoring
 	 * same AP2MDM_STATUS line. But only one of them will have a
@@ -737,20 +701,6 @@ static int mdm_configure_ipc(struct mdm_ctrl *mdm, struct platform_device *pdev)
 
 	if (gpio_is_valid(MDM_GPIO(mdm, AP2MDM_CHNLRDY)))
 		gpio_direction_output(MDM_GPIO(mdm, AP2MDM_CHNLRDY), 0);
-
-	if (gpio_is_valid(MDM_GPIO(mdm, AP2MDM_ERRFATAL2))) {
-		if (gpio_request(MDM_GPIO(mdm, AP2MDM_ERRFATAL2), "AP2MDM_ERRFATAL2")) {
-			dev_err(dev, "%s Failed to configure AP2MDM_ERRFATAL2 gpio\n",
-				   __func__);
-		}
-		else
-			gpio_direction_output(MDM_GPIO(mdm, AP2MDM_ERRFATAL2), 0);	
-	}
-	else {
-		dev_err(dev, "%s set AP2MDM_ERRFATAL2 as a AP2MDM_ERRFATAL\n",
-				__func__);
-		MDM_GPIO(mdm, AP2MDM_ERRFATAL2) = MDM_GPIO(mdm, AP2MDM_ERRFATAL);
-	}
 
 	gpio_direction_input(MDM_GPIO(mdm, MDM2AP_STATUS));
 	gpio_direction_input(MDM_GPIO(mdm, MDM2AP_ERRFATAL));
@@ -1095,43 +1045,103 @@ err_destroy_wrkq:
 	return ret;
 }
 
-static int sdxprairie_setup_hw(struct mdm_ctrl *mdm,
+static int sdx55m_setup_hw(struct mdm_ctrl *mdm,
 					const struct mdm_ops *ops,
 					struct platform_device *pdev)
 {
 	int ret;
+	struct device_node *node;
+	struct esoc_clink *esoc;
+	const struct esoc_clink_ops *const clink_ops = ops->clink_ops;
+	const struct mdm_pon_ops *pon_ops = ops->pon_ops;
 
-	/* Same configuration as that of sdx50, except for the name */
-	ret = sdx50m_setup_hw(mdm, ops, pdev);
-	if (ret) {
-		dev_err(mdm->dev, "Hardware setup failed for sdxprairie\n");
-		esoc_mdm_log("Hardware setup failed for sdxprairie\n");
-		return ret;
+	mdm->dev = &pdev->dev;
+	mdm->pon_ops = pon_ops;
+	node = pdev->dev.of_node;
+
+	esoc = devm_kzalloc(mdm->dev, sizeof(*esoc), GFP_KERNEL);
+	if (IS_ERR_OR_NULL(esoc)) {
+		dev_err(mdm->dev, "cannot allocate esoc device\n");
+		return PTR_ERR(esoc);
+	}
+	esoc->pdev = pdev;
+
+	mdm->mdm_queue = alloc_workqueue("mdm_queue", 0, 0);
+	if (!mdm->mdm_queue) {
+		dev_err(mdm->dev, "could not create mdm_queue\n");
+		return -ENOMEM;
 	}
 
-	mdm->esoc->name = SDXPRAIRIE_LABEL;
-	esoc_mdm_log("Hardware setup done for sdxprairie\n");
+	mdm->irq_mask = 0;
+	mdm->ready = false;
 
-	return ret;
-}
-
-static int marmot_setup_hw(struct mdm_ctrl *mdm,
-					const struct mdm_ops *ops,
-					struct platform_device *pdev)
-{
-	int ret;
-
-	/* Same configuration as that of sdx50, except for the name */
-	ret = sdx50m_setup_hw(mdm, ops, pdev);
+	ret = mdm_dt_parse_gpios(mdm);
 	if (ret) {
-		dev_err(mdm->dev, "Hardware setup failed for marmot\n");
-		esoc_mdm_log("Hardware setup failed for marmot\n");
-		return ret;
+		esoc_mdm_log("Failed to parse DT gpios\n");
+		dev_err(mdm->dev, "Failed to parse DT gpios\n");
+		goto err_destroy_wrkq;
 	}
 
-	mdm->esoc->name = MARMOT_LABEL;
-	esoc_mdm_log("Hardware setup done for marmot\n");
+	ret = mdm_pinctrl_init(mdm);
+	if (ret) {
+		esoc_mdm_log("Failed to init pinctrl\n");
+		dev_err(mdm->dev, "Failed to init pinctrl\n");
+		goto err_destroy_wrkq;
+	}
 
+	ret = mdm_configure_ipc(mdm, pdev);
+	if (ret) {
+		esoc_mdm_log("Failed to configure the ipc\n");
+		dev_err(mdm->dev, "Failed to configure the ipc\n");
+		goto err_release_ipc;
+	}
+
+	esoc->name = SDX55M_LABEL;
+	mdm->dual_interface = of_property_read_bool(node,
+						"qcom,mdm-dual-link");
+	esoc->link_name = SDX55M_PCIE;
+	ret = of_property_read_string(node, "qcom,mdm-link-info",
+					&esoc->link_info);
+	if (ret)
+		dev_info(mdm->dev, "esoc link info missing\n");
+
+	mdm->skip_restart_for_mdm_crash = of_property_read_bool(node,
+				"qcom,esoc-skip-restart-for-mdm-crash");
+
+	esoc->clink_ops = clink_ops;
+	esoc->parent = mdm->dev;
+	esoc->owner = THIS_MODULE;
+	esoc->np = pdev->dev.of_node;
+	set_esoc_clink_data(esoc, mdm);
+
+	ret = esoc_clink_register(esoc);
+	if (ret) {
+		esoc_mdm_log("esoc registration failed\n");
+		dev_err(mdm->dev, "esoc registration failed\n");
+		goto err_free_irq;
+	}
+	dev_dbg(mdm->dev, "esoc registration done\n");
+	esoc_mdm_log("Done configuring the GPIOs and esoc registration\n");
+
+	init_completion(&mdm->debug_done);
+	INIT_WORK(&mdm->mdm_status_work, mdm_status_fn);
+	INIT_WORK(&mdm->restart_reason_work, mdm_get_restart_reason);
+	INIT_DELAYED_WORK(&mdm->mdm2ap_status_check_work, mdm2ap_status_check);
+	mdm->get_restart_reason = false;
+	mdm->debug_fail = false;
+	mdm->esoc = esoc;
+	mdm->init = 0;
+
+	mdm_debug_gpio_ipc_log(mdm);
+
+	return 0;
+
+err_free_irq:
+	mdm_free_irq(mdm);
+err_release_ipc:
+	mdm_release_ipc_gpio(mdm);
+err_destroy_wrkq:
+	destroy_workqueue(mdm->mdm_queue);
 	return ret;
 }
 
@@ -1154,16 +1164,10 @@ static struct mdm_ops sdx50m_ops = {
 	.pon_ops = &sdx50m_pon_ops,
 };
 
-static struct mdm_ops sdxprairie_ops = {
+static struct mdm_ops sdx55m_ops = {
 	.clink_ops = &mdm_cops,
-	.config_hw = sdxprairie_setup_hw,
-	.pon_ops = &sdx50m_pon_ops,
-};
-
-static struct mdm_ops marmot_ops = {
-	.clink_ops = &mdm_cops,
-	.config_hw = marmot_setup_hw,
-	.pon_ops = &sdxmarmot_pon_ops,
+	.config_hw = sdx55m_setup_hw,
+	.pon_ops = &sdx55m_pon_ops,
 };
 
 static const struct of_device_id mdm_dt_match[] = {
@@ -1171,10 +1175,8 @@ static const struct of_device_id mdm_dt_match[] = {
 		.data = &mdm9x55_ops, },
 	{ .compatible = "qcom,ext-sdx50m",
 		.data = &sdx50m_ops, },
-	{ .compatible = "qcom,ext-sdxprairie",
-		.data = &sdxprairie_ops, },
-	{ .compatible = "qcom,ext-marmot",
-		.data = &marmot_ops, },
+	{ .compatible = "qcom,ext-sdx55m",
+		.data = &sdx55m_ops, },
 	{},
 };
 MODULE_DEVICE_TABLE(of, mdm_dt_match);

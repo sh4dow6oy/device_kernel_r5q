@@ -18,17 +18,7 @@
 #ifndef _UAPI_LINUX_TCP_H
 #define _UAPI_LINUX_TCP_H
 
-#ifndef CONFIG_MPTCP
 #include <linux/types.h>
-#endif
-#ifdef CONFIG_MPTCP
-#ifndef __KERNEL__
-	#include <sys/socket.h>
-#endif
-	#include <linux/in.h>
-	#include <linux/in6.h>
-	#include <linux/types.h>
-#endif
 #include <asm/byteorder.h>
 #include <linux/socket.h>
 
@@ -130,14 +120,16 @@ enum {
 #define TCP_FASTOPEN_CONNECT	30	/* Attempt FastOpen with connect */
 #define TCP_ULP			31	/* Attach a ULP to a TCP connection */
 #define TCP_MD5SIG_EXT		32	/* TCP MD5 Signature with extensions */
-#ifdef CONFIG_MPTCP
-#define MPTCP_ENABLED		42
-#define MPTCP_SCHEDULER		43
-#define MPTCP_PATH_MANAGER	44
-#define MPTCP_INFO		45
+#define TCP_FASTOPEN_KEY	33	/* Set the key for Fast Open (cookie) */
+#define TCP_FASTOPEN_NO_COOKIE	34	/* Enable TFO without a TFO cookie */
+#define TCP_ZEROCOPY_RECEIVE	35
+#define TCP_INQ			36	/* Notify bytes available to read as a cmsg on read */
 
-#define MPTCP_INFO_FLAG_SAVE_MASTER	0x01
-#endif
+#define TCP_CM_INQ		TCP_INQ
+
+#define TCP_REPAIR_ON		1
+#define TCP_REPAIR_OFF		0
+#define TCP_REPAIR_OFF_NO_WP	-1	/* Turn off without window probes */
 
 struct tcp_repair_opt {
 	__u32	opt_code;
@@ -247,6 +239,7 @@ struct tcp_info {
 	__u64	tcpi_bytes_sent;     /* RFC4898 tcpEStatsPerfHCDataOctetsOut */
 	__u64	tcpi_bytes_retrans;  /* RFC4898 tcpEStatsPerfOctetsRetrans */
 	__u32	tcpi_dsack_dups;     /* RFC4898 tcpEStatsStackDSACKDups */
+	__u32	tcpi_reord_seen;     /* reordering events seen */
 };
 
 /* netlink attributes types for SCM_TIMESTAMPING_OPT_STATS */
@@ -272,56 +265,9 @@ enum {
 	TCP_NLA_BYTES_SENT,	/* Data bytes sent including retransmission */
 	TCP_NLA_BYTES_RETRANS,	/* Data bytes retransmitted */
 	TCP_NLA_DSACK_DUPS,	/* DSACK blocks received */
+	TCP_NLA_REORD_SEEN,	/* reordering events seen */
 };
 
-#ifdef CONFIG_MPTCP
-struct mptcp_meta_info {
-	__u8	mptcpi_state;
-	__u8	mptcpi_retransmits;
-	__u8	mptcpi_probes;
-	__u8	mptcpi_backoff;
-
-	__u32	mptcpi_rto;
-	__u32	mptcpi_unacked;
-
-	/* Times. */
-	__u32	mptcpi_last_data_sent;
-	__u32	mptcpi_last_data_recv;
-	__u32	mptcpi_last_ack_recv;
-
-	__u32	mptcpi_total_retrans;
-
-	__u64	mptcpi_bytes_acked;    /* RFC4898 tcpEStatsAppHCThruOctetsAcked */
-	__u64	mptcpi_bytes_received; /* RFC4898 tcpEStatsAppHCThruOctetsReceived */
-};
-
-struct mptcp_sub_info {
-	union {
-		struct sockaddr src;
-		struct sockaddr_in src_v4;
-		struct sockaddr_in6 src_v6;
-	};
-
-	union {
-		struct sockaddr dst;
-		struct sockaddr_in dst_v4;
-		struct sockaddr_in6 dst_v6;
-	};
-};
-
-struct mptcp_info {
-	__u32	tcp_info_len;	/* Length of each struct tcp_info in subflows pointer */
-	__u32	sub_len;	/* Total length of memory pointed to by subflows pointer */
-	__u32	meta_len;	/* Length of memory pointed to by meta_info */
-	__u32	sub_info_len;	/* Length of each struct mptcp_sub_info in subflow_info pointer */
-	__u32	total_sub_info_len;	/* Total length of memory pointed to by subflow_info */
-
-	struct mptcp_meta_info	*meta_info;
-	struct tcp_info		*initial;
-	struct tcp_info		*subflows;	/* Pointer to array of tcp_info structs */
-	struct mptcp_sub_info	*subflow_info;
-};
-#endif
 /* for TCP_MD5SIG socket option */
 #define TCP_MD5SIG_MAXKEYLEN	80
 
@@ -346,4 +292,11 @@ struct tcp_diag_md5sig {
 	__u8	tcpm_key[TCP_MD5SIG_MAXKEYLEN];
 };
 
+/* setsockopt(fd, IPPROTO_TCP, TCP_ZEROCOPY_RECEIVE, ...) */
+
+struct tcp_zerocopy_receive {
+	__u64 address;		/* in: address of mapping */
+	__u32 length;		/* in/out: number of bytes to map/mapped */
+	__u32 recv_skip_hint;	/* out: amount of bytes to skip */
+};
 #endif /* _UAPI_LINUX_TCP_H */

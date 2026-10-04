@@ -175,13 +175,12 @@ static int ipip_err(struct sk_buff *skb, u32 info)
 	}
 
 	if (type == ICMP_DEST_UNREACH && code == ICMP_FRAG_NEEDED) {
-		ipv4_update_pmtu(skb, net, info, t->parms.link, 0,
-				 iph->protocol, 0);
+		ipv4_update_pmtu(skb, net, info, t->parms.link, iph->protocol);
 		goto out;
 	}
 
 	if (type == ICMP_REDIRECT) {
-		ipv4_redirect(skb, net, t->parms.link, 0, iph->protocol, 0);
+		ipv4_redirect(skb, net, t->parms.link, iph->protocol);
 		goto out;
 	}
 
@@ -280,6 +279,9 @@ static netdev_tx_t ipip_tunnel_xmit(struct sk_buff *skb,
 	struct ip_tunnel *tunnel = netdev_priv(dev);
 	const struct iphdr  *tiph = &tunnel->parms.iph;
 	u8 ipproto;
+
+	if (!pskb_inet_may_pull(skb))
+		goto tx_error;
 
 	switch (skb->protocol) {
 	case htons(ETH_P_IP):
@@ -512,6 +514,9 @@ static int ipip_changelink(struct net_device *dev, struct nlattr *tb[],
 	bool collect_md;
 	__u32 fwmark = t->fwmark;
 
+	if (!rtnl_dev_link_net_capable(dev, t->net))
+		return -EPERM;
+
 	if (ipip_netlink_encap_parms(data, &ipencap)) {
 		int err = ip_tunnel_encap_setup(t, &ipencap);
 
@@ -647,15 +652,14 @@ static int __net_init ipip_init_net(struct net *net)
 	return ip_tunnel_init_net(net, ipip_net_id, &ipip_link_ops, "tunl0");
 }
 
-static void __net_exit ipip_exit_net(struct net *net)
+static void __net_exit ipip_exit_batch_net(struct list_head *list_net)
 {
-	struct ip_tunnel_net *itn = net_generic(net, ipip_net_id);
-	ip_tunnel_delete_net(itn, &ipip_link_ops);
+	ip_tunnel_delete_nets(list_net, ipip_net_id, &ipip_link_ops);
 }
 
 static struct pernet_operations ipip_net_ops = {
 	.init = ipip_init_net,
-	.exit = ipip_exit_net,
+	.exit_batch = ipip_exit_batch_net,
 	.id   = &ipip_net_id,
 	.size = sizeof(struct ip_tunnel_net),
 };

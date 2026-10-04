@@ -56,6 +56,9 @@ static int cgroup_mt_check_v1(const struct xt_mtchk_param *par)
 
 	info->priv = NULL;
 	if (info->has_path) {
+		if (strnlen(info->path, sizeof(info->path)) >= sizeof(info->path))
+			return -ENAMETOOLONG;
+
 		cgrp = cgroup_get_from_path(info->path);
 		if (IS_ERR(cgrp)) {
 			pr_info_ratelimited("invalid path, errno=%ld\n",
@@ -88,6 +91,9 @@ static int cgroup_mt_check_v2(const struct xt_mtchk_param *par)
 
 	info->priv = NULL;
 	if (info->has_path) {
+		if (strnlen(info->path, sizeof(info->path)) >= sizeof(info->path))
+			return -ENAMETOOLONG;
+
 		cgrp = cgroup_get_from_path(info->path);
 		if (IS_ERR(cgrp)) {
 			pr_info_ratelimited("invalid path, errno=%ld\n",
@@ -104,8 +110,9 @@ static bool
 cgroup_mt_v0(const struct sk_buff *skb, struct xt_action_param *par)
 {
 	const struct xt_cgroup_info_v0 *info = par->matchinfo;
+	struct sock *sk = skb->sk;
 
-	if (skb->sk == NULL || !sk_fullsock(skb->sk))
+	if (!sk || !sk_fullsock(sk) || !net_eq(xt_net(par), sock_net(sk)))
 		return false;
 
 	return (info->id == sock_cgroup_classid(&skb->sk->sk_cgrp_data)) ^
@@ -117,8 +124,9 @@ static bool cgroup_mt_v1(const struct sk_buff *skb, struct xt_action_param *par)
 	const struct xt_cgroup_info_v1 *info = par->matchinfo;
 	struct sock_cgroup_data *skcd = &skb->sk->sk_cgrp_data;
 	struct cgroup *ancestor = info->priv;
+	struct sock *sk = skb->sk;
 
-	if (!skb->sk || !sk_fullsock(skb->sk))
+	if (!sk || !sk_fullsock(sk) || !net_eq(xt_net(par), sock_net(sk)))
 		return false;
 
 	if (ancestor)

@@ -2409,26 +2409,30 @@ struct brcmf_fws_info *brcmf_fws_attach(struct brcmf_pub *drvr)
 	brcmu_pktq_init(&fws->desc.other.psq, BRCMF_FWS_PSQ_PREC_COUNT,
 			BRCMF_FWS_PSQ_LEN);
 
-	/* create debugfs file for statistics */
-	brcmf_debugfs_add_entry(drvr, "fws_stats",
-				brcmf_debugfs_fws_stats_read);
-
 	brcmf_dbg(INFO, "%s bdcv2 tlv signaling [%x]\n",
 		  fws->fw_signals ? "enabled" : "disabled", tlv);
 	return fws;
 
 fail:
-	brcmf_fws_detach(fws);
+	brcmf_fws_detach_pre_delif(fws);
+	brcmf_fws_detach_post_delif(fws);
 	return ERR_PTR(rc);
 }
 
-void brcmf_fws_detach(struct brcmf_fws_info *fws)
+void brcmf_fws_detach_pre_delif(struct brcmf_fws_info *fws)
 {
 	if (!fws)
 		return;
-
-	if (fws->fws_wq)
+	if (fws->fws_wq) {
 		destroy_workqueue(fws->fws_wq);
+		fws->fws_wq = NULL;
+	}
+}
+
+void brcmf_fws_detach_post_delif(struct brcmf_fws_info *fws)
+{
+	if (!fws)
+		return;
 
 	/* cleanup */
 	brcmf_fws_lock(fws);
@@ -2437,6 +2441,13 @@ void brcmf_fws_detach(struct brcmf_fws_info *fws)
 
 	/* free top structure */
 	kfree(fws);
+}
+
+void brcmf_fws_debugfs_create(struct brcmf_pub *drvr)
+{
+	/* create debugfs file for statistics */
+	brcmf_debugfs_add_entry(drvr, "fws_stats",
+				brcmf_debugfs_fws_stats_read);
 }
 
 bool brcmf_fws_queue_skbs(struct brcmf_fws_info *fws)

@@ -560,9 +560,8 @@ static struct dentry *proc_sys_lookup(struct inode *dir, struct dentry *dentry,
 		goto out;
 	}
 
-	err = NULL;
 	d_set_d_op(dentry, &proc_sys_dentry_operations);
-	d_add(dentry, inode);
+	err = d_splice_alias(inode, dentry);
 
 out:
 	if (h)
@@ -601,7 +600,7 @@ static ssize_t proc_sys_call_handler(struct kiocb *iocb, struct iov_iter *iter,
 	error = -ENOMEM;
 	if (count >= KMALLOC_MAX_SIZE)
 		goto out;
-	kbuf = kzalloc(count + 1, GFP_KERNEL);
+	kbuf = kvzalloc(count + 1, GFP_KERNEL);
 	if (!kbuf)
 		goto out;
 
@@ -630,7 +629,7 @@ static ssize_t proc_sys_call_handler(struct kiocb *iocb, struct iov_iter *iter,
 
 	error = count;
 out_free_buf:
-	kfree(kbuf);
+	kvfree(kbuf);
 out:
 	sysctl_head_finish(head);
 
@@ -664,17 +663,17 @@ static int proc_sys_open(struct inode *inode, struct file *filp)
 	return 0;
 }
 
-static unsigned int proc_sys_poll(struct file *filp, poll_table *wait)
+static __poll_t proc_sys_poll(struct file *filp, poll_table *wait)
 {
 	struct inode *inode = file_inode(filp);
 	struct ctl_table_header *head = grab_header(inode);
 	struct ctl_table *table = PROC_I(inode)->sysctl_entry;
-	unsigned int ret = DEFAULT_POLLMASK;
+	__poll_t ret = DEFAULT_POLLMASK;
 	unsigned long event;
 
 	/* sysctl was unregistered */
 	if (IS_ERR(head))
-		return POLLERR | POLLHUP;
+		return EPOLLERR | EPOLLHUP;
 
 	if (!table->proc_handler)
 		goto out;
@@ -687,7 +686,7 @@ static unsigned int proc_sys_poll(struct file *filp, poll_table *wait)
 
 	if (event != atomic_read(&table->poll->event)) {
 		filp->private_data = proc_sys_poll_event(table->poll);
-		ret = POLLIN | POLLRDNORM | POLLERR | POLLPRI;
+		ret = EPOLLIN | EPOLLRDNORM | EPOLLERR | EPOLLPRI;
 	}
 
 out:
@@ -718,6 +717,7 @@ static bool proc_sys_fill_cache(struct file *file,
 		if (IS_ERR(child))
 			return false;
 		if (d_in_lookup(child)) {
+			struct dentry *res;
 			inode = proc_sys_make_inode(dir->d_sb, head, table);
 			if (IS_ERR(inode)) {
 				d_lookup_done(child);
@@ -725,7 +725,16 @@ static bool proc_sys_fill_cache(struct file *file,
 				return false;
 			}
 			d_set_d_op(child, &proc_sys_dentry_operations);
-			d_add(child, inode);
+			res = d_splice_alias(inode, child);
+			d_lookup_done(child);
+			if (unlikely(res)) {
+				if (IS_ERR(res)) {
+					dput(child);
+					return false;
+				}
+				dput(child);
+				child = res;
+			}
 		}
 	}
 	inode = d_inode(child);
@@ -746,12 +755,9 @@ static bool proc_sys_link_fill_cache(struct file *file,
 	if (IS_ERR(head))
 		return false;
 
-	if (S_ISLNK(table->mode)) {
-		/* It is not an error if we can not follow the link ignore it */
-		int err = sysctl_follow_link(&head, &table);
-		if (err)
-			goto out;
-	}
+	/* It is not an error if we can not follow the link ignore it */
+	if (sysctl_follow_link(&head, &table))
+		goto out;
 
 	ret = proc_sys_fill_cache(file, ctx, head, table);
 out:
@@ -933,17 +939,21 @@ static int proc_sys_compare(const struct dentry *dentry,
 	struct ctl_table_header *head;
 	struct inode *inode;
 
-	/* Although proc doesn't have negative dentries, rcu-walk means
-	 * that inode here can be NULL */
-	/* AV: can it, indeed? */
-	inode = d_inode_rcu(dentry);
-	if (!inode)
-		return 1;
 	if (name->len != len)
 		return 1;
 	if (memcmp(name->name, str, len))
 		return 1;
-	head = rcu_dereference(PROC_I(inode)->sysctl);
+
+	// false positive is fine here - we'll recheck anyway
+	if (d_in_lookup(dentry))
+		return 0;
+
+	inode = d_inode_rcu(dentry);
+	// we just might have run into dentry in the middle of __dentry_kill()
+	if (!inode)
+		return 1;
+
+	head = READ_ONCE(PROC_I(inode)->sysctl);
 	return !head || !sysctl_is_seen(head);
 }
 
@@ -1125,7 +1135,7 @@ static int sysctl_check_table_array(const char *path, struct ctl_table *table)
 	if ((table->proc_handler == proc_douintvec) ||
 	    (table->proc_handler == proc_douintvec_minmax)) {
 		if (table->maxlen != sizeof(unsigned int))
-			err |= sysctl_err(path, table, "array now allowed");
+			err |= sysctl_err(path, table, "array not allowed");
 	}
 
 	return err;
@@ -1488,7 +1498,7 @@ static int register_leaf_sysctl_tables(const char *path, char *pos,
 	/* If there are mixed files and directories we need a new table */
 	if (nr_dirs && nr_files) {
 		struct ctl_table *new;
-		files = kzalloc(sizeof(struct ctl_table) * (nr_files + 1),
+		files = kcalloc(nr_files + 1, sizeof(struct ctl_table),
 				GFP_KERNEL);
 		if (!files)
 			goto out;

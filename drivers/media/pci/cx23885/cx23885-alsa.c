@@ -89,14 +89,13 @@ static int cx23885_alsa_dma_init(struct cx23885_audio_dev *chip, int nr_pages)
 		return -ENOMEM;
 	}
 
-	dprintk(1, "vmalloc is at addr 0x%08lx, size=%d\n",
-				(unsigned long)buf->vaddr,
-				nr_pages << PAGE_SHIFT);
+	dprintk(1, "vmalloc is at addr %p, size=%d\n",
+		buf->vaddr, nr_pages << PAGE_SHIFT);
 
 	memset(buf->vaddr, 0, nr_pages << PAGE_SHIFT);
 	buf->nr_pages = nr_pages;
 
-	buf->sglist = vzalloc(buf->nr_pages * sizeof(*buf->sglist));
+	buf->sglist = vzalloc(array_size(sizeof(*buf->sglist), buf->nr_pages));
 	if (NULL == buf->sglist)
 		goto vzalloc_err;
 
@@ -401,8 +400,10 @@ static int snd_cx23885_hw_params(struct snd_pcm_substream *substream,
 
 	ret = cx23885_risc_databuffer(chip->pci, &buf->risc, buf->sglist,
 				   chip->period_size, chip->num_periods, 1);
-	if (ret < 0)
+	if (ret < 0) {
+		cx23885_alsa_dma_unmap(chip);
 		goto error;
+	}
 
 	/* Loop back to start of program */
 	buf->risc.jmp[0] = cpu_to_le32(RISC_JUMP|RISC_IRQ1|RISC_CNT_INC);

@@ -50,6 +50,9 @@ void ieee80211_ocb_rx_no_sta(struct ieee80211_sub_if_data *sdata,
 	struct sta_info *sta;
 	int band;
 
+	if (!ifocb->joined)
+		return;
+
 	/* XXX: Consider removing the least recently used entry and
 	 *      allow new one to be added.
 	 */
@@ -150,9 +153,10 @@ void ieee80211_ocb_work(struct ieee80211_sub_if_data *sdata)
 	sdata_unlock(sdata);
 }
 
-static void ieee80211_ocb_housekeeping_timer(unsigned long data)
+static void ieee80211_ocb_housekeeping_timer(struct timer_list *t)
 {
-	struct ieee80211_sub_if_data *sdata = (void *)data;
+	struct ieee80211_sub_if_data *sdata =
+		from_timer(sdata, t, u.ocb.housekeeping_timer);
 	struct ieee80211_local *local = sdata->local;
 	struct ieee80211_if_ocb *ifocb = &sdata->u.ocb;
 
@@ -165,9 +169,8 @@ void ieee80211_ocb_setup_sdata(struct ieee80211_sub_if_data *sdata)
 {
 	struct ieee80211_if_ocb *ifocb = &sdata->u.ocb;
 
-	setup_timer(&ifocb->housekeeping_timer,
-		    ieee80211_ocb_housekeeping_timer,
-		    (unsigned long)sdata);
+	timer_setup(&ifocb->housekeeping_timer,
+		    ieee80211_ocb_housekeeping_timer, 0);
 	INIT_LIST_HEAD(&ifocb->incomplete_stations);
 	spin_lock_init(&ifocb->incomplete_lock);
 }

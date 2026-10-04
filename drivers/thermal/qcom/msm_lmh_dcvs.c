@@ -1,13 +1,6 @@
-/* Copyright (c) 2016-2020, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2016-2020, The Linux Foundation. All rights reserved.
  */
 
 #define pr_fmt(fmt) "%s:%s " fmt, KBUILD_MODNAME, __func__
@@ -25,10 +18,10 @@
 #include <linux/interrupt.h>
 #include <linux/timer.h>
 #include <linux/pm_opp.h>
-#include <linux/cpufreq.h>
 #include <linux/cpu_cooling.h>
 #include <linux/atomic.h>
 #include <linux/regulator/consumer.h>
+#include <linux/cpufreq.h>
 
 #include <asm/smp_plat.h>
 #include <asm/cacheflush.h>
@@ -94,7 +87,7 @@ struct limits_dcvs_hw {
 	int irq_num;
 	void *osm_hw_reg;
 	void *int_clr_reg;
-	void __iomem *min_freq_reg;
+	void *min_freq_reg;
 	cpumask_t core_map;
 	cpumask_t online_mask;
 	struct delayed_work freq_poll_work;
@@ -104,25 +97,15 @@ struct limits_dcvs_hw {
 	struct device_attribute lmh_freq_attr;
 	struct list_head list;
 	bool is_irq_enabled;
-	bool is_plat_mit_disabled;
 	struct mutex access_lock;
 	struct __limits_cdev_data *cdev_data;
 	uint32_t cdev_registered;
 	struct regulator *isens_reg[2];
 	struct work_struct cdev_register_work;
-#ifdef CONFIG_SEC_PM
-	unsigned long prev_max_freq;
-	unsigned long lowest_freq;
-	bool limiting;
-#endif
 };
 
 LIST_HEAD(lmh_dcvs_hw_list);
 DEFINE_MUTEX(lmh_dcvs_list_access);
-
-#ifdef CONFIG_SEC_PM
-extern void *thermal_ipc_log;
-#endif
 
 static void limits_dcvs_get_freq_limits(struct limits_dcvs_hw *hw)
 {
@@ -177,7 +160,7 @@ static unsigned long limits_mitigation_notify(struct limits_dcvs_hw *hw)
 		 * fail with -ERANGE and we need to match to the lowest
 		 * frequency using freq_ceil.
 		 */
-		if (IS_ERR(opp_entry) && PTR_ERR(opp_entry) == -ERANGE) {
+		if (PTR_ERR(opp_entry) == -ERANGE) {
 			opp_entry = dev_pm_opp_find_freq_ceil(cpu_dev,
 								&freq_val);
 			if (IS_ERR(opp_entry))
@@ -229,23 +212,9 @@ static void limits_dcvs_poll(struct work_struct *work)
 		writel_relaxed(0xFF, hw->int_clr_reg);
 		hw->is_irq_enabled = true;
 		enable_irq(hw->irq_num);
-#ifdef CONFIG_SEC_PM
-		THERMAL_IPC_LOG("Finished lmh cpu%d, lowest freq %d\n",
-			cpumask_first(&hw->core_map), hw->lowest_freq);
-		hw->limiting = false;
-		hw->lowest_freq = UINT_MAX;
-#endif
 	} else {
 		mod_delayed_work(system_highpri_wq, &hw->freq_poll_work,
 			 msecs_to_jiffies(LIMITS_POLLING_DELAY_MS));
-#ifdef CONFIG_SEC_PM
-		if (max_limit < hw->lowest_freq)
-			hw->lowest_freq = max_limit;
-
-		if ((hw->limiting == true) && (hw->prev_max_freq != max_limit)) {
-			hw->prev_max_freq = max_limit;
-		}
-#endif
 	}
 	mutex_unlock(&hw->access_lock);
 }
@@ -265,12 +234,6 @@ static irqreturn_t lmh_dcvs_handle_isr(int irq, void *data)
 {
 	struct limits_dcvs_hw *hw = data;
 
-#ifdef CONFIG_SEC_PM
-		THERMAL_IPC_LOG("Start lmh cpu%d @%lu\n",
-			cpumask_first(&hw->core_map), hw->hw_freq_limit);
-		hw->limiting = true;
-		hw->lowest_freq = hw->hw_freq_limit;
-#endif
 	mutex_lock(&hw->access_lock);
 	lmh_dcvs_notify(hw);
 	mutex_unlock(&hw->access_lock);
@@ -463,51 +426,30 @@ static void register_cooling_device(struct work_struct *work)
 {
 	struct limits_dcvs_hw *hw;
 	unsigned int cpu = 0, idx = 0;
-	struct device_node *cpu_node;
-	struct cpufreq_policy *policy;
+	struct cpufreq_policy *policy = NULL;
 
 	mutex_lock(&lmh_dcvs_list_access);
 	list_for_each_entry(hw, &lmh_dcvs_hw_list, list) {
 		if (hw->max_freq[0] == U32_MAX)
 			limits_dcvs_get_freq_limits(hw);
 
-		if (cpumask_weight(&hw->online_mask) == 0)
-			continue;
 		idx = 0;
 		for_each_cpu(cpu, &hw->core_map) {
-			cpumask_t cpu_mask  = { CPU_BITS_NONE };
-
-			if (hw->cdev_data[idx].cdev) {
+			if (hw->cdev_data[idx].cdev ||
+				!cpumask_test_cpu(cpu, &hw->online_mask)) {
 				idx++;
+				continue;
+			}
+			policy = cpufreq_cpu_get(cpu);
+			if (!policy) {
+				pr_err("no policy for cpu%d\n", cpu);
 				continue;
 			}
 			hw->cdev_data[idx].max_freq = U32_MAX;
 			hw->cdev_data[idx].min_freq = 0;
-
-			if (!hw->is_plat_mit_disabled) {
-				cpumask_set_cpu(cpu, &cpu_mask);
-				hw->cdev_data[idx].cdev =
+			hw->cdev_data[idx].cdev =
 					cpufreq_platform_cooling_register(
-							&cpu_mask, &cd_ops);
-			} else {
-				cpu_node = of_cpu_device_node_get(cpu);
-				if (WARN_ON(!cpu_node)) {
-					hw->cdev_data[idx].cdev = NULL;
-					continue;
-				}
-
-				policy = cpufreq_cpu_get(cpu);
-				if (!policy) {
-					pr_err("No policy for cpu%d\n", cpu);
-					hw->cdev_data[idx].cdev = NULL;
-					of_node_put(cpu_node);
-					continue;
-				}
-				hw->cdev_data[idx].cdev =
-					of_cpufreq_cooling_register(cpu_node,
-						policy);
-				of_node_put(cpu_node);
-			}
+							policy, &cd_ops);
 			if (IS_ERR_OR_NULL(hw->cdev_data[idx].cdev)) {
 				pr_err("CPU:%u cdev register error:%ld\n",
 					cpu, PTR_ERR(hw->cdev_data[idx].cdev));
@@ -611,6 +553,7 @@ static int limits_dcvs_probe(struct platform_device *pdev)
 	int cpu, idx = 0;
 	cpumask_t mask = { CPU_BITS_NONE };
 	const __be32 *addr;
+	bool no_cdev_register = false;
 
 	for_each_possible_cpu(cpu) {
 		cpu_node = of_cpu_device_node_get(cpu);
@@ -625,16 +568,22 @@ static int limits_dcvs_probe(struct platform_device *pdev)
 		of_node_put(lmh_node);
 	}
 
-	/*
-	 * We return error if none of the CPUs have
-	 * reference to our LMH node
-	 */
-	if (cpumask_empty(&mask))
-		return -EINVAL;
-
 	hw = devm_kzalloc(&pdev->dev, sizeof(*hw), GFP_KERNEL);
 	if (!hw)
 		return -ENOMEM;
+	/*
+	 * We just init regulator if none of the CPUs have
+	 * reference to our LMH node
+	 */
+	if (cpumask_empty(&mask)) {
+		limits_isens_vref_ldo_init(pdev, hw);
+		mutex_lock(&lmh_dcvs_list_access);
+		INIT_LIST_HEAD(&hw->list);
+		list_add_tail(&hw->list, &lmh_dcvs_hw_list);
+		mutex_unlock(&lmh_dcvs_list_access);
+		return 0;
+	}
+
 	hw->cdev_data = devm_kcalloc(&pdev->dev, cpumask_weight(&mask),
 				   sizeof(*hw->cdev_data),
 				   GFP_KERNEL);
@@ -664,11 +613,7 @@ static int limits_dcvs_probe(struct platform_device *pdev)
 		break;
 	default:
 		return -EINVAL;
-	};
-
-	/* Check whether platform mitigation needs to enable or not */
-	hw->is_plat_mit_disabled = of_property_read_bool(dn,
-				"qcom,plat-mitigation-disable");
+	}
 
 	/* Check legcay LMH HW enablement is needed or not */
 	if (of_property_read_bool(dn, "qcom,legacy-lmh-enable")) {
@@ -709,6 +654,9 @@ static int limits_dcvs_probe(struct platform_device *pdev)
 			return ret;
 	}
 
+	no_cdev_register = of_property_read_bool(dn,
+				"qcom,no-cooling-device-register");
+
 	addr = of_get_address(dn, 0, NULL, NULL);
 	if (!addr) {
 		pr_err("Property llm-base-addr not found\n");
@@ -746,7 +694,7 @@ static int limits_dcvs_probe(struct platform_device *pdev)
 			return PTR_ERR(tzdev);
 	}
 
-	if (!hw->is_plat_mit_disabled) {
+	if (!no_cdev_register) {
 		hw->min_freq_reg = devm_ioremap(&pdev->dev, min_reg, 0x4);
 		if (!hw->min_freq_reg) {
 			pr_err("min frequency enable register remap failed\n");
@@ -797,11 +745,14 @@ probe_exit:
 	mutex_unlock(&lmh_dcvs_list_access);
 	lmh_debug_register(pdev);
 
-	ret = cpuhp_setup_state(CPUHP_AP_ONLINE_DYN, "lmh-dcvs/cdev:online",
-				limits_cpu_online, NULL);
-	if (ret < 0)
-		goto unregister_sensor;
-	ret = 0;
+	if (!no_cdev_register) {
+		ret = cpuhp_setup_state(CPUHP_AP_ONLINE_DYN,
+					"lmh-dcvs/cdev:online",
+					limits_cpu_online, NULL);
+		if (ret < 0)
+			goto unregister_sensor;
+		ret = 0;
+	}
 
 	return ret;
 

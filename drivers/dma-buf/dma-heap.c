@@ -11,7 +11,7 @@
 #include <linux/device.h>
 #include <linux/dma-buf.h>
 #include <linux/err.h>
-#include <linux/idr.h>
+#include <linux/xarray.h>
 #include <linux/list.h>
 #include <linux/slab.h>
 #include <linux/nospec.h>
@@ -50,8 +50,7 @@ static LIST_HEAD(heap_list);
 static DEFINE_MUTEX(heap_list_lock);
 static dev_t dma_heap_devt;
 static struct class *dma_heap_class;
-static DEFINE_IDR(dma_heap_minors);
-static DEFINE_MUTEX(dma_heap_idr_lock);
+static DEFINE_XARRAY_ALLOC(dma_heap_minors);
 
 struct dma_heap *dma_heap_find(const char *name)
 {
@@ -86,7 +85,6 @@ struct dma_buf *dma_heap_buffer_alloc(struct dma_heap *heap, size_t len,
 
 	if (heap_flags & ~DMA_HEAP_VALID_HEAP_FLAGS)
 		return ERR_PTR(-EINVAL);
-
 	/*
 	 * Allocations from all heaps have to begin
 	 * and end on page boundaries.
@@ -124,16 +122,17 @@ EXPORT_SYMBOL_GPL(dma_heap_bufferfd_alloc);
 static int dma_heap_open(struct inode *inode, struct file *file)
 {
 	struct dma_heap *heap;
-	mutex_lock(&dma_heap_idr_lock);
-	heap = idr_find(&dma_heap_minors, iminor(inode));
-	mutex_unlock(&dma_heap_idr_lock);
+
+	heap = xa_load(&dma_heap_minors, iminor(inode));
 	if (!heap) {
 		pr_err("dma_heap: minor %d unknown.\n", iminor(inode));
 		return -ENODEV;
 	}
+
 	/* instance data as context */
 	file->private_data = heap;
 	nonseekable_open(inode, file);
+
 	return 0;
 }
 
@@ -253,9 +252,7 @@ static void dma_heap_release(struct kref *ref)
 
 	device_destroy(dma_heap_class, heap->heap_devt);
 	cdev_del(&heap->heap_cdev);
-	mutex_lock(&dma_heap_idr_lock);
-	idr_remove(&dma_heap_minors, minor);
-	mutex_unlock(&dma_heap_idr_lock);
+	xa_erase(&dma_heap_minors, minor);
 
 	kfree(heap);
 }
@@ -300,8 +297,8 @@ EXPORT_SYMBOL_GPL(dma_heap_get_name);
 
 struct dma_heap *dma_heap_add(const struct dma_heap_export_info *exp_info)
 {
-	struct dma_heap *heap, *h, *err_ret;
-	int minor;
+	struct dma_heap *heap, *err_ret;
+	unsigned int minor;
 	int ret;
 
 	if (!exp_info->name || !strcmp(exp_info->name, "")) {
@@ -311,6 +308,15 @@ struct dma_heap *dma_heap_add(const struct dma_heap_export_info *exp_info)
 
 	if (!exp_info->ops || !exp_info->ops->allocate) {
 		pr_err("dma_heap: Cannot add heap with invalid ops struct\n");
+		return ERR_PTR(-EINVAL);
+	}
+
+	/* check the name is unique */
+	heap = dma_heap_find(exp_info->name);
+	if (heap) {
+		pr_err("dma_heap: Already registered heap named %s\n",
+		       exp_info->name);
+		dma_heap_put(heap);
 		return ERR_PTR(-EINVAL);
 	}
 
@@ -324,15 +330,13 @@ struct dma_heap *dma_heap_add(const struct dma_heap_export_info *exp_info)
 	heap->priv = exp_info->priv;
 
 	/* Find unused minor number */
-	mutex_lock(&dma_heap_idr_lock);
-	ret = idr_alloc(&dma_heap_minors, heap, 0, NUM_HEAP_MINORS, GFP_KERNEL);
-	mutex_unlock(&dma_heap_idr_lock);
+	ret = xa_alloc(&dma_heap_minors, &minor, heap,
+		       XA_LIMIT(0, NUM_HEAP_MINORS - 1), GFP_KERNEL);
 	if (ret < 0) {
 		pr_err("dma_heap: Unable to get minor number for heap\n");
 		err_ret = ERR_PTR(ret);
 		goto err0;
 	}
-	minor = ret;
 
 	/* Create device */
 	heap->heap_devt = MKDEV(MAJOR(dma_heap_devt), minor);
@@ -359,33 +363,17 @@ struct dma_heap *dma_heap_add(const struct dma_heap_export_info *exp_info)
 	/* Make sure it doesn't disappear on us */
 	heap->heap_dev = get_device(heap->heap_dev);
 
-	mutex_lock(&heap_list_lock);
-	/* check the name is unique */
-	list_for_each_entry(h, &heap_list, list) {
-		if (!strcmp(h->name, exp_info->name)) {
-			mutex_unlock(&heap_list_lock);
-			pr_err("dma_heap: Already registered heap named %s\n",
-			       exp_info->name);
-			err_ret = ERR_PTR(-EINVAL);
-			put_device(heap->heap_dev);
-			goto err3;
-		}
-	}
-
 	/* Add heap to the list */
+	mutex_lock(&heap_list_lock);
 	list_add(&heap->list, &heap_list);
 	mutex_unlock(&heap_list_lock);
 
 	return heap;
 
-err3:
-	device_destroy(dma_heap_class, heap->heap_devt);
 err2:
 	cdev_del(&heap->heap_cdev);
 err1:
-	mutex_lock(&dma_heap_idr_lock);
-	idr_remove(&dma_heap_minors, minor);
-	mutex_unlock(&dma_heap_idr_lock);
+	xa_erase(&dma_heap_minors, minor);
 err0:
 	kfree(heap);
 	return err_ret;
@@ -410,7 +398,7 @@ static ssize_t total_pools_kb_show(struct kobject *kobj,
 	}
 	mutex_unlock(&heap_list_lock);
 
-	return scnprintf(buf, PAGE_SIZE, "%llu\n", total_pool_size / 1024);
+	return sysfs_emit(buf, "%llu\n", total_pool_size / 1024);
 }
 
 static struct kobj_attribute total_pools_kb_attr =

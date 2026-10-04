@@ -1,14 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2013-2017, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * Copyright (c) 2013-2020, The Linux Foundation. All rights reserved.
  */
 
 #include <linux/atomic.h>
@@ -29,10 +21,6 @@
 #include <linux/msm_rtb.h>
 #include <asm/timex.h>
 #include <soc/qcom/minidump.h>
-
-#ifdef CONFIG_SEC_DEBUG
-#include <linux/sec_debug.h>
-#endif
 
 #define SENTINEL_BYTE_1 0xFF
 #define SENTINEL_BYTE_2 0xAA
@@ -86,41 +74,6 @@ static struct msm_rtb_state msm_rtb = {
 
 module_param_named(filter, msm_rtb.filter, uint, 0644);
 module_param_named(enable, msm_rtb.enabled, int, 0644);
-
-#ifdef CONFIG_SEC_DEBUG_SUMMARY
-#define __set_rtb_state_info(name, member)				\
-	apss->iolog.rtb_state.name.size = sizeof(msm_rtb.member);	\
-	apss->iolog.rtb_state.name.offset =				\
-			offsetof(struct msm_rtb_state, member)
-#define __set_rtb_entry_info(name, member)				\
-	apss->iolog.rtb_entry.name.size =				\
-			sizeof(((struct msm_rtb_layout *)0)->member);	\
-	apss->iolog.rtb_entry.name.offset =				\
-			offsetof(struct msm_rtb_layout, member)
-
-void sec_debug_summary_set_rtb_info(struct sec_debug_summary_data_apss *apss)
-{
-	apss->iolog.rtb_state_pa = (uint64_t)virt_to_phys(&msm_rtb);
-
-	__set_rtb_state_info(rtb_phys, phys);
-	__set_rtb_state_info(nentries, nentries);
-	__set_rtb_state_info(size, size);
-	__set_rtb_state_info(enabled, enabled);
-	__set_rtb_state_info(initialized, initialized);
-	__set_rtb_state_info(step_size, step_size);
-
-	apss->iolog.rtb_entry.struct_size = sizeof(struct msm_rtb_layout);
-	__set_rtb_entry_info(log_type, log_type);
-	__set_rtb_entry_info(idx, idx);
-	__set_rtb_entry_info(caller, caller);
-	__set_rtb_entry_info(data, data);
-	__set_rtb_entry_info(timestamp, timestamp);
-	__set_rtb_entry_info(cycle_count, cycle_count);
-
-	apss->iolog.rtb_pcpu_idx_pa = virt_to_phys(&msm_rtb_idx_cpu);
-
-}
-#endif /* CONFIG_SEC_DEBUG_SUMMARY */
 
 static int msm_rtb_panic_notifier(struct notifier_block *this,
 					unsigned long event, void *ptr)
@@ -338,7 +291,8 @@ static int msm_rtb_probe(struct platform_device *pdev)
 	md_entry.virt_addr = (uintptr_t)msm_rtb.rtb;
 	md_entry.phys_addr = msm_rtb.phys;
 	md_entry.size = msm_rtb.size;
-	if (msm_minidump_add_region(&md_entry))
+	md_entry.id = MINIDUMP_DEFAULT_ID;
+	if (msm_minidump_add_region(&md_entry) < 0)
 		pr_info("Failed to add RTB in Minidump\n");
 
 #if defined(CONFIG_QCOM_RTB_SEPARATE_CPUS)
@@ -372,15 +326,4 @@ static struct platform_driver msm_rtb_driver = {
 		.of_match_table = msm_match_table
 	},
 };
-
-static int __init msm_rtb_init(void)
-{
-	return platform_driver_register(&msm_rtb_driver);
-}
-
-static void __exit msm_rtb_exit(void)
-{
-	platform_driver_unregister(&msm_rtb_driver);
-}
-module_init(msm_rtb_init)
-module_exit(msm_rtb_exit)
+module_platform_driver(msm_rtb_driver);

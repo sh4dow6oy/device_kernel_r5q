@@ -1,14 +1,6 @@
-/* Copyright (c) 2013-2019, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
+/* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * Copyright (c) 2013-2019, The Linux Foundation. All rights reserved.
  */
 
 #if !defined(_ADRENO_TRACE_H) || defined(TRACE_HEADER_MULTI_READ)
@@ -17,13 +9,12 @@
 #undef TRACE_SYSTEM
 #define TRACE_SYSTEM kgsl
 #undef TRACE_INCLUDE_PATH
-#define TRACE_INCLUDE_PATH ../../drivers/gpu/msm/
+#define TRACE_INCLUDE_PATH .
 #undef TRACE_INCLUDE_FILE
 #define TRACE_INCLUDE_FILE adreno_trace
 
 #include <linux/tracepoint.h>
 #include "adreno_a3xx.h"
-#include "adreno_a4xx.h"
 #include "adreno_a5xx.h"
 
 TRACE_EVENT(adreno_cmdbatch_queued,
@@ -365,7 +356,7 @@ TRACE_EVENT(adreno_sp_tp,
 	),
 
 	TP_printk(
-		"func=%pf", (void *) __entry->ip
+		"func=%pS", (void *) __entry->ip
 	)
 );
 
@@ -393,33 +384,6 @@ TRACE_EVENT(kgsl_a3xx_irq_status,
 		__get_str(device_name),
 		__entry->status ? __print_flags(__entry->status, "|",
 			A3XX_IRQ_FLAGS) : "None"
-	)
-);
-
-/*
- * Tracepoint for a4xx irq. Includes status info
- */
-TRACE_EVENT(kgsl_a4xx_irq_status,
-
-	TP_PROTO(struct adreno_device *adreno_dev, unsigned int status),
-
-	TP_ARGS(adreno_dev, status),
-
-	TP_STRUCT__entry(
-		__string(device_name, adreno_dev->dev.name)
-		__field(unsigned int, status)
-	),
-
-	TP_fast_assign(
-		__assign_str(device_name, adreno_dev->dev.name);
-		__entry->status = status;
-	),
-
-	TP_printk(
-		"d_name=%s status=%s",
-		__get_str(device_name),
-		__entry->status ? __print_flags(__entry->status, "|",
-			A4XX_IRQ_FLAGS) : "None"
 	)
 );
 

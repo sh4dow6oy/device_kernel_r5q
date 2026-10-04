@@ -39,15 +39,6 @@
  */
 #define TASK_SIZE_26		(UL(1) << 26)
 
-#ifdef CONFIG_MODULES_USE_VMALLOC
-/*
- * Modules might be anywhere in the vmalloc area.
- */
-#define MODULES_VADDR		VMALLOC_START
-#define MODULES_END		VMALLOC_END
-
-#else /* CONFIG_MODULES_USE_VMALLOC */
-
 /*
  * The module space lives between the addresses given by TASK_SIZE
  * and PAGE_OFFSET - it must be within 32MB of the kernel text.
@@ -72,8 +63,6 @@
 #define MODULES_END		(PAGE_OFFSET)
 #endif
 
-#endif /* CONFIG_MODULES_USE_VMALLOC */
-
 /*
  * The XIP kernel gets mapped at the bottom of the module vm area.
  * Since we use sections to map it, this macro replaces the physical address
@@ -93,6 +82,7 @@
 #else /* CONFIG_MMU */
 
 #ifndef __ASSEMBLY__
+extern unsigned long setup_vectors_base(void);
 extern unsigned long vectors_base;
 #define VECTORS_BASE		vectors_base
 #endif

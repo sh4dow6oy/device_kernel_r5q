@@ -69,14 +69,16 @@ static void dump_mem(const char *, const char *, unsigned long, unsigned long);
 
 void dump_backtrace_entry(unsigned long where, unsigned long from, unsigned long frame)
 {
+	unsigned long end = frame + 4 + sizeof(struct pt_regs);
+
 #ifdef CONFIG_KALLSYMS
 	printk("[<%08lx>] (%ps) from [<%08lx>] (%pS)\n", where, (void *)where, from, (void *)from);
 #else
 	printk("Function entered at [<%08lx>] from [<%08lx>]\n", where, from);
 #endif
 
-	if (in_exception_text(where))
-		dump_mem("", "Exception stack", frame + 4, frame + 4 + sizeof(struct pt_regs));
+	if (in_entry_text(from) && end <= ALIGN(frame, THREAD_SIZE))
+		dump_mem("", "Exception stack", frame + 4, end);
 }
 
 void dump_backtrace_stm(u32 *stack, u32 instruction)
@@ -391,7 +393,7 @@ int is_valid_bugaddr(unsigned long pc)
 	u32 insn = __opcode_to_mem_arm(BUG_INSTR_VALUE);
 #endif
 
-	if (probe_kernel_address((unsigned *)pc, bkpt))
+	if (get_kernel_nofault(bkpt, (unsigned *)pc))
 		return 0;
 
 	return bkpt == insn;
@@ -437,12 +439,13 @@ int call_undef_hook(struct pt_regs *regs, unsigned int instr)
 	return fn ? fn(regs, instr) : 1;
 }
 
-asmlinkage void __exception do_undefinstr(struct pt_regs *regs)
+asmlinkage void do_undefinstr(struct pt_regs *regs)
 {
 	unsigned int instr;
 	siginfo_t info;
 	void __user *pc;
 
+	clear_siginfo(&info);
 	pc = (void __user *)instruction_pointer(regs);
 
 	if (processor_mode(regs) == SVC_MODE) {
@@ -542,6 +545,7 @@ static int bad_syscall(int n, struct pt_regs *regs)
 {
 	siginfo_t info;
 
+	clear_siginfo(&info);
 	if ((current->personality & PER_MASK) != PER_LINUX) {
 		send_sig(SIGSEGV, current, 1);
 		return regs->ARM_r0;
@@ -609,6 +613,7 @@ asmlinkage int arm_syscall(int no, struct pt_regs *regs)
 {
 	siginfo_t info;
 
+	clear_siginfo(&info);
 	if ((no >> 16) != (__ARM_NR_BASE>> 16))
 		return bad_syscall(no, regs);
 
@@ -659,6 +664,9 @@ asmlinkage int arm_syscall(int no, struct pt_regs *regs)
 	case NR(set_tls):
 		set_tls(regs->ARM_r0);
 		return 0;
+
+	case NR(get_tls):
+		return current_thread_info()->tp_value[0];
 
 	default:
 		/* Calls 9f00xx..9f07ff are defined to return -ENOSYS
@@ -732,9 +740,9 @@ late_initcall(arm_mrc_hook_init);
 
 #endif
 
-static int get_pct_trap(struct pt_regs *regs, unsigned int instr)
+static int get_timer_count_trap(struct pt_regs *regs, unsigned int instr)
 {
-	u64 cntpct;
+	u64 cval;
 	unsigned int res;
 	int rd = (instr >> 12) & 0xF;
 	int rn =  (instr >> 16) & 0xF;
@@ -747,26 +755,61 @@ static int get_pct_trap(struct pt_regs *regs, unsigned int instr)
 
 	if (rd == 15 || rn == 15)
 		return 1;
-	cntpct = arch_counter_get_cntpct();
-	regs->uregs[rd] = cntpct;
-	regs->uregs[rn] = cntpct >> 32;
+	cval = arch_counter_get_cntvct();
+	regs->uregs[rd] = cval;
+	regs->uregs[rn] = cval >> 32;
 	regs->ARM_pc += 4;
 	return 0;
 }
 
-static struct undef_hook get_pct_hook = {
+static struct undef_hook get_timer_count_hook = {
 	.instr_mask	= 0x0ff00fff,
-	.instr_val	= 0x0c500f0e,
+	.instr_val	= 0x0c500f1e,
 	.cpsr_mask	= MODE_MASK,
 	.cpsr_val	= USR_MODE,
-	.fn		= get_pct_trap,
+	.fn		= get_timer_count_trap,
 };
 
-void get_pct_hook_init(void)
+void get_timer_count_hook_init(void)
 {
-	register_undef_hook(&get_pct_hook);
+	register_undef_hook(&get_timer_count_hook);
 }
-EXPORT_SYMBOL(get_pct_hook_init);
+EXPORT_SYMBOL(get_timer_count_hook_init);
+
+static int get_freq_trap(struct pt_regs *regs, unsigned int instr)
+{
+	u32 fval;
+	unsigned int res;
+	int rd = (instr >> 12) & 0xF;
+
+	res = arm_check_condition(instr, regs->ARM_cpsr);
+	if (res == ARM_OPCODE_CONDTEST_FAIL) {
+		regs->ARM_pc += 4;
+		return 0;
+	}
+
+	if (rd == 15)
+		return 1;
+
+	fval = arch_timer_get_cntfrq();
+	regs->uregs[rd] = fval;
+	regs->ARM_pc += 4;
+	return 0;
+}
+
+static struct undef_hook get_freq_hook = {
+	.instr_mask	= 0x0fff0fff,
+	.instr_val	= 0x0e1e0f10,
+	.cpsr_mask	= MODE_MASK,
+	.cpsr_val	= USR_MODE,
+	.fn		= get_freq_trap,
+};
+
+void get_timer_freq_hook_init(void)
+{
+	register_undef_hook(&get_freq_hook);
+}
+EXPORT_SYMBOL(get_timer_freq_hook_init);
 
 /*
  * A data abort trap was taken, but we did not handle the instruction.
@@ -777,6 +820,8 @@ baddataabort(int code, unsigned long instr, struct pt_regs *regs)
 {
 	unsigned long addr = instruction_pointer(regs);
 	siginfo_t info;
+
+	clear_siginfo(&info);
 
 #ifdef CONFIG_DEBUG_USER
 	if (user_debug & UDBG_BADABORT) {

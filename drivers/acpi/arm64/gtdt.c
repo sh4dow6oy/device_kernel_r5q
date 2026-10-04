@@ -199,7 +199,7 @@ static int __init gtdt_parse_timer_block(struct acpi_gtdt_timer_block *block,
 	struct acpi_gtdt_timer_entry *gtdt_frame;
 
 	if (!block->timer_count) {
-		pr_err(FW_BUG "GT block present, but frame count is zero.");
+		pr_err(FW_BUG "GT block present, but frame count is zero.\n");
 		return -ENODEV;
 	}
 
@@ -286,7 +286,7 @@ error:
 		if (frame->virt_irq > 0)
 			acpi_unregister_gsi(gtdt_frame->virtual_timer_interrupt);
 		frame->virt_irq = 0;
-	} while (i-- >= 0 && gtdt_frame--);
+	} while (i-- > 0 && gtdt_frame--);
 
 	return -EINVAL;
 }

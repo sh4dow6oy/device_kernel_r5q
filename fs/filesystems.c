@@ -16,6 +16,7 @@
 #include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
+#include <linux/fs_parser.h>
 
 /*
  * Handling of filesystem drivers list.
@@ -72,6 +73,9 @@ int register_filesystem(struct file_system_type * fs)
 {
 	int res = 0;
 	struct file_system_type ** p;
+
+	if (fs->parameters && !fs_validate_description(fs->parameters))
+		return -EINVAL;
 
 	BUG_ON(strchr(fs->name, '.'));
 	if (fs->next)
@@ -151,15 +155,19 @@ static int fs_index(const char __user * __name)
 static int fs_name(unsigned int index, char __user * buf)
 {
 	struct file_system_type * tmp;
-	int len, res;
+	int len, res = -EINVAL;
 
 	read_lock(&file_systems_lock);
-	for (tmp = file_systems; tmp; tmp = tmp->next, index--)
-		if (index <= 0 && try_module_get(tmp->owner))
+	for (tmp = file_systems; tmp; tmp = tmp->next, index--) {
+		if (index == 0) {
+			if (try_module_get(tmp->owner))
+				res = 0;
 			break;
+		}
+	}
 	read_unlock(&file_systems_lock);
-	if (!tmp)
-		return -EINVAL;
+	if (res)
+		return res;
 
 	/* OK, we got the reference, so we can safely block */
 	len = strlen(tmp->name) + 1;
@@ -221,25 +229,6 @@ int __init get_filesystem_list(char *buf)
 	return len;
 }
 
-#ifdef CONFIG_EARLY_SERVICES
-int get_filesystem_list_runtime(char *buf)
-{
-	int len = 0;
-	struct file_system_type *tmp;
-
-	read_lock(&file_systems_lock);
-	tmp = file_systems;
-	while (tmp && len < PAGE_SIZE - 80) {
-		len += scnprintf(buf+len, PAGE_SIZE, "%s\t%s\n",
-			(tmp->fs_flags & FS_REQUIRES_DEV) ? "" : "nodev",
-			tmp->name);
-		tmp = tmp->next;
-	}
-	read_unlock(&file_systems_lock);
-	return len;
-}
-#endif
-
 #ifdef CONFIG_PROC_FS
 static int filesystems_proc_show(struct seq_file *m, void *v)
 {
@@ -257,21 +246,9 @@ static int filesystems_proc_show(struct seq_file *m, void *v)
 	return 0;
 }
 
-static int filesystems_proc_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, filesystems_proc_show, NULL);
-}
-
-static const struct file_operations filesystems_proc_fops = {
-	.open		= filesystems_proc_open,
-	.read		= seq_read,
-	.llseek		= seq_lseek,
-	.release	= single_release,
-};
-
 static int __init proc_filesystems_init(void)
 {
-	proc_create("filesystems", 0, NULL, &filesystems_proc_fops);
+	proc_create_single("filesystems", 0, NULL, filesystems_proc_show);
 	return 0;
 }
 module_init(proc_filesystems_init);

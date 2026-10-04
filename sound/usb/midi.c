@@ -281,15 +281,16 @@ static void snd_usbmidi_out_urb_complete(struct urb *urb)
 	struct out_urb_context *context = urb->context;
 	struct snd_usb_midi_out_endpoint *ep = context->ep;
 	unsigned int urb_index;
+	unsigned long flags;
 
-	spin_lock(&ep->buffer_lock);
+	spin_lock_irqsave(&ep->buffer_lock, flags);
 	urb_index = context - ep->urbs;
 	ep->active_urbs &= ~(1 << urb_index);
 	if (unlikely(ep->drain_urbs)) {
 		ep->drain_urbs &= ~(1 << urb_index);
 		wake_up(&ep->drain_wait);
 	}
-	spin_unlock(&ep->buffer_lock);
+	spin_unlock_irqrestore(&ep->buffer_lock, flags);
 	if (urb->status < 0) {
 		int err = snd_usbmidi_urb_error(urb);
 		if (err < 0) {
@@ -352,9 +353,9 @@ static void snd_usbmidi_out_tasklet(unsigned long data)
 }
 
 /* called after transfers had been interrupted due to some USB error */
-static void snd_usbmidi_error_timer(unsigned long data)
+static void snd_usbmidi_error_timer(struct timer_list *t)
 {
-	struct snd_usb_midi *umidi = (struct snd_usb_midi *)data;
+	struct snd_usb_midi *umidi = from_timer(umidi, t, error_timer);
 	unsigned int i, j;
 
 	spin_lock(&umidi->disc_lock);
@@ -504,16 +505,84 @@ static void ch345_broken_sysex_input(struct snd_usb_midi_in_endpoint *ep,
 
 /*
  * CME protocol: like the standard protocol, but SysEx commands are sent as a
- * single USB packet preceded by a 0x0F byte.
+ * single USB packet preceded by a 0x0F byte, as are system realtime
+ * messages and MIDI Active Sensing.
+ * Also, multiple messages can be sent in the same packet.
  */
 static void snd_usbmidi_cme_input(struct snd_usb_midi_in_endpoint *ep,
 				  uint8_t *buffer, int buffer_length)
 {
-	if (buffer_length < 2 || (buffer[0] & 0x0f) != 0x0f)
-		snd_usbmidi_standard_input(ep, buffer, buffer_length);
-	else
-		snd_usbmidi_input_data(ep, buffer[0] >> 4,
-				       &buffer[1], buffer_length - 1);
+	int remaining = buffer_length;
+
+	/*
+	 * CME send sysex, song position pointer, system realtime
+	 * and active sensing using CIN 0x0f, which in the standard
+	 * is only intended for single byte unparsed data.
+	 * So we need to interpret these here before sending them on.
+	 * By default, we assume single byte data, which is true
+	 * for system realtime (midi clock, start, stop and continue)
+	 * and active sensing, and handle the other (known) cases
+	 * separately.
+	 * In contrast to the standard, CME does not split sysex
+	 * into multiple 4-byte packets, but lumps everything together
+	 * into one. In addition, CME can string multiple messages
+	 * together in the same packet; pressing the Record button
+	 * on an UF6 sends a sysex message directly followed
+	 * by a song position pointer in the same packet.
+	 * For it to have any reasonable meaning, a sysex message
+	 * needs to be at least 3 bytes in length (0xf0, id, 0xf7),
+	 * corresponding to a packet size of 4 bytes, and the ones sent
+	 * by CME devices are 6 or 7 bytes, making the packet fragments
+	 * 7 or 8 bytes long (six or seven bytes plus preceding CN+CIN byte).
+	 * For the other types, the packet size is always 4 bytes,
+	 * as per the standard, with the data size being 3 for SPP
+	 * and 1 for the others.
+	 * Thus all packet fragments are at least 4 bytes long, so we can
+	 * skip anything that is shorter; this also conveniantly skips
+	 * packets with size 0, which CME devices continuously send when
+	 * they have nothing better to do.
+	 * Another quirk is that sometimes multiple messages are sent
+	 * in the same packet. This has been observed for midi clock
+	 * and active sensing i.e. 0x0f 0xf8 0x00 0x00 0x0f 0xfe 0x00 0x00,
+	 * but also multiple note ons/offs, and control change together
+	 * with MIDI clock. Similarly, some sysex messages are followed by
+	 * the song position pointer in the same packet, and occasionally
+	 * additionally by a midi clock or active sensing.
+	 * We handle this by looping over all data and parsing it along the way.
+	 */
+	while (remaining >= 4) {
+		int source_length = 4; /* default */
+
+		if ((buffer[0] & 0x0f) == 0x0f) {
+			int data_length = 1; /* default */
+
+			if (buffer[1] == 0xf0) {
+				/* Sysex: Find EOX and send on whole message. */
+				/* To kick off the search, skip the first
+				 * two bytes (CN+CIN and SYSEX (0xf0).
+				 */
+				uint8_t *tmp_buf = buffer + 2;
+				int tmp_length = remaining - 2;
+
+				while (tmp_length > 1 && *tmp_buf != 0xf7) {
+					tmp_buf++;
+					tmp_length--;
+				}
+				data_length = tmp_buf - buffer;
+				source_length = data_length + 1;
+			} else if (buffer[1] == 0xf2) {
+				/* Three byte song position pointer */
+				data_length = 3;
+			}
+			snd_usbmidi_input_data(ep, buffer[0] >> 4,
+					       &buffer[1], data_length);
+		} else {
+			/* normal channel events */
+			snd_usbmidi_standard_input(ep, buffer, source_length);
+		}
+		buffer += source_length;
+		remaining -= source_length;
+	}
 }
 
 /*
@@ -747,6 +816,8 @@ static void snd_usbmidi_akai_output(struct snd_usb_midi_out_endpoint *ep,
 
 	msg = urb->transfer_buffer + urb->transfer_buffer_length;
 	buf_end = ep->max_transfer - MAX_AKAI_SYSEX_LEN - 1;
+	if (buf_end <= 0)
+		return;
 
 	/* only try adding more data when there's space for at least 1 SysEx */
 	while (urb->transfer_buffer_length < buf_end) {
@@ -1281,6 +1352,7 @@ static int snd_usbmidi_in_endpoint_create(struct snd_usb_midi *umidi,
 	unsigned int pipe;
 	int length;
 	unsigned int i;
+	int err;
 
 	rep->in = NULL;
 	ep = kzalloc(sizeof(*ep), GFP_KERNEL);
@@ -1291,8 +1363,8 @@ static int snd_usbmidi_in_endpoint_create(struct snd_usb_midi *umidi,
 	for (i = 0; i < INPUT_URBS; ++i) {
 		ep->urbs[i] = usb_alloc_urb(0, GFP_KERNEL);
 		if (!ep->urbs[i]) {
-			snd_usbmidi_in_endpoint_delete(ep);
-			return -ENOMEM;
+			err = -ENOMEM;
+			goto error;
 		}
 	}
 	if (ep_info->in_interval)
@@ -1304,8 +1376,8 @@ static int snd_usbmidi_in_endpoint_create(struct snd_usb_midi *umidi,
 		buffer = usb_alloc_coherent(umidi->dev, length, GFP_KERNEL,
 					    &ep->urbs[i]->transfer_dma);
 		if (!buffer) {
-			snd_usbmidi_in_endpoint_delete(ep);
-			return -ENOMEM;
+			err = -ENOMEM;
+			goto error;
 		}
 		if (ep_info->in_interval)
 			usb_fill_int_urb(ep->urbs[i], umidi->dev,
@@ -1317,10 +1389,20 @@ static int snd_usbmidi_in_endpoint_create(struct snd_usb_midi *umidi,
 					  pipe, buffer, length,
 					  snd_usbmidi_in_urb_complete, ep);
 		ep->urbs[i]->transfer_flags = URB_NO_TRANSFER_DMA_MAP;
+		err = usb_urb_ep_type_check(ep->urbs[i]);
+		if (err < 0) {
+			dev_err(&umidi->dev->dev, "invalid MIDI in EP %x\n",
+				ep_info->in_ep);
+			goto error;
+		}
 	}
 
 	rep->in = ep;
 	return 0;
+
+ error:
+	snd_usbmidi_in_endpoint_delete(ep);
+	return err;
 }
 
 /*
@@ -1356,6 +1438,7 @@ static int snd_usbmidi_out_endpoint_create(struct snd_usb_midi *umidi,
 	unsigned int i;
 	unsigned int pipe;
 	void *buffer;
+	int err;
 
 	rep->out = NULL;
 	ep = kzalloc(sizeof(*ep), GFP_KERNEL);
@@ -1366,8 +1449,8 @@ static int snd_usbmidi_out_endpoint_create(struct snd_usb_midi *umidi,
 	for (i = 0; i < OUTPUT_URBS; ++i) {
 		ep->urbs[i].urb = usb_alloc_urb(0, GFP_KERNEL);
 		if (!ep->urbs[i].urb) {
-			snd_usbmidi_out_endpoint_delete(ep);
-			return -ENOMEM;
+			err = -ENOMEM;
+			goto error;
 		}
 		ep->urbs[i].ep = ep;
 	}
@@ -1405,8 +1488,8 @@ static int snd_usbmidi_out_endpoint_create(struct snd_usb_midi *umidi,
 					    ep->max_transfer, GFP_KERNEL,
 					    &ep->urbs[i].urb->transfer_dma);
 		if (!buffer) {
-			snd_usbmidi_out_endpoint_delete(ep);
-			return -ENOMEM;
+			err = -ENOMEM;
+			goto error;
 		}
 		if (ep_info->out_interval)
 			usb_fill_int_urb(ep->urbs[i].urb, umidi->dev,
@@ -1418,6 +1501,12 @@ static int snd_usbmidi_out_endpoint_create(struct snd_usb_midi *umidi,
 					  pipe, buffer, ep->max_transfer,
 					  snd_usbmidi_out_urb_complete,
 					  &ep->urbs[i]);
+		err = usb_urb_ep_type_check(ep->urbs[i].urb);
+		if (err < 0) {
+			dev_err(&umidi->dev->dev, "invalid MIDI out EP %x\n",
+				ep_info->out_ep);
+			goto error;
+		}
 		ep->urbs[i].urb->transfer_flags = URB_NO_TRANSFER_DMA_MAP;
 	}
 
@@ -1436,6 +1525,10 @@ static int snd_usbmidi_out_endpoint_create(struct snd_usb_midi *umidi,
 
 	rep->out = ep;
 	return 0;
+
+ error:
+	snd_usbmidi_out_endpoint_delete(ep);
+	return err;
 }
 
 /*
@@ -1813,15 +1906,17 @@ static struct usb_ms_endpoint_descriptor *find_usb_ms_endpoint_descriptor(
 	while (extralen > 3) {
 		struct usb_ms_endpoint_descriptor *ms_ep =
 				(struct usb_ms_endpoint_descriptor *)extra;
+		int length = ms_ep->bLength;
 
-		if (ms_ep->bLength > 3 &&
+		if (!length || length > extralen)
+			break;
+
+		if (length > 3 &&
 		    ms_ep->bDescriptorType == USB_DT_CS_ENDPOINT &&
 		    ms_ep->bDescriptorSubtype == UAC_MS_GENERAL)
 			return ms_ep;
-		if (!extra[0])
-			break;
-		extralen -= extra[0];
-		extra += extra[0];
+		extralen -= length;
+		extra += length;
 	}
 	return NULL;
 }
@@ -2380,8 +2475,7 @@ int __snd_usbmidi_create(struct snd_card *card,
 		usb_id = USB_ID(le16_to_cpu(umidi->dev->descriptor.idVendor),
 			       le16_to_cpu(umidi->dev->descriptor.idProduct));
 	umidi->usb_id = usb_id;
-	setup_timer(&umidi->error_timer, snd_usbmidi_error_timer,
-		    (unsigned long)umidi);
+	timer_setup(&umidi->error_timer, snd_usbmidi_error_timer, 0);
 
 	/* detect the endpoint(s) to use */
 	memset(endpoints, 0, sizeof(endpoints));

@@ -1,14 +1,6 @@
-/* Copyright (c) 2012,2014-2017,2019 The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- */
+// SPDX-License-Identifier: GPL-2.0-only
+/* Copyright (c) 2012,2014-2017,2019 The Linux Foundation. All rights reserved. */
+
 #include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/seq_file.h>
@@ -23,7 +15,7 @@
 
 static DEFINE_SPINLOCK(alloc_lock);
 
-#ifdef CONFIG_SLUB_DEBUG_ON
+#ifdef CONFIG_SLUB_DEBUG
 #define WCNSS_MAX_STACK_TRACE			64
 #endif
 
@@ -36,21 +28,13 @@ struct wcnss_prealloc {
 	int occupied;
 	size_t size;
 	void *ptr;
-#ifdef CONFIG_SLUB_DEBUG_ON
+#ifdef CONFIG_SLUB_DEBUG
 	unsigned long stack_trace[WCNSS_MAX_STACK_TRACE];
 	struct stack_trace trace;
 #endif
 };
 
 /* pre-alloced mem for WLAN driver */
-
-#ifdef CONFIG_CNSS_QCA6390
-/* This table should be paired with WLAN chip attached ideally.
- * For QCA6390, roughly 800KB pre-allocation required.
- *
- * Be noted, currently not all QCA6390 attachment defined CNSS_QCA6390,
- * like on which single-DT feature enabled.
- */
 static struct wcnss_prealloc wcnss_allocs[] = {
 	{0, 8  * 1024, NULL},
 	{0, 8  * 1024, NULL},
@@ -81,6 +65,16 @@ static struct wcnss_prealloc wcnss_allocs[] = {
 	{0, 16 * 1024, NULL},
 	{0, 16 * 1024, NULL},
 	{0, 16 * 1024, NULL},
+	{0, 16 * 1024, NULL},
+	{0, 16 * 1024, NULL},
+	{0, 16 * 1024, NULL},
+	{0, 16 * 1024, NULL},
+	{0, 16 * 1024, NULL},
+	{0, 16 * 1024, NULL},
+	{0, 16 * 1024, NULL},
+	{0, 16 * 1024, NULL},
+	{0, 16 * 1024, NULL},
+	{0, 16 * 1024, NULL},
 	{0, 32 * 1024, NULL},
 	{0, 32 * 1024, NULL},
 	{0, 32 * 1024, NULL},
@@ -91,76 +85,6 @@ static struct wcnss_prealloc wcnss_allocs[] = {
 	{0, 64 * 1024, NULL},
 	{0, 64 * 1024, NULL},
 	{0, 64 * 1024, NULL},
-};
-#else
-static struct wcnss_prealloc wcnss_allocs[] = {
-	{0, 8  * 1024, NULL},
-	{0, 8  * 1024, NULL},
-	{0, 8  * 1024, NULL},
-	{0, 8  * 1024, NULL},
-	{0, 8  * 1024, NULL},
-	{0, 8  * 1024, NULL},
-	{0, 8  * 1024, NULL},
-	{0, 8  * 1024, NULL},
-	{0, 16 * 1024, NULL},
-	{0, 16 * 1024, NULL},
-	{0, 16 * 1024, NULL},
-	{0, 16 * 1024, NULL},
-	{0, 16 * 1024, NULL},
-	{0, 16 * 1024, NULL},
-	{0, 16 * 1024, NULL},
-	{0, 16 * 1024, NULL},
-	{0, 16 * 1024, NULL},
-	{0, 16 * 1024, NULL},
-	{0, 16 * 1024, NULL},
-	{0, 16 * 1024, NULL},
-	{0, 16 * 1024, NULL},
-	{0, 16 * 1024, NULL},
-	{0, 16 * 1024, NULL},
-	{0, 16 * 1024, NULL},
-	{0, 16 * 1024, NULL},
-	{0, 16 * 1024, NULL},
-	{0, 16 * 1024, NULL},
-	{0, 16 * 1024, NULL},
-	{0, 16 * 1024, NULL},
-	{0, 16 * 1024, NULL},
-	{0, 16 * 1024, NULL},
-	{0, 16 * 1024, NULL},
-	{0, 16 * 1024, NULL},
-	{0, 16 * 1024, NULL},
-	{0, 16 * 1024, NULL},
-	{0, 16 * 1024, NULL},
-	{0, 16 * 1024, NULL},
-	{0, 16 * 1024, NULL},
-	{0, 16 * 1024, NULL},
-	{0, 16 * 1024, NULL},
-	{0, 16 * 1024, NULL},
-	{0, 16 * 1024, NULL},
-	{0, 16 * 1024, NULL},
-	{0, 16 * 1024, NULL},
-	{0, 16 * 1024, NULL},
-	{0, 16 * 1024, NULL},
-	{0, 16 * 1024, NULL},
-	{0, 16 * 1024, NULL},
-	{0, 16 * 1024, NULL},
-	{0, 16 * 1024, NULL},
-	{0, 32 * 1024, NULL},
-	{0, 32 * 1024, NULL},
-	{0, 32 * 1024, NULL},
-	{0, 32 * 1024, NULL},
-	{0, 32 * 1024, NULL},
-	{0, 32 * 1024, NULL},
-	{0, 32 * 1024, NULL},
-	{0, 32 * 1024, NULL},
-	{0, 32 * 1024, NULL},
-	{0, 32 * 1024, NULL},
-	{0, 32 * 1024, NULL},
-	{0, 32 * 1024, NULL},
-	{0, 32 * 1024, NULL},
-	{0, 32 * 1024, NULL},
-	{0, 32 * 1024, NULL},
-	{0, 32 * 1024, NULL},
-	{0, 32 * 1024, NULL},
 	{0, 64 * 1024, NULL},
 	{0, 64 * 1024, NULL},
 	{0, 64 * 1024, NULL},
@@ -168,7 +92,6 @@ static struct wcnss_prealloc wcnss_allocs[] = {
 	{0, 128 * 1024, NULL},
 	{0, 128 * 1024, NULL},
 };
-#endif
 
 int wcnss_prealloc_init(void)
 {
@@ -194,7 +117,7 @@ void wcnss_prealloc_deinit(void)
 	}
 }
 
-#ifdef CONFIG_SLUB_DEBUG_ON
+#ifdef CONFIG_SLUB_DEBUG
 static void wcnss_prealloc_save_stack_trace(struct wcnss_prealloc *entry)
 {
 	struct stack_trace *trace = &entry->trace;
@@ -255,7 +178,7 @@ int wcnss_prealloc_put(void *ptr)
 }
 EXPORT_SYMBOL(wcnss_prealloc_put);
 
-#ifdef CONFIG_SLUB_DEBUG_ON
+#ifdef CONFIG_SLUB_DEBUG
 void wcnss_prealloc_check_memory_leak(void)
 {
 	int i, j = 0;
@@ -306,9 +229,8 @@ static int prealloc_memory_stats_show(struct seq_file *fp, void *data)
 		tsize += wcnss_allocs[i].size;
 		if (size != wcnss_allocs[i].size) {
 			if (size) {
-				seq_printf(
-					fp, "[%d : %d]\n",
-					used_slots, free_slots);
+				seq_printf(fp, "[%d : %d]\n",
+					   used_slots, free_slots);
 			}
 
 			size = wcnss_allocs[i].size;
@@ -363,10 +285,10 @@ static int __init wcnss_pre_alloc_init(void)
 	debug_base = debugfs_create_dir(PRE_ALLOC_DEBUGFS_DIR, NULL);
 	if (IS_ERR_OR_NULL(debug_base)) {
 		pr_err("%s: Failed to create debugfs dir\n", __func__);
-	} else if (IS_ERR_OR_NULL(debugfs_create_file(
-			PRE_ALLOC_DEBUGFS_FILE_OBJ,
-			0644, debug_base, NULL,
-			&prealloc_memory_stats_fops))) {
+	} else if (IS_ERR_OR_NULL(debugfs_create_file
+				  (PRE_ALLOC_DEBUGFS_FILE_OBJ,
+				   0644, debug_base, NULL,
+				   &prealloc_memory_stats_fops))) {
 		pr_err("%s: Failed to create debugfs file\n", __func__);
 		debugfs_remove_recursive(debug_base);
 	}

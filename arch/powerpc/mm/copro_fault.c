@@ -34,7 +34,7 @@
  * to handle fortunately.
  */
 int copro_handle_mm_fault(struct mm_struct *mm, unsigned long ea,
-		unsigned long dsisr, unsigned *flt)
+		unsigned long dsisr, vm_fault_t *flt)
 {
 	struct vm_area_struct *vma;
 	unsigned long is_write;
@@ -46,7 +46,7 @@ int copro_handle_mm_fault(struct mm_struct *mm, unsigned long ea,
 	if (mm->pgd == NULL)
 		return -EFAULT;
 
-	down_read(&mm->mmap_sem);
+	mmap_read_lock(mm);
 	ret = -EFAULT;
 	vma = find_vma(mm, ea);
 	if (!vma)
@@ -95,7 +95,7 @@ int copro_handle_mm_fault(struct mm_struct *mm, unsigned long ea,
 		current->min_flt++;
 
 out_unlock:
-	up_read(&mm->mmap_sem);
+	mmap_read_unlock(mm);
 	return ret;
 }
 EXPORT_SYMBOL_GPL(copro_handle_mm_fault);
@@ -112,7 +112,7 @@ int copro_calculate_slb(struct mm_struct *mm, u64 ea, struct copro_slb *slb)
 			return 1;
 		psize = get_slice_psize(mm, ea);
 		ssize = user_segment_size(ea);
-		vsid = get_vsid(mm->context.id, ea, ssize);
+		vsid = get_user_vsid(&mm->context, ea, ssize);
 		vsidkey = SLB_VSID_USER;
 		break;
 	case VMALLOC_REGION_ID:

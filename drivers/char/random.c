@@ -432,7 +432,7 @@ static void _get_random_bytes(void *buf, size_t len)
  * wait_for_random_bytes() should be called and return 0 at least once
  * at any point prior.
  */
-void get_random_bytes(void *buf, size_t len)
+void get_random_bytes(void *buf, int len)
 {
 	warn_unseeded_randomness();
 	_get_random_bytes(buf, len);
@@ -878,7 +878,7 @@ EXPORT_SYMBOL(add_device_randomness);
  * Those devices may produce endless random bits and will be throttled
  * when our pool is full.
  */
-void add_hwgenerator_randomness(const void *buf, size_t len, size_t entropy)
+void add_hwgenerator_randomness(const char *buf, size_t len, size_t entropy)
 {
 	mix_pool_bytes(buf, len);
 	credit_init_bits(entropy);
@@ -887,7 +887,8 @@ void add_hwgenerator_randomness(const void *buf, size_t len, size_t entropy)
 	 * Throttle writing to once every CRNG_RESEED_INTERVAL, unless
 	 * we're not yet initialized.
 	 */
-	if (!kthread_should_stop() && crng_ready())
+	if ((current->flags & PF_KTHREAD) &&
+	    !kthread_should_stop() && crng_ready())
 		schedule_timeout_interruptible(CRNG_RESEED_INTERVAL);
 }
 EXPORT_SYMBOL_GPL(add_hwgenerator_randomness);
@@ -910,14 +911,17 @@ struct fast_pool {
 	struct timer_list mix;
 };
 
+static void mix_interrupt_randomness(struct timer_list *work);
+
 static DEFINE_PER_CPU(struct fast_pool, irq_randomness) = {
 #ifdef CONFIG_64BIT
 #define FASTMIX_PERM SIPHASH_PERMUTATION
-	.pool = { SIPHASH_CONST_0, SIPHASH_CONST_1, SIPHASH_CONST_2, SIPHASH_CONST_3 }
+	.pool = { SIPHASH_CONST_0, SIPHASH_CONST_1, SIPHASH_CONST_2, SIPHASH_CONST_3 },
 #else
 #define FASTMIX_PERM HSIPHASH_PERMUTATION
-	.pool = { HSIPHASH_CONST_0, HSIPHASH_CONST_1, HSIPHASH_CONST_2, HSIPHASH_CONST_3 }
+	.pool = { HSIPHASH_CONST_0, HSIPHASH_CONST_1, HSIPHASH_CONST_2, HSIPHASH_CONST_3 },
 #endif
+	.mix = __TIMER_INITIALIZER(mix_interrupt_randomness, 0)
 };
 
 /*
@@ -959,9 +963,9 @@ int __cold random_online_cpu(unsigned int cpu)
 }
 #endif
 
-static void mix_interrupt_randomness(unsigned long data)
+static void mix_interrupt_randomness(struct timer_list *work)
 {
-	struct fast_pool *fast_pool = (struct fast_pool *)data;
+	struct fast_pool *fast_pool = container_of(work, struct fast_pool, mix);
 	/*
 	 * The size of the copied stack pool is explicitly 2 longs so that we
 	 * only ever ingest half of the siphash output each time, retaining
@@ -1012,9 +1016,6 @@ void add_interrupt_randomness(int irq)
 
 	if (new_count < 1024 && !time_is_before_jiffies(fast_pool->last + HZ))
 		return;
-
-	if (unlikely(!fast_pool->mix.data))
-		setup_timer(&fast_pool->mix, mix_interrupt_randomness, (unsigned long)fast_pool);
 
 	fast_pool->count |= MIX_INFLIGHT;
 	if (!timer_pending(&fast_pool->mix)) {
@@ -1157,7 +1158,7 @@ void __cold rand_initialize_disk(struct gendisk *disk)
  *
  * So the re-arming always happens in the entropy loop itself.
  */
-static void __cold entropy_timer(unsigned long data)
+static void __cold entropy_timer(struct timer_list *t)
 {
 	credit_init_bits(1);
 }
@@ -1179,7 +1180,7 @@ static void __cold try_to_generate_entropy(void)
 	if (stack.entropy == random_get_entropy())
 		return;
 
-	__setup_timer_on_stack(&stack.timer, entropy_timer, 0, 0);
+	timer_setup_on_stack(&stack.timer, entropy_timer, 0);
 	while (!crng_ready() && !signal_pending(current)) {
 		if (!timer_pending(&stack.timer))
 			mod_timer(&stack.timer, jiffies + 1);
@@ -1252,10 +1253,10 @@ SYSCALL_DEFINE3(getrandom, char __user *, ubuf, size_t, len, unsigned int, flags
 	return get_random_bytes_user(&iter);
 }
 
-static unsigned int random_poll(struct file *file, poll_table *wait)
+static __poll_t random_poll(struct file *file, poll_table *wait)
 {
 	poll_wait(file, &crng_init_wait, wait);
-	return crng_ready() ? POLLIN | POLLRDNORM : POLLOUT | POLLWRNORM;
+	return crng_ready() ? EPOLLIN | EPOLLRDNORM : EPOLLOUT | EPOLLWRNORM;
 }
 
 static ssize_t write_pool_user(struct iov_iter *iter)

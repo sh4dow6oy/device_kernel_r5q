@@ -401,10 +401,14 @@ static void skip_back_repeat_test(char *arg)
 	int go_back = simple_strtol(arg, NULL, 10);
 
 	repeat_test--;
-	if (repeat_test <= 0)
+	if (repeat_test <= 0) {
 		ts.idx++;
-	else
+	} else {
+		if (repeat_test % 100 == 0)
+			v1printk("kgdbts:RUN ... %d remaining\n", repeat_test);
+
 		ts.idx -= go_back;
+	}
 	fill_get_buf(ts.tst[ts.idx].get);
 }
 
@@ -837,7 +841,7 @@ static void run_plant_and_detach_test(int is_early)
 	char before[BREAK_INSTR_SIZE];
 	char after[BREAK_INSTR_SIZE];
 
-	probe_kernel_read(before, (char *)kgdbts_break_test,
+	copy_from_kernel_nofault(before, (char *)kgdbts_break_test,
 	  BREAK_INSTR_SIZE);
 	init_simple_test();
 	ts.tst = plant_and_detach_test;
@@ -845,8 +849,8 @@ static void run_plant_and_detach_test(int is_early)
 	/* Activate test with initial breakpoint */
 	if (!is_early)
 		kgdb_breakpoint();
-	probe_kernel_read(after, (char *)kgdbts_break_test,
-	  BREAK_INSTR_SIZE);
+	copy_from_kernel_nofault(after, (char *)kgdbts_break_test,
+			BREAK_INSTR_SIZE);
 	if (memcmp(before, after, BREAK_INSTR_SIZE)) {
 		printk(KERN_CRIT "kgdbts: ERROR kgdb corrupted memory\n");
 		panic("kgdb memory corruption");

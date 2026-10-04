@@ -32,12 +32,9 @@
 #define UFFD_SHARED_FCNTL_FLAGS (O_CLOEXEC | O_NONBLOCK)
 #define UFFD_FLAGS_SET (EFD_SHARED_FCNTL_FLAGS)
 
-static_assert(UFFDIO_ZEROPAGE_MODE_MMAP_TRYLOCK == UFFDIO_COPY_MODE_MMAP_TRYLOCK);
-#define UFFDIO_MODE_MMAP_TRYLOCK UFFDIO_COPY_MODE_MMAP_TRYLOCK
-
 extern int sysctl_unprivileged_userfaultfd;
 
-extern int handle_userfault(struct vm_fault *vmf, unsigned long reason);
+extern vm_fault_t handle_userfault(struct vm_fault *vmf, unsigned long reason);
 
 /*
  * The mode of operation for __mcopy_atomic and its helpers.
@@ -58,14 +55,15 @@ enum mcopy_atomic_mode {
 extern int mfill_atomic_install_pte(struct mm_struct *dst_mm, pmd_t *dst_pmd,
 				    struct vm_area_struct *dst_vma,
 				    unsigned long dst_addr, struct page *page,
-				    bool newly_allocated, bool wp_copy);
+				    bool newly_allocated);
 
 extern ssize_t mcopy_atomic(struct mm_struct *dst_mm, unsigned long dst_start,
 			    unsigned long src_start, unsigned long len,
-			    bool *mmap_changing, __u64 mode);
+			    bool *mmap_changing);
 extern ssize_t mfill_zeropage(struct mm_struct *dst_mm,
-			      unsigned long dst_start, unsigned long len,
-			      bool *mmap_changing, __u64 mode);
+			      unsigned long dst_start,
+			      unsigned long len,
+			      bool *mmap_changing);
 extern ssize_t mcopy_continue(struct mm_struct *dst_mm, unsigned long dst_start,
 			      unsigned long len, bool *mmap_changing);
 
@@ -134,7 +132,8 @@ extern void userfaultfd_unmap_complete(struct mm_struct *mm,
 #else /* CONFIG_USERFAULTFD */
 
 /* mm helpers */
-static inline int handle_userfault(struct vm_fault *vmf, unsigned long reason)
+static inline vm_fault_t handle_userfault(struct vm_fault *vmf,
+				unsigned long reason)
 {
 	return VM_FAULT_SIGBUS;
 }

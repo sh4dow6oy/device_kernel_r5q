@@ -47,6 +47,8 @@
 #include <net/ipv6_stubs.h>
 #include <linux/tipc_netlink.h>
 #include "core.h"
+#include "addr.h"
+#include "net.h"
 #include "bearer.h"
 #include "netlink.h"
 #include "msg.h"
@@ -453,9 +455,9 @@ int tipc_udp_nl_dump_remoteip(struct sk_buff *skb, struct netlink_callback *cb)
 		if (!attrs[TIPC_NLA_BEARER])
 			return -EINVAL;
 
-		err = nla_parse_nested(battrs, TIPC_NLA_BEARER_MAX,
-				       attrs[TIPC_NLA_BEARER],
-				       tipc_nl_bearer_policy, NULL);
+		err = nla_parse_nested_deprecated(battrs, TIPC_NLA_BEARER_MAX,
+						  attrs[TIPC_NLA_BEARER],
+						  tipc_nl_bearer_policy, NULL);
 		if (err)
 			return err;
 
@@ -466,7 +468,7 @@ int tipc_udp_nl_dump_remoteip(struct sk_buff *skb, struct netlink_callback *cb)
 
 		rtnl_lock();
 		b = tipc_bearer_find(net, bname);
-		if (!b) {
+		if (!b || b->bcast_addr.media_id != TIPC_MEDIA_TYPE_UDP) {
 			rtnl_unlock();
 			return -EINVAL;
 		}
@@ -477,7 +479,7 @@ int tipc_udp_nl_dump_remoteip(struct sk_buff *skb, struct netlink_callback *cb)
 
 		rtnl_lock();
 		b = rtnl_dereference(tn->bearer_list[bid]);
-		if (!b) {
+		if (!b || b->bcast_addr.media_id != TIPC_MEDIA_TYPE_UDP) {
 			rtnl_unlock();
 			return -EINVAL;
 		}
@@ -529,7 +531,7 @@ int tipc_udp_nl_add_bearer_data(struct tipc_nl_msg *msg, struct tipc_bearer *b)
 	if (!ub)
 		return -ENODEV;
 
-	nest = nla_nest_start(msg->skb, TIPC_NLA_BEARER_UDP_OPTS);
+	nest = nla_nest_start_noflag(msg->skb, TIPC_NLA_BEARER_UDP_OPTS);
 	if (!nest)
 		goto msg_full;
 
@@ -607,8 +609,7 @@ int tipc_udp_nl_bearer_add(struct tipc_bearer *b, struct nlattr *attr)
 	struct nlattr *opts[TIPC_NLA_UDP_MAX + 1];
 	struct udp_media_addr *dst;
 
-	if (nla_parse_nested(opts, TIPC_NLA_UDP_MAX, attr,
-			     tipc_nl_udp_policy, NULL))
+	if (nla_parse_nested_deprecated(opts, TIPC_NLA_UDP_MAX, attr, tipc_nl_udp_policy, NULL))
 		return -EINVAL;
 
 	if (!opts[TIPC_NLA_UDP_REMOTE])
@@ -649,6 +650,7 @@ static int tipc_udp_enable(struct net *net, struct tipc_bearer *b,
 	struct udp_port_cfg udp_conf = {0};
 	struct udp_tunnel_sock_cfg tuncfg = {NULL};
 	struct nlattr *opts[TIPC_NLA_UDP_MAX + 1];
+	u8 node_id[NODE_ID_LEN] = {0,};
 
 	ub = kzalloc(sizeof(*ub), GFP_ATOMIC);
 	if (!ub)
@@ -659,9 +661,7 @@ static int tipc_udp_enable(struct net *net, struct tipc_bearer *b,
 	if (!attrs[TIPC_NLA_BEARER_UDP_OPTS])
 		goto err;
 
-	if (nla_parse_nested(opts, TIPC_NLA_UDP_MAX,
-			     attrs[TIPC_NLA_BEARER_UDP_OPTS],
-			     tipc_nl_udp_policy, NULL))
+	if (nla_parse_nested_deprecated(opts, TIPC_NLA_UDP_MAX, attrs[TIPC_NLA_BEARER_UDP_OPTS], tipc_nl_udp_policy, NULL))
 		goto err;
 
 	if (!opts[TIPC_NLA_UDP_LOCAL] || !opts[TIPC_NLA_UDP_REMOTE]) {
@@ -680,6 +680,17 @@ static int tipc_udp_enable(struct net *net, struct tipc_bearer *b,
 		goto err;
 
 	if (remote.proto != local.proto) {
+		err = -EINVAL;
+		goto err;
+	}
+
+	/* Autoconfigure own node identity if needed */
+	if (!tipc_own_id(net)) {
+		memcpy(node_id, local.ipv6.in6_u.u6_addr8, 16);
+		tipc_net_init(net, node_id, 0);
+	}
+	if (!tipc_own_id(net)) {
+		pr_warn("Failed to set node id, please configure manually\n");
 		err = -EINVAL;
 		goto err;
 	}
@@ -706,8 +717,7 @@ static int tipc_udp_enable(struct net *net, struct tipc_bearer *b,
 			err = -EINVAL;
 			goto err;
 		}
-		b->mtu = dev->mtu - sizeof(struct iphdr)
-			- sizeof(struct udphdr);
+		b->mtu = b->media->mtu;
 #if IS_ENABLED(CONFIG_IPV6)
 	} else if (local.proto == htons(ETH_P_IPV6)) {
 		udp_conf.family = AF_INET6;
@@ -796,6 +806,7 @@ struct tipc_media udp_media_info = {
 	.priority	= TIPC_DEF_LINK_PRI,
 	.tolerance	= TIPC_DEF_LINK_TOL,
 	.window		= TIPC_DEF_LINK_WIN,
+	.mtu		= TIPC_DEF_LINK_UDP_MTU,
 	.type_id	= TIPC_MEDIA_TYPE_UDP,
 	.hwaddr_len	= 0,
 	.name		= "udp"

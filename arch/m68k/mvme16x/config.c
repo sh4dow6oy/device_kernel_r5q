@@ -31,12 +31,14 @@
 #include <asm/bootinfo.h>
 #include <asm/bootinfo-vme.h>
 #include <asm/byteorder.h>
-#include <asm/pgtable.h>
+#include <linux/pgtable.h>
 #include <asm/setup.h>
 #include <asm/irq.h>
 #include <asm/traps.h>
 #include <asm/machdep.h>
 #include <asm/mvme16xhw.h>
+
+#include "mvme16x.h"
 
 extern t_bdid mvme_bdid;
 
@@ -46,7 +48,6 @@ static void mvme16x_get_model(char *model);
 extern void mvme16x_sched_init(irq_handler_t handler);
 extern u32 mvme16x_gettimeoffset(void);
 extern int mvme16x_hwclk (int, struct rtc_time *);
-extern int mvme16x_set_clock_mmss (unsigned long);
 extern void mvme16x_reset (void);
 
 int bcd2int (unsigned char b);
@@ -275,7 +276,6 @@ void __init config_mvme16x(void)
     mach_init_IRQ        = mvme16x_init_IRQ;
     arch_gettimeoffset   = mvme16x_gettimeoffset;
     mach_hwclk           = mvme16x_hwclk;
-    mach_set_clock_mmss	 = mvme16x_set_clock_mmss;
     mach_reset		 = mvme16x_reset;
     mach_get_model       = mvme16x_get_model;
     mach_get_hardware_list = mvme16x_get_hardware_list;
@@ -401,18 +401,14 @@ int mvme16x_hwclk(int op, struct rtc_time *t)
 	if (!op) {
 		rtc->ctrl = RTC_READ;
 		t->tm_year = bcd2int (rtc->bcd_year);
-		t->tm_mon  = bcd2int (rtc->bcd_mth);
+		t->tm_mon  = bcd2int(rtc->bcd_mth) - 1;
 		t->tm_mday = bcd2int (rtc->bcd_dom);
 		t->tm_hour = bcd2int (rtc->bcd_hr);
 		t->tm_min  = bcd2int (rtc->bcd_min);
 		t->tm_sec  = bcd2int (rtc->bcd_sec);
 		rtc->ctrl = 0;
+		if (t->tm_year < 70)
+			t->tm_year += 100;
 	}
 	return 0;
 }
-
-int mvme16x_set_clock_mmss (unsigned long nowtime)
-{
-	return 0;
-}
-

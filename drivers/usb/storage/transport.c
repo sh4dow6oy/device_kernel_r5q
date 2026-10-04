@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * Driver for USB Mass Storage compliant devices
  *
@@ -25,23 +26,6 @@
  *
  * Also, for certain devices, the interrupt endpoint is used to convey
  * status of a command.
- *
- * Please see http://www.one-eyed-alien.net/~mdharm/linux-usb for more
- * information about this driver.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License as published by the
- * Free Software Foundation; either version 2, or (at your option) any
- * later version.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #include <linux/sched.h>
@@ -63,7 +47,6 @@
 
 #include <linux/blkdev.h>
 #include "../../scsi/sd.h"
-#include "../core/usb.h"
 
 
 /***********************************************************************
@@ -295,9 +278,6 @@ static int interpret_urb_result(struct us_data *us, unsigned int pipe,
 		 */
 		if (usb_pipecontrol(pipe)) {
 			usb_stor_dbg(us, "-- stall on control pipe\n");
-#ifdef CONFIG_USB_DEBUG_DETAILED_LOG
-			printk(KERN_ERR "usb storage -- stall on control pipe\n");
-#endif
 			return USB_STOR_XFER_STALLED;
 		}
 
@@ -311,41 +291,26 @@ static int interpret_urb_result(struct us_data *us, unsigned int pipe,
 	/* babble - the device tried to send more than we wanted to read */
 	case -EOVERFLOW:
 		usb_stor_dbg(us, "-- babble\n");
-#ifdef CONFIG_USB_DEBUG_DETAILED_LOG
-		printk(KERN_ERR "usb storage -- babble\n");
-#endif
 		return USB_STOR_XFER_LONG;
 
 	/* the transfer was cancelled by abort, disconnect, or timeout */
 	case -ECONNRESET:
 		usb_stor_dbg(us, "-- transfer cancelled\n");
-#ifdef CONFIG_USB_DEBUG_DETAILED_LOG
-		printk(KERN_ERR "usb storage -- transfer cancelled\n");
-#endif
 		return USB_STOR_XFER_ERROR;
 
 	/* short scatter-gather read transfer */
 	case -EREMOTEIO:
 		usb_stor_dbg(us, "-- short read transfer\n");
-#ifdef CONFIG_USB_DEBUG_DETAILED_LOG
-		printk(KERN_ERR "usb storage -- short read transfer\n");
-#endif
 		return USB_STOR_XFER_SHORT;
 
 	/* abort or disconnect in progress */
 	case -EIO:
 		usb_stor_dbg(us, "-- abort or disconnect in progress\n");
-#ifdef CONFIG_USB_DEBUG_DETAILED_LOG
-		printk(KERN_ERR "usb storage -- abort or disconnect in progress\n");
-#endif
 		return USB_STOR_XFER_ERROR;
 
 	/* the catch-all error case */
 	default:
 		usb_stor_dbg(us, "-- unknown error\n");
-#ifdef CONFIG_USB_DEBUG_DETAILED_LOG
-		printk(KERN_ERR "usb storage -- unknown error %d\n", result);
-#endif
 		return USB_STOR_XFER_ERROR;
 	}
 }
@@ -646,9 +611,6 @@ void usb_stor_invoke_transport(struct scsi_cmnd *srb, struct us_data *us)
 	 */
 	if (test_bit(US_FLIDX_TIMED_OUT, &us->dflags)) {
 		usb_stor_dbg(us, "-- command was aborted\n");
-#ifdef CONFIG_USB_DEBUG_DETAILED_LOG
-		printk(KERN_ERR "usb storage -- command was aborted\n");
-#endif
 		srb->result = DID_ABORT << 16;
 		goto Handle_Errors;
 	}
@@ -656,9 +618,6 @@ void usb_stor_invoke_transport(struct scsi_cmnd *srb, struct us_data *us)
 	/* if there is a transport error, reset and don't auto-sense */
 	if (result == USB_STOR_TRANSPORT_ERROR) {
 		usb_stor_dbg(us, "-- transport indicates error, resetting\n");
-#ifdef CONFIG_USB_DEBUG_DETAILED_LOG
-		printk(KERN_ERR "usb storage -- transport indicates error, resetting\n");
-#endif
 		srb->result = DID_ERROR << 16;
 		goto Handle_Errors;
 	}
@@ -770,9 +729,6 @@ Retry_Sense:
 
 		if (test_bit(US_FLIDX_TIMED_OUT, &us->dflags)) {
 			usb_stor_dbg(us, "-- auto-sense aborted\n");
-#ifdef CONFIG_USB_DEBUG_DETAILED_LOG
-			printk(KERN_ERR "usb storage -- auto-sense aborted\n");
-#endif
 			srb->result = DID_ABORT << 16;
 
 			/* If SANE_SENSE caused this problem, disable it */
@@ -801,9 +757,6 @@ Retry_Sense:
 		/* Other failures */
 		if (temp_result != USB_STOR_TRANSPORT_GOOD) {
 			usb_stor_dbg(us, "-- auto-sense failure\n");
-#ifdef CONFIG_USB_DEBUG_DETAILED_LOG
-			printk(KERN_ERR "usb storage -- auto-sense failure\n");
-#endif
 
 			/*
 			 * we skip the reset if this happens to be a
@@ -948,38 +901,23 @@ Retry_Sense:
 	 * Set the RESETTING bit, and clear the ABORTING bit so that
 	 * the reset may proceed.
 	 */
-#ifdef CONFIG_USB_DEBUG_DETAILED_LOG
-	printk(KERN_ERR USB_STORAGE "%s scsi_lock 1\n", __func__);
-#endif
 	scsi_lock(us_to_host(us));
 	set_bit(US_FLIDX_RESETTING, &us->dflags);
 	clear_bit(US_FLIDX_ABORTING, &us->dflags);
 	scsi_unlock(us_to_host(us));
-#ifdef CONFIG_USB_DEBUG_DETAILED_LOG
-	printk(KERN_ERR USB_STORAGE "%s scsi_unlock 1\n", __func__);
-#endif
 
 	/*
 	 * We must release the device lock because the pre_reset routine
 	 * will want to acquire it.
 	 */
 	mutex_unlock(&us->dev_mutex);
-#ifdef CONFIG_USB_STORAGE_DETECT
-	msleep(200);
-#endif
 	result = usb_stor_port_reset(us);
 	mutex_lock(&us->dev_mutex);
 
 	if (result < 0) {
-#ifdef CONFIG_USB_DEBUG_DETAILED_LOG
-		printk(KERN_ERR USB_STORAGE "%s scsi_lock 2\n", __func__);
-#endif
 		scsi_lock(us_to_host(us));
 		usb_stor_report_device_reset(us);
 		scsi_unlock(us_to_host(us));
-#ifdef CONFIG_USB_DEBUG_DETAILED_LOG
-		printk(KERN_ERR USB_STORAGE "%s scsi_unlock 2\n", __func__);
-#endif
 		us->transport_reset(us);
 	}
 	clear_bit(US_FLIDX_RESETTING, &us->dflags);
@@ -1261,7 +1199,23 @@ int usb_stor_Bulk_transport(struct scsi_cmnd *srb, struct us_data *us)
 						US_BULK_CS_WRAP_LEN &&
 					bcs->Signature ==
 						cpu_to_le32(US_BULK_CS_SIGN)) {
+				unsigned char buf[US_BULK_CS_WRAP_LEN];
+
 				usb_stor_dbg(us, "Device skipped data phase\n");
+
+				/*
+				 * Devices skipping data phase might leave CSW data in srb's
+				 * transfer buffer. Zero it to prevent USB protocol leakage.
+				 */
+				sg = NULL;
+				offset = 0;
+				memset(buf, 0, sizeof(buf));
+				if (usb_stor_access_xfer_buf(buf,
+						US_BULK_CS_WRAP_LEN, srb, &sg,
+						&offset, TO_XFER_BUF) !=
+							US_BULK_CS_WRAP_LEN)
+					usb_stor_dbg(us, "Failed to clear CSW data\n");
+
 				scsi_set_resid(srb, transfer_length);
 				goto skipped_data_phase;
 			}
@@ -1498,17 +1452,9 @@ int usb_stor_port_reset(struct us_data *us)
 			result = -EIO;
 			usb_stor_dbg(us, "No reset during disconnect\n");
 		} else {
-			if (test_bit(US_FLIDX_TIMED_OUT, &us->dflags)) {
-#ifdef CONFIG_USB_DEBUG_DETAILED_LOG
-				printk(KERN_ERR USB_STORAGE "%s remove device\n",
-					__func__);
-#endif
-				result = usb_remove_device(us->pusb_dev);
-			} else {
-				result = usb_reset_device(us->pusb_dev);
-				usb_stor_dbg(us, "usb_reset_device returns %d\n",
-					     result);
-			}
+			result = usb_reset_device(us->pusb_dev);
+			usb_stor_dbg(us, "usb_reset_device returns %d\n",
+				     result);
 		}
 		usb_unlock_device(us->pusb_dev);
 	}

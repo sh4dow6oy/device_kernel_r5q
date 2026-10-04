@@ -216,6 +216,8 @@ static inline int atomic_cmpxchg(atomic_t *v, int old, int new)
 	return ret;
 }
 
+#define atomic_fetch_andnot		atomic_fetch_andnot
+
 #endif /* __LINUX_ARM_ARCH__ */
 
 #define ATOMIC_OPS(op, c_op, asm_op)					\
@@ -244,17 +246,6 @@ ATOMIC_OPS(xor, ^=, eor)
 #undef ATOMIC_OP
 
 #define atomic_xchg(v, new) (xchg(&((v)->counter), new))
-
-#define atomic_inc(v)		atomic_add(1, v)
-#define atomic_dec(v)		atomic_sub(1, v)
-
-#define atomic_inc_and_test(v)	(atomic_add_return(1, v) == 0)
-#define atomic_dec_and_test(v)	(atomic_sub_return(1, v) == 0)
-#define atomic_inc_return_relaxed(v)    (atomic_add_return_relaxed(1, v))
-#define atomic_dec_return_relaxed(v)    (atomic_sub_return_relaxed(1, v))
-#define atomic_sub_and_test(i, v) (atomic_sub_return(i, v) == 0)
-
-#define atomic_add_negative(i,v) (atomic_add_return(i, v) < 0)
 
 #ifndef CONFIG_GENERIC_ATOMIC64
 typedef struct {
@@ -485,6 +476,7 @@ static inline long long atomic64_dec_if_positive(atomic64_t *v)
 
 	return result;
 }
+#define atomic64_dec_if_positive atomic64_dec_if_positive
 
 static inline long long atomic64_fetch_add_unless(atomic64_t *v, long long a,
 						  long long u)
@@ -516,15 +508,6 @@ static inline long long atomic64_fetch_add_unless(atomic64_t *v, long long a,
 	return oldval;
 }
 #define atomic64_fetch_add_unless atomic64_fetch_add_unless
-
-#define atomic64_add_negative(a, v)	(atomic64_add_return((a), (v)) < 0)
-#define atomic64_inc(v)			atomic64_add(1LL, (v))
-#define atomic64_inc_return_relaxed(v)	atomic64_add_return_relaxed(1LL, (v))
-#define atomic64_inc_and_test(v)	(atomic64_inc_return(v) == 0)
-#define atomic64_sub_and_test(a, v)	(atomic64_sub_return((a), (v)) == 0)
-#define atomic64_dec(v)			atomic64_sub(1LL, (v))
-#define atomic64_dec_return_relaxed(v)	atomic64_sub_return_relaxed(1LL, (v))
-#define atomic64_dec_and_test(v)	(atomic64_dec_return((v)) == 0)
 
 #endif /* !CONFIG_GENERIC_ATOMIC64 */
 #endif

@@ -601,6 +601,8 @@ restart:
 				"carrier2 val: %5d / %s\n", val, cd[i].name);
 		}
 
+		if (max1 < 0 || max1 > 3)
+			goto restart;
 		/* program the msp3400 according to the results */
 		state->main = msp3400c_carrier_detect_main[max1].cdo;
 		switch (max1) {
@@ -885,7 +887,7 @@ static int msp34xxg_modus(struct i2c_client *client)
 }
 
 static void msp34xxg_set_source(struct i2c_client *client, u16 reg, int in)
- {
+{
 	struct msp_state *state = to_state(i2c_get_clientdata(client));
 	int source, matrix;
 

@@ -13,6 +13,7 @@
 #include "persistent-data/dm-transaction-manager.h"
 
 #include <linux/device-mapper.h>
+#include <linux/refcount.h>
 
 /*----------------------------------------------------------------*/
 
@@ -100,7 +101,7 @@ struct cache_disk_superblock {
 } __packed;
 
 struct dm_cache_metadata {
-	atomic_t ref_count;
+	refcount_t ref_count;
 	struct list_head list;
 
 	unsigned version;
@@ -760,7 +761,7 @@ static struct dm_cache_metadata *metadata_open(struct block_device *bdev,
 	}
 
 	cmd->version = metadata_version;
-	atomic_set(&cmd->ref_count, 1);
+	refcount_set(&cmd->ref_count, 1);
 	init_rwsem(&cmd->root_lock);
 	cmd->bdev = bdev;
 	cmd->data_block_size = data_block_size;
@@ -798,7 +799,7 @@ static struct dm_cache_metadata *lookup(struct block_device *bdev)
 
 	list_for_each_entry(cmd, &table, list)
 		if (cmd->bdev == bdev) {
-			atomic_inc(&cmd->ref_count);
+			refcount_inc(&cmd->ref_count);
 			return cmd;
 		}
 
@@ -869,7 +870,7 @@ struct dm_cache_metadata *dm_cache_metadata_open(struct block_device *bdev,
 
 void dm_cache_metadata_close(struct dm_cache_metadata *cmd)
 {
-	if (atomic_dec_and_test(&cmd->ref_count)) {
+	if (refcount_dec_and_test(&cmd->ref_count)) {
 		mutex_lock(&table_lock);
 		list_del(&cmd->list);
 		mutex_unlock(&table_lock);
@@ -1015,6 +1016,12 @@ static bool cmd_write_lock(struct dm_cache_metadata *cmd)
 		if (!cmd_write_lock((cmd)))	\
 			return;			\
 	} while(0)
+
+#define WRITE_LOCK_OR_GOTO(cmd, label)		\
+	do {					\
+		if (!cmd_write_lock((cmd)))	\
+			goto label;		\
+	} while (0)
 
 #define WRITE_UNLOCK(cmd) \
 	up_write(&(cmd)->root_lock)
@@ -1825,11 +1832,8 @@ int dm_cache_metadata_abort(struct dm_cache_metadata *cmd)
 	new_bm = dm_block_manager_create(cmd->bdev, DM_CACHE_METADATA_BLOCK_SIZE << SECTOR_SHIFT,
 					 CACHE_MAX_CONCURRENT_LOCKS);
 
-	WRITE_LOCK(cmd);
-	if (cmd->fail_io) {
-		WRITE_UNLOCK(cmd);
-		goto out;
-	}
+	/* cmd_write_lock() already checks fail_io with cmd->root_lock held */
+	WRITE_LOCK_OR_GOTO(cmd, out);
 
 	__destroy_persistent_data_objects(cmd, false);
 	old_bm = cmd->bm;

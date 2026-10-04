@@ -610,8 +610,11 @@ bool inet_ehash_insert(struct sock *sk, struct sock *osk, bool *found_dup_sk)
 	spin_lock(lock);
 	if (osk) {
 		WARN_ON_ONCE(sk->sk_hash != osk->sk_hash);
-		ret = sk_nulls_del_node_init_rcu(osk);
-	} else if (found_dup_sk) {
+		ret = sk_nulls_replace_node_init_rcu(osk, sk);
+		goto unlock;
+	}
+
+	if (found_dup_sk) {
 		*found_dup_sk = inet_ehash_lookup_by_sk(sk, list);
 		if (*found_dup_sk)
 			ret = false;
@@ -620,6 +623,7 @@ bool inet_ehash_insert(struct sock *sk, struct sock *osk, bool *found_dup_sk)
 	if (ret)
 		__sk_nulls_add_node_rcu(sk, list);
 
+unlock:
 	spin_unlock(lock);
 
 	return ret;
@@ -633,7 +637,7 @@ bool inet_ehash_nolisten(struct sock *sk, struct sock *osk, bool *found_dup_sk)
 		sock_prot_inuse_add(sock_net(sk), sk->sk_prot, 1);
 	} else {
 		percpu_counter_inc(sk->sk_prot->orphan_count);
-		sk->sk_state = TCP_CLOSE;
+		inet_sk_set_state(sk, TCP_CLOSE);
 		sock_set_flag(sk, SOCK_DEAD);
 		inet_csk_destroy_sock(sk);
 	}
@@ -683,6 +687,7 @@ int __inet_hash(struct sock *sk, struct sock *osk)
 		if (err)
 			goto unlock;
 	}
+	sock_set_flag(sk, SOCK_RCU_FREE);
 	if (IS_ENABLED(CONFIG_IPV6) && sk->sk_reuseport &&
 		sk->sk_family == AF_INET6)
 		__sk_nulls_add_node_tail_rcu(sk, &ilb->nulls_head);
@@ -690,7 +695,6 @@ int __inet_hash(struct sock *sk, struct sock *osk)
 		__sk_nulls_add_node_rcu(sk, &ilb->nulls_head);
 	inet_hash2(hashinfo, sk);
 	ilb->count++;
-	sock_set_flag(sk, SOCK_RCU_FREE);
 	sock_prot_inuse_add(sock_net(sk), sk->sk_prot, 1);
 unlock:
 	spin_unlock(&ilb->lock);
@@ -716,9 +720,8 @@ EXPORT_SYMBOL_GPL(inet_hash);
 void inet_unhash(struct sock *sk)
 {
 	struct inet_hashinfo *hashinfo = sk->sk_prot->h.hashinfo;
-	struct inet_listen_hashbucket *ilb;
+	struct inet_listen_hashbucket *ilb = NULL;
 	spinlock_t *lock;
-	bool listener = false;
 
 	if (sk_unhashed(sk))
 		return;
@@ -726,7 +729,6 @@ void inet_unhash(struct sock *sk)
 	if (sk->sk_state == TCP_LISTEN) {
 		ilb = &hashinfo->listening_hash[inet_sk_listen_hashfn(sk)];
 		lock = &ilb->lock;
-		listener = true;
 	} else {
 		lock = inet_ehash_lockp(hashinfo, sk->sk_hash);
 	}
@@ -736,7 +738,7 @@ void inet_unhash(struct sock *sk)
 
 	if (rcu_access_pointer(sk->sk_reuseport_cb))
 		reuseport_detach_sock(sk);
-	if (listener) {
+	if (ilb) {
 		inet_unhash2(hashinfo, sk);
 		ilb->count--;
 	}
@@ -897,15 +899,6 @@ void inet_hashinfo_init(struct inet_hashinfo *h)
 	}
 
 	h->lhash2 = NULL;
-
-	if (h != &tcp_hashinfo)
-		return;
-
-	/* this one is used for source ports of outgoing connections */
-	table_perturb = kmalloc_array(INET_TABLE_PERTURB_SIZE,
-				      sizeof(*table_perturb), GFP_KERNEL);
-	if (!table_perturb)
-		panic("TCP: failed to alloc table_perturb");
 }
 EXPORT_SYMBOL_GPL(inet_hashinfo_init);
 
@@ -931,6 +924,12 @@ void __init inet_hashinfo2_init(struct inet_hashinfo *h, const char *name,
 		INIT_HLIST_HEAD(&h->lhash2[i].head);
 		h->lhash2[i].count = 0;
 	}
+
+	/* this one is used for source ports of outgoing connections */
+	table_perturb = kmalloc_array(INET_TABLE_PERTURB_SIZE,
+				      sizeof(*table_perturb), GFP_KERNEL);
+	if (!table_perturb)
+		panic("TCP: failed to alloc table_perturb");
 }
 
 int inet_ehash_locks_alloc(struct inet_hashinfo *hashinfo)

@@ -3,7 +3,7 @@
  *
  * This code provides the generic "frontend" layer to call a matching
  * "backend" driver implementation of cleancache.  See
- * Documentation/vm/cleancache.txt for more information.
+ * Documentation/vm/cleancache.rst for more information.
  *
  * Copyright (C) 2009-2010 Oracle Corp. All rights reserved.
  * Author: Dan Magenheimer
@@ -13,7 +13,6 @@
 
 #include <linux/module.h>
 #include <linux/fs.h>
-#include <linux/pagemap.h>
 #include <linux/exportfs.h>
 #include <linux/mm.h>
 #include <linux/debugfs.h>
@@ -224,11 +223,6 @@ void __cleancache_put_page(struct page *page)
 		return;
 	}
 
-#ifdef CONFIG_SDP
-	if (mapping_sensitive(page->mapping))
-		return;
-#endif
-
 	VM_BUG_ON_PAGE(!PageLocked(page), page);
 	pool_id = page->mapping->host->i_sb->cleancache_poolid;
 	if (pool_id >= 0 &&
@@ -313,12 +307,10 @@ static int __init init_cleancache(void)
 	struct dentry *root = debugfs_create_dir("cleancache", NULL);
 	if (root == NULL)
 		return -ENXIO;
-	debugfs_create_u64("succ_gets", S_IRUGO, root, &cleancache_succ_gets);
-	debugfs_create_u64("failed_gets", S_IRUGO,
-				root, &cleancache_failed_gets);
-	debugfs_create_u64("puts", S_IRUGO, root, &cleancache_puts);
-	debugfs_create_u64("invalidates", S_IRUGO,
-				root, &cleancache_invalidates);
+	debugfs_create_u64("succ_gets", 0444, root, &cleancache_succ_gets);
+	debugfs_create_u64("failed_gets", 0444, root, &cleancache_failed_gets);
+	debugfs_create_u64("puts", 0444, root, &cleancache_puts);
+	debugfs_create_u64("invalidates", 0444, root, &cleancache_invalidates);
 #endif
 	return 0;
 }

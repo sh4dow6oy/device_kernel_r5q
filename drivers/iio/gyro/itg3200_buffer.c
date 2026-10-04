@@ -37,7 +37,7 @@ static int itg3200_read_all_channels(struct i2c_client *i2c, __be16 *buf)
 			.addr = i2c->addr,
 			.flags = i2c->flags | I2C_M_RD,
 			.len = ITG3200_SCAN_ELEMENTS * sizeof(s16),
-			.buf = (char *)&buf,
+			.buf = (char *)buf,
 		},
 	};
 
@@ -108,7 +108,6 @@ error_ret:
 }
 
 static const struct iio_trigger_ops itg3200_trigger_ops = {
-	.owner = THIS_MODULE,
 	.set_trigger_state = &itg3200_data_rdy_trigger_set_state,
 };
 

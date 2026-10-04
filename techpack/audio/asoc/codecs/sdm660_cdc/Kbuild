@@ -10,30 +10,30 @@ endif
 ifeq ($(KERNEL_BUILD), 1)
 	# These are configurable via Kconfig for kernel-based builds
 	# Need to explicitly configure for Android-based builds
-	AUDIO_BLD_DIR := $(shell pwd)/kernel/msm-4.9
+	AUDIO_BLD_DIR := $(shell pwd)/kernel/msm-4.19
 	AUDIO_ROOT := $(AUDIO_BLD_DIR)/techpack/audio
 endif
 
 ifeq ($(KERNEL_BUILD), 0)
-	ifeq ($(CONFIG_ARCH_SDM845), y)
-		include $(AUDIO_ROOT)/config/sdm845auto.conf
-		export
-		INCS    +=  -include $(AUDIO_ROOT)/config/sdm845autoconf.h
-	endif
 	ifeq ($(CONFIG_ARCH_SDM660), y)
 		include $(AUDIO_ROOT)/config/sdm660auto.conf
 		export
 		INCS    +=  -include $(AUDIO_ROOT)/config/sdm660autoconf.h
 	endif
-	ifeq ($(CONFIG_ARCH_SDM670), y)
-		include $(AUDIO_ROOT)/config/sdm670auto.conf
-		export
-		INCS    +=  -include $(AUDIO_ROOT)/config/sdm670autoconf.h
-	endif
 	ifeq ($(CONFIG_ARCH_SDM450), y)
-		include $(AUDIO_ROOT)/config/sdm670auto.conf
+		include $(AUDIO_ROOT)/config/sdm450auto.conf
 		export
-		INCS    +=  -include $(AUDIO_ROOT)/config/sdm670autoconf.h
+		INCS    +=  -include $(AUDIO_ROOT)/config/sdm450autoconf.h
+	endif
+	ifeq ($(CONFIG_ARCH_SDM439), y)
+	include $(AUDIO_ROOT)/config/sdm450auto.conf
+		export
+		INCS    +=  -include $(AUDIO_ROOT)/config/sdm450autoconf.h
+	endif
+	ifeq ($(CONFIG_ARCH_MSM8917), y)
+		include $(AUDIO_ROOT)/config/sdm450auto.conf
+		export
+		INCS    +=  -include $(AUDIO_ROOT)/config/sdm450autoconf.h
 	endif
 endif
 
@@ -72,6 +72,10 @@ endif
 ifdef CONFIG_SND_SOC_DIGITAL_CDC
 	DIGITAL_CDC_OBJS += msm-digital-cdc.o
 	DIGITAL_CDC_OBJS += msm-digital-cdc-regmap.o
+endif
+ifdef CONFIG_SND_SOC_DIGITAL_CDC_LEGACY
+	DIGITAL_CDC_OBJS += msm-digital-cdc-legacy.o
+	DIGITAL_CDC_OBJS += msm-digital-cdc-legacy-regmap.o
 endif
 LINUX_INC +=	-Iinclude/linux
 
@@ -124,4 +128,7 @@ obj-$(CONFIG_SND_SOC_ANALOG_CDC) += analog_cdc_dlkm.o
 analog_cdc_dlkm-y := $(ANALOG_CDC_OBJS)
 
 obj-$(CONFIG_SND_SOC_DIGITAL_CDC) += digital_cdc_dlkm.o
+digital_cdc_dlkm-y := $(DIGITAL_CDC_OBJS)
+
+obj-$(CONFIG_SND_SOC_DIGITAL_CDC_LEGACY) += digital_cdc_dlkm.o
 digital_cdc_dlkm-y := $(DIGITAL_CDC_OBJS)

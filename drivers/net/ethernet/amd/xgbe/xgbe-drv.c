@@ -137,21 +137,21 @@ static unsigned int ecc_ded_period = 600;
 
 #ifdef CONFIG_AMD_XGBE_HAVE_ECC
 /* Only expose the ECC parameters if supported */
-module_param(ecc_sec_info_threshold, uint, S_IWUSR | S_IRUGO);
+module_param(ecc_sec_info_threshold, uint, 0644);
 MODULE_PARM_DESC(ecc_sec_info_threshold,
 		 " ECC corrected error informational threshold setting");
 
-module_param(ecc_sec_warn_threshold, uint, S_IWUSR | S_IRUGO);
+module_param(ecc_sec_warn_threshold, uint, 0644);
 MODULE_PARM_DESC(ecc_sec_warn_threshold,
 		 " ECC corrected error warning threshold setting");
 
-module_param(ecc_sec_period, uint, S_IWUSR | S_IRUGO);
+module_param(ecc_sec_period, uint, 0644);
 MODULE_PARM_DESC(ecc_sec_period, " ECC corrected error period (in seconds)");
 
-module_param(ecc_ded_threshold, uint, S_IWUSR | S_IRUGO);
+module_param(ecc_ded_threshold, uint, 0644);
 MODULE_PARM_DESC(ecc_ded_threshold, " ECC detected error threshold setting");
 
-module_param(ecc_ded_period, uint, S_IWUSR | S_IRUGO);
+module_param(ecc_ded_period, uint, 0644);
 MODULE_PARM_DESC(ecc_ded_period, " ECC detected error period (in seconds)");
 #endif
 
@@ -642,9 +642,9 @@ static irqreturn_t xgbe_dma_isr(int irq, void *data)
 	return IRQ_HANDLED;
 }
 
-static void xgbe_tx_timer(unsigned long data)
+static void xgbe_tx_timer(struct timer_list *t)
 {
-	struct xgbe_channel *channel = (struct xgbe_channel *)data;
+	struct xgbe_channel *channel = from_timer(channel, t, tx_timer);
 	struct xgbe_prv_data *pdata = channel->pdata;
 	struct napi_struct *napi;
 
@@ -680,13 +680,27 @@ static void xgbe_service(struct work_struct *work)
 	pdata->phy_if.phy_status(pdata);
 }
 
-static void xgbe_service_timer(unsigned long data)
+static void xgbe_service_timer(struct timer_list *t)
 {
-	struct xgbe_prv_data *pdata = (struct xgbe_prv_data *)data;
+	struct xgbe_prv_data *pdata = from_timer(pdata, t, service_timer);
+	struct xgbe_channel *channel;
+	unsigned int i;
 
 	queue_work(pdata->dev_workqueue, &pdata->service_work);
 
 	mod_timer(&pdata->service_timer, jiffies + HZ);
+
+	if (!pdata->tx_usecs)
+		return;
+
+	for (i = 0; i < pdata->channel_count; i++) {
+		channel = pdata->channel[i];
+		if (!channel->tx_ring || channel->tx_timer_active)
+			break;
+		channel->tx_timer_active = 1;
+		mod_timer(&channel->tx_timer,
+			  jiffies + usecs_to_jiffies(pdata->tx_usecs));
+	}
 }
 
 static void xgbe_init_timers(struct xgbe_prv_data *pdata)
@@ -694,16 +708,14 @@ static void xgbe_init_timers(struct xgbe_prv_data *pdata)
 	struct xgbe_channel *channel;
 	unsigned int i;
 
-	setup_timer(&pdata->service_timer, xgbe_service_timer,
-		    (unsigned long)pdata);
+	timer_setup(&pdata->service_timer, xgbe_service_timer, 0);
 
 	for (i = 0; i < pdata->channel_count; i++) {
 		channel = pdata->channel[i];
 		if (!channel->tx_ring)
 			break;
 
-		setup_timer(&channel->tx_timer, xgbe_tx_timer,
-			    (unsigned long)channel);
+		timer_setup(&channel->tx_timer, xgbe_tx_timer, 0);
 	}
 }
 
@@ -1236,7 +1248,6 @@ static void xgbe_free_rx_data(struct xgbe_prv_data *pdata)
 
 static int xgbe_phy_reset(struct xgbe_prv_data *pdata)
 {
-	pdata->phy_link = -1;
 	pdata->phy_speed = SPEED_UNKNOWN;
 
 	return pdata->phy_if.phy_reset(pdata);
@@ -1246,7 +1257,6 @@ int xgbe_powerdown(struct net_device *netdev, unsigned int caller)
 {
 	struct xgbe_prv_data *pdata = netdev_priv(netdev);
 	struct xgbe_hw_if *hw_if = &pdata->hw_if;
-	unsigned long flags;
 
 	DBGPR("-->xgbe_powerdown\n");
 
@@ -1256,8 +1266,6 @@ int xgbe_powerdown(struct net_device *netdev, unsigned int caller)
 		DBGPR("<--xgbe_powerdown\n");
 		return -EINVAL;
 	}
-
-	spin_lock_irqsave(&pdata->lock, flags);
 
 	if (caller == XGMAC_DRIVER_CONTEXT)
 		netif_device_detach(netdev);
@@ -1274,8 +1282,6 @@ int xgbe_powerdown(struct net_device *netdev, unsigned int caller)
 
 	pdata->power_down = 1;
 
-	spin_unlock_irqrestore(&pdata->lock, flags);
-
 	DBGPR("<--xgbe_powerdown\n");
 
 	return 0;
@@ -1285,7 +1291,6 @@ int xgbe_powerup(struct net_device *netdev, unsigned int caller)
 {
 	struct xgbe_prv_data *pdata = netdev_priv(netdev);
 	struct xgbe_hw_if *hw_if = &pdata->hw_if;
-	unsigned long flags;
 
 	DBGPR("-->xgbe_powerup\n");
 
@@ -1295,8 +1300,6 @@ int xgbe_powerup(struct net_device *netdev, unsigned int caller)
 		DBGPR("<--xgbe_powerup\n");
 		return -EINVAL;
 	}
-
-	spin_lock_irqsave(&pdata->lock, flags);
 
 	pdata->power_down = 0;
 
@@ -1312,11 +1315,61 @@ int xgbe_powerup(struct net_device *netdev, unsigned int caller)
 
 	xgbe_start_timers(pdata);
 
-	spin_unlock_irqrestore(&pdata->lock, flags);
-
 	DBGPR("<--xgbe_powerup\n");
 
 	return 0;
+}
+
+static void xgbe_free_memory(struct xgbe_prv_data *pdata)
+{
+	struct xgbe_desc_if *desc_if = &pdata->desc_if;
+
+	/* Free the ring descriptors and buffers */
+	desc_if->free_ring_resources(pdata);
+
+	/* Free the channel and ring structures */
+	xgbe_free_channels(pdata);
+}
+
+static int xgbe_alloc_memory(struct xgbe_prv_data *pdata)
+{
+	struct xgbe_desc_if *desc_if = &pdata->desc_if;
+	struct net_device *netdev = pdata->netdev;
+	int ret;
+
+	if (pdata->new_tx_ring_count) {
+		pdata->tx_ring_count = pdata->new_tx_ring_count;
+		pdata->tx_q_count = pdata->tx_ring_count;
+		pdata->new_tx_ring_count = 0;
+	}
+
+	if (pdata->new_rx_ring_count) {
+		pdata->rx_ring_count = pdata->new_rx_ring_count;
+		pdata->new_rx_ring_count = 0;
+	}
+
+	/* Calculate the Rx buffer size before allocating rings */
+	pdata->rx_buf_size = xgbe_calc_rx_buf_size(netdev, netdev->mtu);
+
+	/* Allocate the channel and ring structures */
+	ret = xgbe_alloc_channels(pdata);
+	if (ret)
+		return ret;
+
+	/* Allocate the ring descriptors and buffers */
+	ret = desc_if->alloc_ring_resources(pdata);
+	if (ret)
+		goto err_channels;
+
+	/* Initialize the service and Tx timers */
+	xgbe_init_timers(pdata);
+
+	return 0;
+
+err_channels:
+	xgbe_free_memory(pdata);
+
+	return ret;
 }
 
 static int xgbe_start(struct xgbe_prv_data *pdata)
@@ -1324,9 +1377,26 @@ static int xgbe_start(struct xgbe_prv_data *pdata)
 	struct xgbe_hw_if *hw_if = &pdata->hw_if;
 	struct xgbe_phy_if *phy_if = &pdata->phy_if;
 	struct net_device *netdev = pdata->netdev;
+	unsigned int i;
 	int ret;
 
-	DBGPR("-->xgbe_start\n");
+	/* Set the number of queues */
+	ret = netif_set_real_num_tx_queues(netdev, pdata->tx_ring_count);
+	if (ret) {
+		netdev_err(netdev, "error setting real tx queue count\n");
+		return ret;
+	}
+
+	ret = netif_set_real_num_rx_queues(netdev, pdata->rx_ring_count);
+	if (ret) {
+		netdev_err(netdev, "error setting real rx queue count\n");
+		return ret;
+	}
+
+	/* Set RSS lookup table data for programming */
+	for (i = 0; i < XGBE_RSS_MAX_TABLE_SIZE; i++)
+		XGMAC_SET_BITS(pdata->rss_table[i], MAC_RSSDR, DMCH,
+			       i % pdata->rx_ring_count);
 
 	ret = hw_if->init(pdata);
 	if (ret)
@@ -1353,8 +1423,6 @@ static int xgbe_start(struct xgbe_prv_data *pdata)
 	queue_work(pdata->dev_workqueue, &pdata->service_work);
 
 	clear_bit(XGBE_STOPPED, &pdata->dev_state);
-
-	DBGPR("<--xgbe_start\n");
 
 	return 0;
 
@@ -1384,6 +1452,7 @@ static void xgbe_stop(struct xgbe_prv_data *pdata)
 		return;
 
 	netif_tx_stop_all_queues(netdev);
+	netif_carrier_off(pdata->netdev);
 
 	xgbe_stop_timers(pdata);
 	flush_workqueue(pdata->dev_workqueue);
@@ -1433,10 +1502,22 @@ static void xgbe_stopdev(struct work_struct *work)
 	netdev_alert(pdata->netdev, "device stopped\n");
 }
 
-static void xgbe_restart_dev(struct xgbe_prv_data *pdata)
+void xgbe_full_restart_dev(struct xgbe_prv_data *pdata)
 {
-	DBGPR("-->xgbe_restart_dev\n");
+	/* If not running, "restart" will happen on open */
+	if (!netif_running(pdata->netdev))
+		return;
 
+	xgbe_stop(pdata);
+
+	xgbe_free_memory(pdata);
+	xgbe_alloc_memory(pdata);
+
+	xgbe_start(pdata);
+}
+
+void xgbe_restart_dev(struct xgbe_prv_data *pdata)
+{
 	/* If not running, "restart" will happen on open */
 	if (!netif_running(pdata->netdev))
 		return;
@@ -1447,8 +1528,6 @@ static void xgbe_restart_dev(struct xgbe_prv_data *pdata)
 	xgbe_free_rx_data(pdata);
 
 	xgbe_start(pdata);
-
-	DBGPR("<--xgbe_restart_dev\n");
 }
 
 static void xgbe_restart(struct work_struct *work)
@@ -1834,10 +1913,7 @@ static void xgbe_packet_info(struct xgbe_prv_data *pdata,
 static int xgbe_open(struct net_device *netdev)
 {
 	struct xgbe_prv_data *pdata = netdev_priv(netdev);
-	struct xgbe_desc_if *desc_if = &pdata->desc_if;
 	int ret;
-
-	DBGPR("-->xgbe_open\n");
 
 	/* Create the various names based on netdev name */
 	snprintf(pdata->an_name, sizeof(pdata->an_name) - 1, "%s-pcs",
@@ -1883,43 +1959,25 @@ static int xgbe_open(struct net_device *netdev)
 		goto err_sysclk;
 	}
 
-	/* Calculate the Rx buffer size before allocating rings */
-	ret = xgbe_calc_rx_buf_size(netdev, netdev->mtu);
-	if (ret < 0)
-		goto err_ptpclk;
-	pdata->rx_buf_size = ret;
-
-	/* Allocate the channel and ring structures */
-	ret = xgbe_alloc_channels(pdata);
-	if (ret)
-		goto err_ptpclk;
-
-	/* Allocate the ring descriptors and buffers */
-	ret = desc_if->alloc_ring_resources(pdata);
-	if (ret)
-		goto err_channels;
-
 	INIT_WORK(&pdata->service_work, xgbe_service);
 	INIT_WORK(&pdata->restart_work, xgbe_restart);
 	INIT_WORK(&pdata->stopdev_work, xgbe_stopdev);
 	INIT_WORK(&pdata->tx_tstamp_work, xgbe_tx_tstamp);
-	xgbe_init_timers(pdata);
+
+	ret = xgbe_alloc_memory(pdata);
+	if (ret)
+		goto err_ptpclk;
 
 	ret = xgbe_start(pdata);
 	if (ret)
-		goto err_rings;
+		goto err_mem;
 
 	clear_bit(XGBE_DOWN, &pdata->dev_state);
 
-	DBGPR("<--xgbe_open\n");
-
 	return 0;
 
-err_rings:
-	desc_if->free_ring_resources(pdata);
-
-err_channels:
-	xgbe_free_channels(pdata);
+err_mem:
+	xgbe_free_memory(pdata);
 
 err_ptpclk:
 	clk_disable_unprepare(pdata->ptpclk);
@@ -1939,18 +1997,11 @@ err_dev_wq:
 static int xgbe_close(struct net_device *netdev)
 {
 	struct xgbe_prv_data *pdata = netdev_priv(netdev);
-	struct xgbe_desc_if *desc_if = &pdata->desc_if;
-
-	DBGPR("-->xgbe_close\n");
 
 	/* Stop the device */
 	xgbe_stop(pdata);
 
-	/* Free the ring descriptors and buffers */
-	desc_if->free_ring_resources(pdata);
-
-	/* Free the channel and ring structures */
-	xgbe_free_channels(pdata);
+	xgbe_free_memory(pdata);
 
 	/* Disable the clocks */
 	clk_disable_unprepare(pdata->ptpclk);
@@ -1963,8 +2014,6 @@ static int xgbe_close(struct net_device *netdev)
 	destroy_workqueue(pdata->dev_workqueue);
 
 	set_bit(XGBE_DOWN, &pdata->dev_state);
-
-	DBGPR("<--xgbe_close\n");
 
 	return 0;
 }
@@ -2140,7 +2189,7 @@ static void xgbe_get_stats64(struct net_device *netdev,
 	s->multicast = pstats->rxmulticastframes_g;
 	s->rx_length_errors = pstats->rxlengtherror;
 	s->rx_crc_errors = pstats->rxcrcerror;
-	s->rx_fifo_errors = pstats->rxfifooverflow;
+	s->rx_over_errors = pstats->rxfifooverflow;
 
 	s->tx_packets = pstats->txframecount_gb;
 	s->tx_bytes = pstats->txoctetcount_gb;
@@ -2213,7 +2262,7 @@ static int xgbe_setup_tc(struct net_device *netdev, enum tc_setup_type type,
 	struct tc_mqprio_qopt *mqprio = type_data;
 	u8 tc;
 
-	if (type != TC_SETUP_MQPRIO)
+	if (type != TC_SETUP_QDISC_MQPRIO)
 		return -EOPNOTSUPP;
 
 	mqprio->hw = TC_MQPRIO_HW_OFFLOAD_TCS;
@@ -2313,10 +2362,17 @@ static int xgbe_set_features(struct net_device *netdev,
 	if (ret)
 		return ret;
 
-	if ((features & NETIF_F_RXCSUM) && !rxcsum)
+	if ((features & NETIF_F_RXCSUM) && !rxcsum) {
+		hw_if->enable_sph(pdata);
+		hw_if->enable_vxlan(pdata);
 		hw_if->enable_rx_csum(pdata);
-	else if (!(features & NETIF_F_RXCSUM) && rxcsum)
+		schedule_work(&pdata->restart_work);
+	} else if (!(features & NETIF_F_RXCSUM) && rxcsum) {
+		hw_if->disable_sph(pdata);
+		hw_if->disable_vxlan(pdata);
 		hw_if->disable_rx_csum(pdata);
+		schedule_work(&pdata->restart_work);
+	}
 
 	if ((features & NETIF_F_HW_VLAN_CTAG_RX) && !rxvlan)
 		hw_if->enable_rx_vlan_stripping(pdata);
@@ -2711,9 +2767,6 @@ read_again:
 			goto read_again;
 
 		if (error || packet->errors) {
-			if (packet->errors)
-				netif_err(pdata, rx_err, netdev,
-					  "error in received packet\n");
 			dev_kfree_skb(skb);
 			goto next_packet;
 		}
@@ -2947,9 +3000,8 @@ void xgbe_dump_rx_desc(struct xgbe_prv_data *pdata, struct xgbe_ring *ring,
 void xgbe_print_pkt(struct net_device *netdev, struct sk_buff *skb, bool tx_rx)
 {
 	struct ethhdr *eth = (struct ethhdr *)skb->data;
-	unsigned char *buf = skb->data;
 	unsigned char buffer[128];
-	unsigned int i, j;
+	unsigned int i;
 
 	netdev_dbg(netdev, "\n************** SKB dump ****************\n");
 
@@ -2960,22 +3012,13 @@ void xgbe_print_pkt(struct net_device *netdev, struct sk_buff *skb, bool tx_rx)
 	netdev_dbg(netdev, "Src MAC addr: %pM\n", eth->h_source);
 	netdev_dbg(netdev, "Protocol: %#06hx\n", ntohs(eth->h_proto));
 
-	for (i = 0, j = 0; i < skb->len;) {
-		j += snprintf(buffer + j, sizeof(buffer) - j, "%02hhx",
-			      buf[i++]);
+	for (i = 0; i < skb->len; i += 32) {
+		unsigned int len = min(skb->len - i, 32U);
 
-		if ((i % 32) == 0) {
-			netdev_dbg(netdev, "  %#06x: %s\n", i - 32, buffer);
-			j = 0;
-		} else if ((i % 16) == 0) {
-			buffer[j++] = ' ';
-			buffer[j++] = ' ';
-		} else if ((i % 4) == 0) {
-			buffer[j++] = ' ';
-		}
+		hex_dump_to_buffer(&skb->data[i], len, 32, 1,
+				   buffer, sizeof(buffer), false);
+		netdev_dbg(netdev, "  %#06x: %s\n", i, buffer);
 	}
-	if (i % 32)
-		netdev_dbg(netdev, "  %#06x: %s\n", i - (i % 32), buffer);
 
 	netdev_dbg(netdev, "\n************** SKB dump ****************\n");
 }

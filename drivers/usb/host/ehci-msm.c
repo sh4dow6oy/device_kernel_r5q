@@ -1,6 +1,8 @@
-/* ehci-msm.c - HSUSB Host Controller Driver Implementation
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * EHCI HSUSB Host Controller Driver Implementation
  *
- * Copyright (c) 2008-2011, Code Aurora Forum. All rights reserved.
+ * Copyright (c) 2008-2011, 2021, The Linux Foundation. All rights reserved.
  *
  * Partly derived from ehci-fsl.c and ehci-hcd.c
  * Copyright (c) 2000-2004 by David Brownell
@@ -39,7 +41,7 @@
 
 #define MSM_USB_BASE (hcd->regs)
 
-#define DRIVER_DESC "Qualcomm On-Chip EHCI Host Controller"
+#define DRIVER_DESC "Qualcomm Technologies, Inc. On-Chip EHCI Host Controller"
 
 static const char hcd_name[] = "ehci-msm";
 static struct hc_driver __read_mostly msm_hc_driver;
@@ -57,15 +59,16 @@ static int ehci_msm_reset(struct usb_hcd *hcd)
 		return retval;
 
 	/* select ULPI phy and clear other status/control bits in PORTSC */
-	writel(PORTSC_PTS_ULPI, USB_PORTSC);
+	writel_relaxed(PORTSC_PTS_ULPI, USB_PORTSC);
 	/* bursts of unspecified length. */
-	writel(0, USB_AHBBURST);
+	writel_relaxed(0, USB_AHBBURST);
 	/* Use the AHB transactor, allow posted data writes */
-	writel(0x8, USB_AHBMODE);
+	writel_relaxed(0x8, USB_AHBMODE);
 	/* Disable streaming mode and select host mode */
-	writel(0x13, USB_USBMODE);
+	writel_relaxed(0x13, USB_USBMODE);
 	/* Disable ULPI_TX_PKT_EN_CLR_FIX which is valid only for HSIC */
-	writel(readl(USB_GENCONFIG_2) & ~ULPI_TX_PKT_EN_CLR_FIX, USB_GENCONFIG_2);
+	writel_relaxed(readl_relaxed(USB_GENCONFIG_2) & ~ULPI_TX_PKT_EN_CLR_FIX,
+				USB_GENCONFIG_2);
 
 	return 0;
 }
@@ -176,7 +179,7 @@ static int ehci_msm_remove(struct platform_device *pdev)
 }
 
 #ifdef CONFIG_PM
-static int ehci_msm_pm_suspend(struct device *dev)
+static int ehci_msm_runtime_suspend(struct device *dev)
 {
 	struct usb_hcd *hcd = dev_get_drvdata(dev);
 	struct ehci_hcd *ehci = hcd_to_ehci(hcd);
@@ -191,7 +194,7 @@ static int ehci_msm_pm_suspend(struct device *dev)
 	return 0;
 }
 
-static int ehci_msm_pm_resume(struct device *dev)
+static int ehci_msm_runtime_resume(struct device *dev)
 {
 	struct usb_hcd *hcd = dev_get_drvdata(dev);
 	struct ehci_hcd *ehci = hcd_to_ehci(hcd);
@@ -211,8 +214,8 @@ static int ehci_msm_pm_resume(struct device *dev)
 #endif
 
 static const struct dev_pm_ops ehci_msm_dev_pm_ops = {
-	.suspend         = ehci_msm_pm_suspend,
-	.resume          = ehci_msm_pm_resume,
+	SET_RUNTIME_PM_OPS(ehci_msm_runtime_suspend, ehci_msm_runtime_resume,
+			   NULL)
 };
 
 static const struct acpi_device_id msm_ehci_acpi_ids[] = {
@@ -262,4 +265,4 @@ module_exit(ehci_msm_cleanup);
 
 MODULE_DESCRIPTION(DRIVER_DESC);
 MODULE_ALIAS("platform:msm-ehci");
-MODULE_LICENSE("GPL");
+MODULE_LICENSE("GPL v2");

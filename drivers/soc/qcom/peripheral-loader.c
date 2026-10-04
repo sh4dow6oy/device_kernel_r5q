@@ -1,13 +1,6 @@
-/* Copyright (c) 2010-2020, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2010-2021, The Linux Foundation. All rights reserved.
  */
 
 #include <linux/module.h>
@@ -37,7 +30,6 @@
 #include <soc/qcom/secure_buffer.h>
 #include <linux/soc/qcom/smem.h>
 #include <linux/kthread.h>
-#include <soc/qcom/boot_stats.h>
 
 #include <linux/uaccess.h>
 #include <asm/setup.h>
@@ -45,8 +37,6 @@
 #include <trace/events/trace_msm_pil_event.h>
 
 #include "peripheral-loader.h"
-
-#include <linux/sec_debug.h>
 
 #define pil_err(desc, fmt, ...)						\
 	dev_err(desc->dev, "%s: " fmt, desc->name, ##__VA_ARGS__)
@@ -62,7 +52,6 @@
 #define PIL_NUM_DESC		16
 #define MAX_LEN 96
 #define NUM_OF_ENCRYPTED_KEY	3
-#define MINIDUMP_DEBUG_PROP "qcom,msm-imem-minidump-debug"
 
 #define pil_log(msg, desc)	\
 	do {			\
@@ -74,31 +63,9 @@
 
 
 static void __iomem *pil_info_base;
-#ifdef CONFIG_QCOM_MINIDUMP
-static void __iomem *minidump_debug;
 static struct md_global_toc *g_md_toc;
-#endif
 
 void *pil_ipc_log;
-
-#ifdef CONFIG_QCOM_MINIDUMP
-static void __iomem *map_prop(const char *propname)
-{
-	struct device_node *np = of_find_compatible_node(NULL, NULL, propname);
-	void __iomem *addr;
-
-	if (!np) {
-		pr_err("Unable to find DT property: %s\n", propname);
-		return NULL;
-	}
-
-	addr = of_iomap(np, 0);
-	if (!addr)
-		pr_err("Unable to map memory for DT property: %s\n", propname);
-
-	return addr;
-}
-#endif
 
 /**
  * proxy_timeout - Override for proxy vote timeouts
@@ -167,7 +134,7 @@ struct pil_seg {
  */
 struct pil_priv {
 	struct delayed_work proxy;
-	struct wakeup_source ws;
+	struct wakeup_source *ws;
 	char wname[32];
 	struct pil_desc *desc;
 	int num_segs;
@@ -183,7 +150,6 @@ struct pil_priv {
 	size_t region_size;
 };
 
-#ifdef CONFIG_QCOM_MINIDUMP
 /**
  * struct aux_minidumpinfo - State maintained for each aux minidump entry dumped
  * during SSR
@@ -322,7 +288,7 @@ static unsigned int prepare_minidump_segments(struct ramdump_segment *rd_segs,
 			rd_segs++;
 			val_segs++;
 		} else {
-			*ss_valid_seg_cnt = *ss_valid_seg_cnt - 1;
+			*ss_valid_seg_cnt--;
 		}
 
 		region_info++;
@@ -425,8 +391,8 @@ static int pil_do_minidump(struct pil_desc *desc, void *ramdump_dev)
 					      desc->num_aux_minidump_ids);
 
 	if (desc->minidump_as_elf32)
-		ret = do_elf_ramdump(ramdump_dev, ramdump_segs,
-				     ss_valid_seg_cnt);
+		ret = do_minidump_elf32(ramdump_dev, ramdump_segs,
+					ss_valid_seg_cnt);
 	else
 		ret = do_minidump(ramdump_dev, ramdump_segs, ss_valid_seg_cnt);
 	if (ret)
@@ -473,7 +439,6 @@ static void print_aux_minidump_tocs(struct pil_desc *desc)
 			 (unsigned int)toc->md_ss_smem_regions_baseptr);
 	}
 }
-#endif
 
 /**
  * pil_do_ramdump() - Ramdump an image
@@ -491,7 +456,6 @@ int pil_do_ramdump(struct pil_desc *desc,
 	struct pil_seg *seg;
 	int count = 0, ret;
 
-#ifdef CONFIG_QCOM_MINIDUMP
 	if (desc->minidump_ss) {
 		pr_debug("Minidump : md_ss_toc->md_ss_toc_init is 0x%x\n",
 			(unsigned int)desc->minidump_ss->md_ss_toc_init);
@@ -507,9 +471,6 @@ int pil_do_ramdump(struct pil_desc *desc,
 
 		print_aux_minidump_tocs(desc);
 
-		if (minidump_debug)
-			pr_info("Minidump debug cookie=%x\n",
-				__raw_readl(minidump_debug));
 		/**
 		 * Collect minidump if SS ToC is valid and segment table
 		 * is initialized in memory and encryption status is set.
@@ -529,7 +490,6 @@ int pil_do_ramdump(struct pil_desc *desc,
 		}
 	}
 	pr_debug("Continuing with full SSR dump for %s\n", desc->name);
-#endif
 	list_for_each_entry(seg, &priv->segs, list)
 		count++;
 
@@ -651,7 +611,7 @@ static void __pil_proxy_unvote(struct pil_priv *priv)
 
 	desc->ops->proxy_unvote(desc);
 	notify_proxy_unvote(desc->dev);
-	__pm_relax(&priv->ws);
+	__pm_relax(priv->ws);
 	module_put(desc->owner);
 
 }
@@ -670,10 +630,10 @@ static int pil_proxy_vote(struct pil_desc *desc)
 	struct pil_priv *priv = desc->priv;
 
 	if (desc->ops->proxy_vote) {
-		__pm_stay_awake(&priv->ws);
+		__pm_stay_awake(priv->ws);
 		ret = desc->ops->proxy_vote(desc);
 		if (ret)
-			__pm_relax(&priv->ws);
+			__pm_relax(priv->ws);
 	}
 
 	if (desc->proxy_unvote_irq)
@@ -816,11 +776,12 @@ static int pil_init_entry_addr(struct pil_priv *priv, const struct pil_mdt *mdt)
 }
 
 static int pil_alloc_region(struct pil_priv *priv, phys_addr_t min_addr,
-				phys_addr_t max_addr, size_t align)
+				phys_addr_t max_addr, size_t align,
+				size_t mdt_size)
 {
 	void *region;
 	size_t size = max_addr - min_addr;
-	size_t aligned_size;
+	size_t aligned_size = max(size, mdt_size);
 
 	/* Don't reallocate due to fragmentation concerns, just sanity check */
 	if (priv->region) {
@@ -860,7 +821,8 @@ static int pil_alloc_region(struct pil_priv *priv, phys_addr_t min_addr,
 	return 0;
 }
 
-static int pil_setup_region(struct pil_priv *priv, const struct pil_mdt *mdt)
+static int pil_setup_region(struct pil_priv *priv, const struct pil_mdt *mdt,
+				size_t mdt_size)
 {
 	const struct elf32_phdr *phdr;
 	phys_addr_t min_addr_r, min_addr_n, max_addr_r, max_addr_n, start, end;
@@ -905,7 +867,8 @@ static int pil_setup_region(struct pil_priv *priv, const struct pil_mdt *mdt)
 	max_addr_r = ALIGN(max_addr_r, SZ_4K);
 
 	if (relocatable) {
-		ret = pil_alloc_region(priv, min_addr_r, max_addr_r, align);
+		ret = pil_alloc_region(priv, min_addr_r, max_addr_r, align,
+					mdt_size);
 	} else {
 		priv->region_start = min_addr_n;
 		priv->region_end = max_addr_n;
@@ -936,19 +899,18 @@ static int pil_cmp_seg(void *priv, struct list_head *a, struct list_head *b)
 	return ret;
 }
 
-static int pil_init_mmap(struct pil_desc *desc, const struct pil_mdt *mdt)
+static int pil_init_mmap(struct pil_desc *desc, const struct pil_mdt *mdt,
+			size_t mdt_size)
 {
 	struct pil_priv *priv = desc->priv;
 	const struct elf32_phdr *phdr;
 	struct pil_seg *seg;
 	int i, ret;
 
-	ret = pil_setup_region(priv, mdt);
+	ret = pil_setup_region(priv, mdt, mdt_size);
 	if (ret)
 		return ret;
 
-	if (!strcmp(desc->name, "modem"))
-		place_marker("M - Modem Image Start Loading");
 
 	pil_info(desc, "loading from %pa to %pa\n", &priv->region_start,
 							&priv->region_end);
@@ -1197,8 +1159,8 @@ static int pil_load_segs(struct pil_desc *desc)
 	struct pil_seg *seg;
 	unsigned long *err_map;
 
-	err_map = kcalloc(BITS_TO_LONGS(priv->num_segs), sizeof(unsigned long),
-				GFP_KERNEL);
+	err_map = kcalloc(BITS_TO_LONGS(priv->num_segs), sizeof(*err_map),
+			  GFP_KERNEL);
 	if (!err_map)
 		return -ENOMEM;
 
@@ -1252,20 +1214,6 @@ out:
 	return ret;
 }
 
-static bool disable_cpboot = 0;
-
-static int __init get_cpboot_status(char *str)
-{
-	if(!strncmp(str,"disable",7))
-        	disable_cpboot = 1;
-	else
-		disable_cpboot = 0;
-
-	pr_warn("%s : disable_cpboot:%u\n",__func__,disable_cpboot);
-        return 0;
-}
-early_param("androidboot.cpboot", get_cpboot_status);
-
 /**
  * pil_boot() - Load a peripheral image into memory and boot it
  * @desc: descriptor from pil_desc_init()
@@ -1283,7 +1231,6 @@ int pil_boot(struct pil_desc *desc)
 	struct pil_priv *priv = desc->priv;
 	bool mem_protect = false;
 	bool hyp_assign = false;
-	bool secure_check_fail = false;
 
 	ret = pil_notify_aop(desc, "on");
 	if (ret < 0) {
@@ -1332,14 +1279,7 @@ int pil_boot(struct pil_desc *desc)
 		goto release_fw;
 	}
 
-	if(disable_cpboot){
-		if ((!strcmp(desc->name, "mba")) || (!strcmp(desc->name, "modem"))){
-			ret = -EIO;
-			goto release_fw;
-		}
-	}
-
-	ret = pil_init_mmap(desc, mdt);
+	ret = pil_init_mmap(desc, mdt, fw->size);
 	if (ret)
 		goto release_fw;
 
@@ -1352,10 +1292,10 @@ int pil_boot(struct pil_desc *desc)
 
 	pil_log("before_init_image", desc);
 	if (desc->ops->init_image)
-		ret = desc->ops->init_image(desc, fw->data, fw->size);
+		ret = desc->ops->init_image(desc, fw->data, fw->size,
+				priv->region_start, priv->region);
 	if (ret) {
 		pil_err(desc, "Initializing image failed(rc:%d)\n", ret);
-		secure_check_fail = true;
 		goto err_boot;
 	}
 
@@ -1426,17 +1366,13 @@ int pil_boot(struct pil_desc *desc)
 	}
 
 	pil_log("before_auth_reset", desc);
+	notify_before_auth_and_reset(desc->dev);
 	ret = desc->ops->auth_and_reset(desc);
 	if (ret) {
 		pil_err(desc, "Failed to bring out of reset(rc:%d)\n", ret);
-		secure_check_fail = true;
 		goto err_auth_and_reset;
 	}
 	pil_log("reset_done", desc);
-
-	if (!strcmp(desc->name, "modem"))
-		place_marker("M - Modem out of reset");
-
 	pil_info(desc, "Brought out of reset\n");
 	desc->modem_ssr = false;
 err_auth_and_reset:
@@ -1474,11 +1410,6 @@ out:
 		}
 		pil_release_mmap(desc);
 		pil_notify_aop(desc, "off");
-
-		if (secure_check_fail && (ret == -EINVAL) &&
-		    (!strcmp(desc->name, "mba") ||
-		     !strcmp(desc->name, "modem")))
-			sec_peripheral_secure_check_fail();
 	}
 	return ret;
 }
@@ -1541,7 +1472,6 @@ bool is_timeout_disabled(void)
 	return disable_timeouts;
 }
 
-#ifdef CONFIG_QCOM_MINIDUMP
 static int collect_aux_minidump_ids(struct pil_desc *desc)
 {
 	u32 id;
@@ -1584,7 +1514,6 @@ static int collect_aux_minidump_ids(struct pil_desc *desc)
 
 	return 0;
 }
-#endif
 
 /**
  * pil_desc_init() - Initialize a pil descriptor
@@ -1599,12 +1528,10 @@ int pil_desc_init(struct pil_desc *desc)
 {
 	struct pil_priv *priv;
 	void __iomem *addr;
+	void *ss_toc_addr;
 	int ret;
 	char buf[sizeof(priv->info->name)];
-#ifdef CONFIG_QCOM_MINIDUMP
-	void *ss_toc_addr;
 	struct device_node *ofnode = desc->dev->of_node;
-#endif
 
 	if (WARN(desc->ops->proxy_unvote && !desc->ops->proxy_vote,
 				"Invalid proxy voting. Ignoring\n"))
@@ -1627,8 +1554,6 @@ int pil_desc_init(struct pil_desc *desc)
 		strlcpy(buf, desc->name, sizeof(buf));
 		__iowrite32_copy(priv->info->name, buf, sizeof(buf) / 4);
 	}
-
-#ifdef CONFIG_QCOM_MINIDUMP
 	if (of_property_read_u32(ofnode, "qcom,minidump-id",
 		&desc->minidump_id))
 		pr_err("minidump-id not found for %s\n", desc->name);
@@ -1645,7 +1570,6 @@ int pil_desc_init(struct pil_desc *desc)
 				       desc->name);
 		}
 	}
-#endif
 
 	ret = pil_parse_devicetree(desc);
 	if (ret)
@@ -1672,7 +1596,13 @@ int pil_desc_init(struct pil_desc *desc)
 	}
 
 	snprintf(priv->wname, sizeof(priv->wname), "pil-%s", desc->name);
-	wakeup_source_init(&priv->ws, priv->wname);
+
+	priv->ws = wakeup_source_register(desc->dev, priv->wname);
+	if (!priv->ws) {
+		ret = -ENOMEM;
+		goto err;
+	}
+
 	INIT_DELAYED_WORK(&priv->proxy, pil_proxy_unvote_work);
 	INIT_LIST_HEAD(&priv->segs);
 
@@ -1683,19 +1613,15 @@ int pil_desc_init(struct pil_desc *desc)
 	if (!desc->unmap_fw_mem)
 		desc->unmap_fw_mem = unmap_fw_mem;
 
-#ifdef CONFIG_QCOM_MINIDUMP
 	desc->minidump_as_elf32 = of_property_read_bool(
 					ofnode, "qcom,minidump-as-elf32");
-#endif
 
 	return 0;
 err_parse_dt:
 	ida_simple_remove(&pil_ida, priv->id);
 err:
-#ifdef CONFIG_QCOM_MINIDUMP
 	kfree(desc->aux_minidump);
 	kfree(desc->aux_minidump_ids);
-#endif
 	kfree(priv);
 	return ret;
 }
@@ -1712,7 +1638,7 @@ void pil_desc_release(struct pil_desc *desc)
 	if (priv) {
 		ida_simple_remove(&pil_ida, priv->id);
 		flush_delayed_work(&priv->proxy);
-		wakeup_source_trash(&priv->ws);
+		wakeup_source_unregister(priv->ws);
 	}
 	desc->priv = NULL;
 	kfree(priv);
@@ -1741,9 +1667,7 @@ static int __init msm_pil_init(void)
 	struct device_node *np;
 	struct resource res;
 	int i;
-#ifdef CONFIG_QCOM_MINIDUMP
 	size_t size;
-#endif
 
 	np = of_find_compatible_node(NULL, NULL, "qcom,msm-imem-pil");
 	if (!np) {
@@ -1766,7 +1690,6 @@ static int __init msm_pil_init(void)
 	for (i = 0; i < resource_size(&res)/sizeof(u32); i++)
 		writel_relaxed(0, pil_info_base + (i * sizeof(u32)));
 
-#ifdef CONFIG_QCOM_MINIDUMP
 	/* Get Global minidump ToC*/
 	g_md_toc = qcom_smem_get(QCOM_SMEM_HOST_ANY, SBL_MINIDUMP_SMEM_ID,
 				 &size);
@@ -1775,9 +1698,6 @@ static int __init msm_pil_init(void)
 		pr_err("SMEM is not initialized.\n");
 		return -EPROBE_DEFER;
 	}
-
-	minidump_debug = map_prop(MINIDUMP_DEBUG_PROP);
-#endif
 
 	pil_wq = alloc_workqueue("pil_workqueue", WQ_HIGHPRI | WQ_UNBOUND, 0);
 	if (!pil_wq)
@@ -1798,11 +1718,6 @@ static void __exit msm_pil_exit(void)
 	unregister_pm_notifier(&pil_pm_notifier);
 	if (pil_info_base)
 		iounmap(pil_info_base);
-
-#ifdef CONFIG_QCOM_MINIDUMP
-	if (minidump_debug)
-		iounmap(minidump_debug);
-#endif
 }
 module_exit(msm_pil_exit);
 

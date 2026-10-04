@@ -41,7 +41,6 @@
 #include <linux/rbtree.h>
 #include <linux/spinlock.h>
 #include <linux/delay.h>
-#include <linux/overflow.h>
 
 #include "qib.h"
 #include "qib_user_sdma.h"

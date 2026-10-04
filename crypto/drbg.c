@@ -100,11 +100,6 @@
 #include <crypto/drbg.h>
 #include <linux/kernel.h>
 
-#ifdef CONFIG_CRYPTO_FIPS
-#include "internal.h"
-#define ENTROPY_BLOCK_LEN 20
-#endif
-
 /***************************************************************
  * Backend cipher definitions available to DRBG
  ***************************************************************/
@@ -173,41 +168,25 @@ static const struct drbg_core drbg_cores[] = {
 		.statelen = 20, /* block length of cipher */
 		.blocklen_bytes = 20,
 		.cra_name = "hmac_sha1",
-#ifdef CONFIG_CRYPTO_FIPS
-		.backend_cra_name = "hmac(sha1-ce)",
-#else
 		.backend_cra_name = "hmac(sha1)",
-#endif
 	}, {
 		.flags = DRBG_HMAC | DRBG_STRENGTH256,
 		.statelen = 48, /* block length of cipher */
 		.blocklen_bytes = 48,
 		.cra_name = "hmac_sha384",
-#ifdef CONFIG_CRYPTO_FIPS
-		.backend_cra_name = "hmac(sha384-generic)",
-#else
 		.backend_cra_name = "hmac(sha384)",
-#endif
 	}, {
 		.flags = DRBG_HMAC | DRBG_STRENGTH256,
 		.statelen = 64, /* block length of cipher */
 		.blocklen_bytes = 64,
 		.cra_name = "hmac_sha512",
-#ifdef CONFIG_CRYPTO_FIPS
-		.backend_cra_name = "hmac(sha512-generic)",
-#else
 		.backend_cra_name = "hmac(sha512)",
-#endif
 	}, {
 		.flags = DRBG_HMAC | DRBG_STRENGTH256,
 		.statelen = 32, /* block length of cipher */
 		.blocklen_bytes = 32,
 		.cra_name = "hmac_sha256",
-#ifdef CONFIG_CRYPTO_FIPS
-		.backend_cra_name = "hmac(sha256-ce)",
-#else
 		.backend_cra_name = "hmac(sha256)",
-#endif
 	},
 #endif /* CONFIG_CRYPTO_DRBG_HMAC */
 };
@@ -333,8 +312,7 @@ static int drbg_fini_sym_kernel(struct drbg_state *drbg);
 static int drbg_kcapi_sym_ctr(struct drbg_state *drbg,
 			      u8 *inbuf, u32 inbuflen,
 			      u8 *outbuf, u32 outlen);
-#define DRBG_CTR_NULL_LEN 128
-#define DRBG_OUTSCRATCHLEN DRBG_CTR_NULL_LEN
+#define DRBG_OUTSCRATCHLEN 256
 
 /* BCC function for CTR DRBG as defined in 10.4.3 */
 static int drbg_ctr_bcc(struct drbg_state *drbg,
@@ -619,23 +597,15 @@ static int drbg_ctr_generate(struct drbg_state *drbg,
 	int ret;
 	int len = min_t(int, buflen, INT_MAX);
 
-#ifdef CONFIG_CRYPTO_FIPS
-	if (unlikely(in_fips_err())) {
-		pr_err("FIPS : drbg.c:%s FIPS in Error!!!\n", __func__);
-		return -EACCES;
-	}
-#endif
-
 	/* 10.2.1.5.2 step 2 */
 	if (addtl && !list_empty(addtl)) {
 		ret = drbg_ctr_update(drbg, addtl, 2);
 		if (ret)
-			return 0;
+			return ret;
 	}
 
 	/* 10.2.1.5.2 step 4.1 */
-	ret = drbg_kcapi_sym_ctr(drbg, drbg->ctr_null_value, DRBG_CTR_NULL_LEN,
-				 buf, len);
+	ret = drbg_kcapi_sym_ctr(drbg, NULL, 0, buf, len);
 	if (ret)
 		return ret;
 
@@ -741,13 +711,6 @@ static int drbg_hmac_generate(struct drbg_state *drbg,
 	int ret = 0;
 	struct drbg_string data;
 	LIST_HEAD(datalist);
-
-#ifdef CONFIG_CRYPTO_FIPS
-	if (unlikely(in_fips_err())) {
-		pr_err("FIPS : drbg.c:%s FIPS in Error!!!\n", __func__);
-		return -EACCES;
-	}
-#endif
 
 	/* 10.1.2.5 step 2 */
 	if (addtl && !list_empty(addtl)) {
@@ -979,13 +942,6 @@ static int drbg_hash_hashgen(struct drbg_state *drbg,
 	struct drbg_string data;
 	LIST_HEAD(datalist);
 
-#ifdef CONFIG_CRYPTO_FIPS
-	if (unlikely(in_fips_err())) {
-		pr_err("FIPS : drbg.c:%s FIPS in Error!!!\n", __func__);
-		return -EACCES;
-	}
-#endif
-
 	/* 10.1.1.4 step hashgen 2 */
 	memcpy(src, drbg->V, drbg_statelen(drbg));
 
@@ -1078,70 +1034,6 @@ static const struct drbg_state_ops drbg_hash_ops = {
  * Functions common for DRBG implementations
  ******************************************************************/
 
-#ifdef CONFIG_CRYPTO_FIPS
-#define NUM_MAX_READ_COUNT 16
-static int get_blocking_random_bytes(u8 *entropy, unsigned int len)
-{
-	struct file *filp = NULL;
-	u8 *buf = entropy;
-	int length_req = len;
-	int length_read = 0;
-	int length_ret = 0;
-	int i = NUM_MAX_READ_COUNT;
-	mm_segment_t oldfs;
-
-	if (!buf || length_req == 0)
-		return -EINVAL;
-
-	filp = filp_open("/dev/random", O_RDONLY, 0);
-	if (IS_ERR(filp)) {
-		pr_info("FIPS : DRBG cannot open blocking pool as entropy\n");
-		return -ENOENT;
-	}
-
-	oldfs = get_fs();
-	set_fs(KERNEL_DS);
-
-	memset((void *)buf, 0, length_req);
-
-	do {
-		length_ret = (int)filp->f_op->read(filp, &(buf[length_read]), length_req-length_read,
-											&filp->f_pos);
-		if (length_ret > 0)
-			length_read += length_ret;
-		if (length_read < length_req)
-			i--;
-		else
-			break;
-	} while (i);
-	set_fs(oldfs);
-
-	if (filp)
-		filp_close(filp, NULL);
-
-	if (length_read < length_req) {
-		pr_info("FIPS : DRBG cannot collect enough entropy\n");
-		return -EAGAIN;
-	}
-	return 0;
-}
-
-static void drbg_read_entropy(struct drbg_state *drbg, u8 *entropy, unsigned int len)
-{
-	int ret = -1;
-
-	// Try /dev/random first
-	ret = get_blocking_random_bytes(entropy, len);
-	if (ret < 0) {
-		// Reading in kernel /dev/urandom, never fails.
-		pr_info("FIPS : DRBG uses non-blocking pool\n");
-		get_random_bytes(entropy, len);
-		drbg->hw_entropy = false;
-	} else
-		drbg->hw_entropy = true;
-}
-#endif
-
 static inline int __drbg_seed(struct drbg_state *drbg, struct list_head *seed,
 			      int reseed, enum drbg_seed_state new_seed_state)
 {
@@ -1203,11 +1095,6 @@ static int drbg_seed_from_random(struct drbg_state *drbg)
 
 	BUG_ON(!entropylen);
 	BUG_ON(entropylen > sizeof(entropy));
-#ifdef CONFIG_CRYPTO_FIPS
-	drbg_read_entropy(drbg, entropy, entropylen);
-#else
-	get_random_bytes(entropy, entropylen);
-#endif
 
 	drbg_string_fill(&data, entropy, entropylen);
 	list_add_tail(&data.list, &seedlist);
@@ -1239,13 +1126,6 @@ static int drbg_seed(struct drbg_state *drbg, struct drbg_string *pers,
 {
 	int ret;
 	unsigned char entropy[((32 + 16) * 2)];
-
-#ifdef CONFIG_CRYPTO_FIPS
-	unsigned char *p;
-	unsigned char buf[((32 + 16) * 2) + 4 + ENTROPY_BLOCK_LEN];
-	unsigned int buflen;
-#endif
-
 	unsigned int entropylen = drbg_sec_strength(drbg->core->flags);
 	struct drbg_string data1;
 	LIST_HEAD(seedlist);
@@ -1276,22 +1156,6 @@ static int drbg_seed(struct drbg_state *drbg, struct drbg_string *pers,
 			entropylen = ((entropylen + 1) / 2) * 3;
 		BUG_ON((entropylen * 2) > sizeof(entropy));
 
-#ifdef CONFIG_CRYPTO_FIPS
-		buflen = (((entropylen + ENTROPY_BLOCK_LEN - 1) / ENTROPY_BLOCK_LEN) + 1) * ENTROPY_BLOCK_LEN;
-		/* Get seed from /dev/random if available, o.w /dev/urandom */
-		drbg_read_entropy(drbg, buf, buflen);
-#ifdef CONFIG_CRYPTO_FIPS_FUNC_TEST
-		if (!strcmp("ndrng_crngt", get_fips_functest_mode()))
-			memcpy(buf, buf + ENTROPY_BLOCK_LEN, ENTROPY_BLOCK_LEN);
-#endif
-		for (p = buf; p < buf + buflen - ENTROPY_BLOCK_LEN; p += ENTROPY_BLOCK_LEN) {
-			if (!memcmp(p, p + ENTROPY_BLOCK_LEN, ENTROPY_BLOCK_LEN)) {
-				pr_err("FIPS : DRBG - CRNGT failures on reading entropy\n");
-				return -EINVAL;
-			}
-		}
-		memcpy(entropy, buf + ENTROPY_BLOCK_LEN, entropylen);
-#else
 		/* Get seed from in-kernel /dev/urandom */
 		if (!rng_is_initialized())
 			new_seed_state = DRBG_SEED_STATE_PARTIAL;
@@ -1299,7 +1163,7 @@ static int drbg_seed(struct drbg_state *drbg, struct drbg_string *pers,
 		ret = drbg_get_random_bytes(drbg, entropy, entropylen);
 		if (ret)
 			goto out;
-#endif
+
 		if (!drbg->jent) {
 			drbg_string_fill(&data1, entropy, entropylen);
 			pr_devel("DRBG: (re)seeding with %u bytes of entropy\n",
@@ -1648,6 +1512,14 @@ static int drbg_prepare_hrng(struct drbg_state *drbg)
 		return 0;
 
 	drbg->jent = crypto_alloc_rng("jitterentropy_rng", 0, 0);
+	if (IS_ERR(drbg->jent)) {
+		const int err = PTR_ERR(drbg->jent);
+
+		drbg->jent = NULL;
+		if (fips_enabled)
+			return err;
+		pr_info("DRBG: Continuing without Jitter RNG\n");
+	}
 
 	return 0;
 }
@@ -1693,9 +1565,6 @@ static int drbg_instantiate(struct drbg_state *drbg, struct drbg_string *pers,
 		drbg->core = &drbg_cores[coreref];
 		drbg->pr = pr;
 		drbg->seeded = DRBG_SEED_STATE_UNSEEDED;
-#ifdef CONFIG_CRYPTO_FIPS
-		drbg->hw_entropy = false;
-#endif
 		drbg->reseed_threshold = drbg_max_requests(drbg);
 
 		ret = drbg_alloc_state(drbg);
@@ -1705,14 +1574,6 @@ static int drbg_instantiate(struct drbg_state *drbg, struct drbg_string *pers,
 		ret = drbg_prepare_hrng(drbg);
 		if (ret)
 			goto free_everything;
-
-		if (IS_ERR(drbg->jent)) {
-			ret = PTR_ERR(drbg->jent);
-			drbg->jent = NULL;
-			if (fips_enabled || ret != -ENOENT)
-				goto free_everything;
-			pr_info("DRBG: Continuing without Jitter RNG\n");
-		}
 
 		reseed = false;
 	}
@@ -1859,23 +1720,10 @@ static int drbg_fini_sym_kernel(struct drbg_state *drbg)
 		skcipher_request_free(drbg->ctr_req);
 	drbg->ctr_req = NULL;
 
-	kfree(drbg->ctr_null_value_buf);
-	drbg->ctr_null_value = NULL;
-
 	kfree(drbg->outscratchpadbuf);
 	drbg->outscratchpadbuf = NULL;
 
 	return 0;
-}
-
-static void drbg_skcipher_cb(struct crypto_async_request *req, int error)
-{
-	struct drbg_state *drbg = req->data;
-
-	if (error == -EINPROGRESS)
-		return;
-	drbg->ctr_async_err = error;
-	complete(&drbg->ctr_completion);
 }
 
 static int drbg_init_sym_kernel(struct drbg_state *drbg)
@@ -1908,7 +1756,7 @@ static int drbg_init_sym_kernel(struct drbg_state *drbg)
 		return PTR_ERR(sk_tfm);
 	}
 	drbg->ctr_handle = sk_tfm;
-	init_completion(&drbg->ctr_completion);
+	crypto_init_wait(&drbg->ctr_wait);
 
 	req = skcipher_request_alloc(sk_tfm, GFP_KERNEL);
 	if (!req) {
@@ -1917,19 +1765,11 @@ static int drbg_init_sym_kernel(struct drbg_state *drbg)
 		return -ENOMEM;
 	}
 	drbg->ctr_req = req;
-	skcipher_request_set_callback(req, CRYPTO_TFM_REQ_MAY_BACKLOG,
-					drbg_skcipher_cb, drbg);
+	skcipher_request_set_callback(req, CRYPTO_TFM_REQ_MAY_BACKLOG |
+						CRYPTO_TFM_REQ_MAY_SLEEP,
+					crypto_req_done, &drbg->ctr_wait);
 
 	alignmask = crypto_skcipher_alignmask(sk_tfm);
-	drbg->ctr_null_value_buf = kzalloc(DRBG_CTR_NULL_LEN + alignmask,
-					   GFP_KERNEL);
-	if (!drbg->ctr_null_value_buf) {
-		drbg_fini_sym_kernel(drbg);
-		return -ENOMEM;
-	}
-	drbg->ctr_null_value = (u8 *)PTR_ALIGN(drbg->ctr_null_value_buf,
-					       alignmask + 1);
-
 	drbg->outscratchpadbuf = kmalloc(DRBG_OUTSCRATCHLEN + alignmask,
 					 GFP_KERNEL);
 	if (!drbg->outscratchpadbuf) {
@@ -1938,6 +1778,9 @@ static int drbg_init_sym_kernel(struct drbg_state *drbg)
 	}
 	drbg->outscratchpad = (u8 *)PTR_ALIGN(drbg->outscratchpadbuf,
 					      alignmask + 1);
+
+	sg_init_table(&drbg->sg_in, 1);
+	sg_init_one(&drbg->sg_out, drbg->outscratchpad, DRBG_OUTSCRATCHLEN);
 
 	return alignmask;
 }
@@ -1967,35 +1810,35 @@ static int drbg_kcapi_sym_ctr(struct drbg_state *drbg,
 			      u8 *inbuf, u32 inlen,
 			      u8 *outbuf, u32 outlen)
 {
-	struct scatterlist sg_in, sg_out;
+	struct scatterlist *sg_in = &drbg->sg_in, *sg_out = &drbg->sg_out;
+	u32 scratchpad_use = min_t(u32, outlen, DRBG_OUTSCRATCHLEN);
 	int ret;
 
-	sg_init_one(&sg_in, inbuf, inlen);
-	sg_init_one(&sg_out, drbg->outscratchpad, DRBG_OUTSCRATCHLEN);
+	if (inbuf) {
+		/* Use caller-provided input buffer */
+		sg_set_buf(sg_in, inbuf, inlen);
+	} else {
+		/* Use scratchpad for in-place operation */
+		inlen = scratchpad_use;
+		memset(drbg->outscratchpad, 0, scratchpad_use);
+		sg_set_buf(sg_in, drbg->outscratchpad, scratchpad_use);
+	}
 
 	while (outlen) {
 		u32 cryptlen = min3(inlen, outlen, (u32)DRBG_OUTSCRATCHLEN);
 
 		/* Output buffer may not be valid for SGL, use scratchpad */
-		skcipher_request_set_crypt(drbg->ctr_req, &sg_in, &sg_out,
+		skcipher_request_set_crypt(drbg->ctr_req, sg_in, sg_out,
 					   cryptlen, drbg->V);
-		ret = crypto_skcipher_encrypt(drbg->ctr_req);
-		switch (ret) {
-		case 0:
-			break;
-		case -EINPROGRESS:
-		case -EBUSY:
-			wait_for_completion(&drbg->ctr_completion);
-			if (!drbg->ctr_async_err) {
-				reinit_completion(&drbg->ctr_completion);
-				break;
-			}
-		default:
+		ret = crypto_wait_req(crypto_skcipher_encrypt(drbg->ctr_req),
+					&drbg->ctr_wait);
+		if (ret)
 			goto out;
-		}
-		init_completion(&drbg->ctr_completion);
+
+		crypto_init_wait(&drbg->ctr_wait);
 
 		memcpy(outbuf, drbg->outscratchpad, cryptlen);
+		memzero_explicit(drbg->outscratchpad, cryptlen);
 
 		outlen -= cryptlen;
 		outbuf += cryptlen;
@@ -2003,7 +1846,6 @@ static int drbg_kcapi_sym_ctr(struct drbg_state *drbg,
 	ret = 0;
 
 out:
-	memzero_explicit(drbg->outscratchpad, DRBG_OUTSCRATCHLEN);
 	return ret;
 }
 #endif /* CONFIG_CRYPTO_DRBG_CTR */
@@ -2225,7 +2067,7 @@ static inline void __init drbg_fill_array(struct rng_alg *alg,
 	 * it is selected.
 	 */
 	if (fips_enabled)
-		alg->base.cra_priority += 200;
+		alg->base.cra_priority += 2000;
 
 	alg->base.cra_ctxsize 	= sizeof(struct drbg_state);
 	alg->base.cra_module	= THIS_MODULE;

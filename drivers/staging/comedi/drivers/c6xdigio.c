@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * c6xdigio.c
  * Hardware driver for Mechatronic Systems Inc. C6x_DIGIO DSP daughter card.
@@ -5,16 +6,6 @@
  *
  * COMEDI - Linux Control and Measurement Device Interface
  * Copyright (C) 1999 Dan Block
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 /*
@@ -259,9 +250,6 @@ static int c6xdigio_attach(struct comedi_device *dev,
 	if (ret)
 		return ret;
 
-	/*  Make sure that PnP ports get activated */
-	pnp_register_driver(&c6xdigio_pnp_driver);
-
 	s = &dev->subdevices[0];
 	/* pwm output subdevice */
 	s->type		= COMEDI_SUBD_PWM;
@@ -288,19 +276,46 @@ static int c6xdigio_attach(struct comedi_device *dev,
 	return 0;
 }
 
-static void c6xdigio_detach(struct comedi_device *dev)
-{
-	comedi_legacy_detach(dev);
-	pnp_unregister_driver(&c6xdigio_pnp_driver);
-}
-
 static struct comedi_driver c6xdigio_driver = {
 	.driver_name	= "c6xdigio",
 	.module		= THIS_MODULE,
 	.attach		= c6xdigio_attach,
-	.detach		= c6xdigio_detach,
+	.detach		= comedi_legacy_detach,
 };
-module_comedi_driver(c6xdigio_driver);
+
+static bool c6xdigio_pnp_registered = false;
+
+static int __init c6xdigio_module_init(void)
+{
+	int ret;
+
+	ret = comedi_driver_register(&c6xdigio_driver);
+	if (ret)
+		return ret;
+
+	if (IS_ENABLED(CONFIG_PNP)) {
+		/*  Try to activate the PnP ports */
+		ret = pnp_register_driver(&c6xdigio_pnp_driver);
+		if (ret) {
+			pr_warn("failed to register pnp driver - err %d\n",
+				ret);
+			ret = 0;	/* ignore the error. */
+		} else {
+			c6xdigio_pnp_registered = true;
+		}
+	}
+
+	return 0;
+}
+module_init(c6xdigio_module_init);
+
+static void __exit c6xdigio_module_exit(void)
+{
+	if (c6xdigio_pnp_registered)
+		pnp_unregister_driver(&c6xdigio_pnp_driver);
+	comedi_driver_unregister(&c6xdigio_driver);
+}
+module_exit(c6xdigio_module_exit);
 
 MODULE_AUTHOR("Comedi http://www.comedi.org");
 MODULE_DESCRIPTION("Comedi driver for the C6x_DIGIO DSP daughter card");

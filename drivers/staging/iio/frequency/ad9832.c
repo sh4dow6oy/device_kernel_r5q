@@ -153,7 +153,7 @@ static int ad9832_write_frequency(struct ad9832_state *st,
 static int ad9832_write_phase(struct ad9832_state *st,
 			      unsigned long addr, unsigned long phase)
 {
-	if (phase > BIT(AD9832_PHASE_BITS))
+	if (phase >= BIT(AD9832_PHASE_BITS))
 		return -EINVAL;
 
 	st->phase_data[0] = cpu_to_be16((AD9832_CMD_PHA8BITSW << CMD_SHIFT) |
@@ -290,7 +290,6 @@ static const struct attribute_group ad9832_attribute_group = {
 
 static const struct iio_info ad9832_info = {
 	.attrs = &ad9832_attribute_group,
-	.driver_module = THIS_MODULE,
 };
 
 static int ad9832_probe(struct spi_device *spi)

@@ -48,11 +48,8 @@ static int snd_jack_dev_disconnect(struct snd_device *device)
 #ifdef CONFIG_SND_JACK_INPUT_DEV
 	struct snd_jack *jack = device->device_data;
 
-	mutex_lock(&jack->input_dev_lock);
-	if (!jack->input_dev) {
-		mutex_unlock(&jack->input_dev_lock);
+	if (!jack->input_dev)
 		return 0;
-	}
 
 	/* If the input device is registered with the input subsystem
 	 * then we need to use a different deallocator. */
@@ -61,7 +58,6 @@ static int snd_jack_dev_disconnect(struct snd_device *device)
 	else
 		input_free_device(jack->input_dev);
 	jack->input_dev = NULL;
-	mutex_unlock(&jack->input_dev_lock);
 #endif /* CONFIG_SND_JACK_INPUT_DEV */
 	return 0;
 }
@@ -100,11 +96,8 @@ static int snd_jack_dev_register(struct snd_device *device)
 	snprintf(jack->name, sizeof(jack->name), "%s %s",
 		 card->shortname, jack->id);
 
-	mutex_lock(&jack->input_dev_lock);
-	if (!jack->input_dev) {
-		mutex_unlock(&jack->input_dev_lock);
+	if (!jack->input_dev)
 		return 0;
-	}
 
 	jack->input_dev->name = jack->name;
 
@@ -129,7 +122,6 @@ static int snd_jack_dev_register(struct snd_device *device)
 	if (err == 0)
 		jack->registered = 1;
 
-	mutex_unlock(&jack->input_dev_lock);
 	return err;
 }
 #endif /* CONFIG_SND_JACK_INPUT_DEV */
@@ -250,11 +242,9 @@ int snd_jack_new(struct snd_card *card, const char *id, int type,
 		return -ENOMEM;
 	}
 
-#ifdef CONFIG_SND_JACK_INPUT_DEV
-	mutex_init(&jack->input_dev_lock);
-
-	/* don't create input device for phantom jack */
+	/* don't creat input device for phantom jack */
 	if (!phantom_jack) {
+#ifdef CONFIG_SND_JACK_INPUT_DEV
 		int i;
 
 		jack->input_dev = input_allocate_device();
@@ -272,8 +262,8 @@ int snd_jack_new(struct snd_card *card, const char *id, int type,
 				input_set_capability(jack->input_dev, EV_SW,
 						     jack_switch_types[i]);
 
-	}
 #endif /* CONFIG_SND_JACK_INPUT_DEV */
+	}
 
 	err = snd_device_new(card, SNDRV_DEV_JACK, jack, &ops);
 	if (err < 0)
@@ -313,14 +303,10 @@ EXPORT_SYMBOL(snd_jack_new);
 void snd_jack_set_parent(struct snd_jack *jack, struct device *parent)
 {
 	WARN_ON(jack->registered);
-	mutex_lock(&jack->input_dev_lock);
-	if (!jack->input_dev) {
-		mutex_unlock(&jack->input_dev_lock);
+	if (!jack->input_dev)
 		return;
-	}
 
 	jack->input_dev->dev.parent = parent;
-	mutex_unlock(&jack->input_dev_lock);
 }
 EXPORT_SYMBOL(snd_jack_set_parent);
 
@@ -331,7 +317,7 @@ EXPORT_SYMBOL(snd_jack_set_parent);
  * @type:    Jack report type for this key
  * @keytype: Input layer key type to be reported
  *
- * Map a SND_JACK_BTN_ button type to an input layer key, allowing
+ * Map a SND_JACK_BTN_* button type to an input layer key, allowing
  * reporting of keys on accessories via the jack abstraction.  If no
  * mapping is provided but keys are enabled in the jack type then
  * BTN_n numeric buttons will be reported.
@@ -368,8 +354,6 @@ EXPORT_SYMBOL(snd_jack_set_key);
 
 /**
  * snd_jack_report - Report the current status of a jack
- * Note: This function uses mutexes and should be called from a
- * context which can sleep (such as a workqueue).
  *
  * @jack:   The jack to report status for
  * @status: The current status of the jack
@@ -378,7 +362,6 @@ void snd_jack_report(struct snd_jack *jack, int status)
 {
 	struct snd_jack_kctl *jack_kctl;
 #ifdef CONFIG_SND_JACK_INPUT_DEV
-	struct input_dev *idev;
 	int i;
 #endif
 
@@ -390,28 +373,26 @@ void snd_jack_report(struct snd_jack *jack, int status)
 					    status & jack_kctl->mask_bits);
 
 #ifdef CONFIG_SND_JACK_INPUT_DEV
-	idev = input_get_device(jack->input_dev);
-	if (!idev)
+	if (!jack->input_dev)
 		return;
 
 	for (i = 0; i < ARRAY_SIZE(jack->key); i++) {
 		int testbit = SND_JACK_BTN_0 >> i;
 
 		if (jack->type & testbit)
-			input_report_key(idev, jack->key[i],
+			input_report_key(jack->input_dev, jack->key[i],
 					 status & testbit);
 	}
 
 	for (i = 0; i < ARRAY_SIZE(jack_switch_types); i++) {
 		int testbit = 1 << i;
 		if (jack->type & testbit)
-			input_report_switch(idev,
+			input_report_switch(jack->input_dev,
 					    jack_switch_types[i],
 					    status & testbit);
 	}
 
-	input_sync(idev);
-	input_put_device(idev);
+	input_sync(jack->input_dev);
 #endif /* CONFIG_SND_JACK_INPUT_DEV */
 }
 EXPORT_SYMBOL(snd_jack_report);

@@ -1,15 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2019, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
  */
 
 #include <dsp/q6audio-v2.h>
@@ -176,10 +167,7 @@ static ssize_t q6afe_initial_cal_show(struct device *dev,
 				      struct device_attribute *attr,
 				      char *buf)
 {
-	//return snprintf(buf, BUF_SZ, "%d\n", afe_get_spk_initial_cal());
-
-	/* customizing code to support samsung amp calibration routine */
-	return snprintf(buf, BUF_SZ, "%s\n", afe_get_spk_initial_cal() ? "Enabled" : "Disabled");
+	return snprintf(buf, BUF_SZ, "%d\n", afe_get_spk_initial_cal());
 }
 
 static ssize_t q6afe_initial_cal_store(struct device *dev,
@@ -199,16 +187,14 @@ static ssize_t q6afe_initial_cal_store(struct device *dev,
 	return size;
 }
 
-static DEVICE_ATTR(initial_cal, 0664,
+static DEVICE_ATTR(initial_cal, 0644,
 	q6afe_initial_cal_show, q6afe_initial_cal_store);
 
 static ssize_t q6afe_v_vali_flag_show(struct device *dev,
 				      struct device_attribute *attr,
 				      char *buf)
 {
-	//return snprintf(buf, BUF_SZ, "%d\n", afe_get_spk_v_vali_flag());
-	/* customizing code to support samsung amp validation routine */
-	return snprintf(buf, BUF_SZ, "%s\n", afe_get_spk_v_vali_flag() ? "Enabled" : "Disabled");
+	return snprintf(buf, BUF_SZ, "%d\n", afe_get_spk_v_vali_flag());
 }
 
 static ssize_t q6afe_v_vali_flag_store(struct device *dev,

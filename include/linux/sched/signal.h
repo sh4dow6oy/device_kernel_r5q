@@ -8,6 +8,7 @@
 #include <linux/sched/jobctl.h>
 #include <linux/sched/task.h>
 #include <linux/cred.h>
+#include <linux/android_kabi.h>
 #include <linux/mm.h>
 #include <asm/ptrace.h>
 
@@ -71,6 +72,11 @@ struct thread_group_cputimer {
 	bool checking_timer;
 };
 
+struct multiprocess_signals {
+	sigset_t signal;
+	struct hlist_node node;
+};
+
 /*
  * NOTE! "signal_struct" does not have its own
  * locking, because a shared signal_struct always
@@ -91,6 +97,9 @@ struct signal_struct {
 
 	/* shared signal handling: */
 	struct sigpending	shared_pending;
+
+	/* For collecting multiprocess signals during fork */
+	struct hlist_head	multiprocess;
 
 	/* thread group exit support */
 	int			group_exit_code;
@@ -121,7 +130,7 @@ struct signal_struct {
 #ifdef CONFIG_POSIX_TIMERS
 
 	/* POSIX.1b Interval Timers */
-	unsigned int		next_posix_timer_id;
+	int			posix_timer_id;
 	struct list_head	posix_timers;
 
 	/* ITIMER_REAL timer for the process */
@@ -226,6 +235,10 @@ struct signal_struct {
 	struct mutex cred_guard_mutex;	/* guard against foreign influences on
 					 * credential calculations
 					 * (notably. ptrace) */
+	ANDROID_KABI_RESERVE(1);
+	ANDROID_KABI_RESERVE(2);
+	ANDROID_KABI_RESERVE(3);
+	ANDROID_KABI_RESERVE(4);
 } __randomize_layout;
 
 /*
@@ -288,8 +301,36 @@ static inline void kernel_signal_stop(void)
 
 	schedule();
 }
+#ifdef __ARCH_SI_TRAPNO
+# define ___ARCH_SI_TRAPNO(_a1) , _a1
+#else
+# define ___ARCH_SI_TRAPNO(_a1)
+#endif
+#ifdef __ia64__
+# define ___ARCH_SI_IA64(_a1, _a2, _a3) , _a1, _a2, _a3
+#else
+# define ___ARCH_SI_IA64(_a1, _a2, _a3)
+#endif
+
+int force_sig_fault(int sig, int code, void __user *addr
+	___ARCH_SI_TRAPNO(int trapno)
+	___ARCH_SI_IA64(int imm, unsigned int flags, unsigned long isr)
+	, struct task_struct *t);
+int send_sig_fault(int sig, int code, void __user *addr
+	___ARCH_SI_TRAPNO(int trapno)
+	___ARCH_SI_IA64(int imm, unsigned int flags, unsigned long isr)
+	, struct task_struct *t);
+
+int force_sig_mceerr(int code, void __user *, short, struct task_struct *);
+int send_sig_mceerr(int code, void __user *, short, struct task_struct *);
+
+int force_sig_bnderr(void __user *addr, void __user *lower, void __user *upper);
+int force_sig_pkuerr(void __user *addr, u32 pkey);
+
+int force_sig_ptrace_errno_trap(int errno, void __user *addr);
+
 extern int send_sig_info(int, struct siginfo *, struct task_struct *);
-extern int force_sigsegv(int, struct task_struct *);
+extern void force_sigsegv(int sig, struct task_struct *p);
 extern int force_sig_info(int, struct siginfo *, struct task_struct *);
 extern int __kill_pgrp_info(int sig, struct siginfo *info, struct pid *pgrp);
 extern int kill_pid_info(int sig, struct siginfo *info, struct pid *pid);
@@ -304,7 +345,7 @@ extern int send_sig(int, struct task_struct *, int);
 extern int zap_other_threads(struct task_struct *p);
 extern struct sigqueue *sigqueue_alloc(void);
 extern void sigqueue_free(struct sigqueue *);
-extern int send_sigqueue(struct sigqueue *,  struct task_struct *, int group);
+extern int send_sigqueue(struct sigqueue *, struct pid *, enum pid_type);
 extern int do_sigaction(int, struct k_sigaction *, struct k_sigaction *);
 
 static inline int restart_syscall(void)
@@ -344,7 +385,7 @@ static inline int signal_pending_state(long state, struct task_struct *p)
  * instead, especially with the case where we've got interrupted with
  * a VM_FAULT_RETRY.
  */
-static inline bool fault_signal_pending(int fault_flags,
+static inline bool fault_signal_pending(vm_fault_t fault_flags,
 					struct pt_regs *regs)
 {
 	return unlikely((fault_flags & VM_FAULT_RETRY) &&
@@ -360,6 +401,7 @@ static inline bool fault_signal_pending(int fault_flags,
  */
 extern void recalc_sigpending_and_wake(struct task_struct *t);
 extern void recalc_sigpending(void);
+extern void calculate_sigpending(void);
 
 extern void signal_wake_up_state(struct task_struct *t, unsigned int state);
 
@@ -371,6 +413,8 @@ static inline void ptrace_signal_wake_up(struct task_struct *t, bool resume)
 {
 	signal_wake_up_state(t, resume ? __TASK_TRACED : 0);
 }
+
+void task_join_group_stop(struct task_struct *task);
 
 #ifdef TIF_RESTORE_SIGMASK
 /*
@@ -637,6 +681,8 @@ static inline int thread_group_empty(struct task_struct *p)
 
 extern struct sighand_struct *__lock_task_sighand(struct task_struct *tsk,
 							unsigned long *flags);
+
+extern bool thread_group_exited(struct pid *pid);
 
 static inline struct sighand_struct *lock_task_sighand(struct task_struct *tsk,
 						       unsigned long *flags)

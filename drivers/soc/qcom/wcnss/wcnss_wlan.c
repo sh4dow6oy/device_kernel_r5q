@@ -1,13 +1,6 @@
-/* Copyright (c) 2011-2020, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2011-2021, The Linux Foundation. All rights reserved.
  */
 
 #include <linux/module.h>
@@ -43,6 +36,7 @@
 #include <soc/qcom/socinfo.h>
 #include <linux/adc-tm-clients.h>
 #include <linux/iio/consumer.h>
+#include <linux/soc/qcom/smem_state.h>
 #include <dt-bindings/iio/qcom,spmi-vadc.h>
 
 #include <soc/qcom/subsystem_restart.h>
@@ -71,6 +65,8 @@
 
 #define SUBSYS_NOTIF_MIN_INDEX	0
 #define SUBSYS_NOTIF_MAX_INDEX	9
+#define PROC_AWAKE_ID 12 /* 12th bit */
+#define AWAKE_BIT BIT(PROC_AWAKE_ID)
 char *wcnss_subsys_notif_type[] = {
 	"SUBSYS_BEFORE_SHUTDOWN",
 	"SUBSYS_AFTER_SHUTDOWN",
@@ -95,10 +91,6 @@ MODULE_PARM_DESC(has_calibrated_data, "whether calibrated data file available");
 static int has_autodetect_xo = WCNSS_CONFIG_UNSPECIFIED;
 module_param(has_autodetect_xo, int, 0644);
 MODULE_PARM_DESC(has_autodetect_xo, "Perform auto detect to configure IRIS XO");
-
-static int do_not_cancel_vote = WCNSS_CONFIG_UNSPECIFIED;
-module_param(do_not_cancel_vote, int, 0644);
-MODULE_PARM_DESC(do_not_cancel_vote, "Do not cancel votes for wcnss");
 
 static DEFINE_SPINLOCK(reg_spinlock);
 
@@ -213,6 +205,7 @@ static DEFINE_SPINLOCK(reg_spinlock);
 #define WCNSS_USR_CTRL_MSG_START  0x00000000
 #define WCNSS_USR_HAS_CAL_DATA    (WCNSS_USR_CTRL_MSG_START + 2)
 #define WCNSS_USR_WLAN_MAC_ADDR   (WCNSS_USR_CTRL_MSG_START + 3)
+#define WCNSS_MAX_USR_BT_PROFILE_IND_CMD_SIZE 64
 
 #define MAC_ADDRESS_STR "%02x:%02x:%02x:%02x:%02x:%02x"
 #define SHOW_MAC_ADDRESS_STR	"%02x:%02x:%02x:%02x:%02x:%02x\n"
@@ -281,12 +274,14 @@ static struct notifier_block wnb = {
 	.notifier_call = wcnss_notif_cb,
 };
 
-#define NVBIN_FILE "wlan/prima/WCNSS_qcom_wlan_nv.bin"
+#define NVBIN_FILE "wlan/prima/WCNSS_qcom_wlan_nv"
 
 /* On SMD channel 4K of maximum data can be transferred, including message
  * header, so NV fragment size as next multiple of 1Kb is 3Kb.
  */
 #define NV_FRAGMENT_SIZE  3072
+#define NVBIN_FILE_SIZE 64
+#define IRIS_VARIANT_SIZE 8
 #define MAX_CALIBRATED_DATA_SIZE  (64 * 1024)
 #define LAST_FRAGMENT        BIT(0)
 #define MESSAGE_TO_FOLLOW    BIT(1)
@@ -302,7 +297,7 @@ struct nvbin_dnld_req_params {
 	/* Fragment sequence number of the NV bin Image. NV Bin Image
 	 * might not fit into one message due to size limitation of
 	 * the SMD channel FIFO so entire NV blob is chopped into
-	 * multiple fragments starting with seqeunce number 0. The
+	 * multiple fragments starting with sequence number 0. The
 	 * last fragment is indicated by marking is_last_fragment field
 	 * to 1. At receiving side, NV blobs would be concatenated
 	 * together without any padding bytes in between.
@@ -405,7 +400,7 @@ static struct {
 	unsigned int	serial_number;
 	int		thermal_mitigation;
 	enum wcnss_hw_type	wcnss_hw_type;
-	void		(*tm_notify)(struct device *, int);
+	void		(*tm_notify)(struct device *dev, int val);
 	struct wcnss_wlan_config wlan_config;
 	struct delayed_work wcnss_work;
 	struct delayed_work vbatt_work;
@@ -414,7 +409,7 @@ static struct {
 	struct work_struct wcnssctrl_nvbin_dnld_work;
 	struct work_struct wcnssctrl_rx_work;
 	struct work_struct wcnss_vadc_work;
-	struct wakeup_source wcnss_wake_lock;
+	struct wakeup_source *wcnss_wake_lock;
 	void __iomem *msm_wcnss_base;
 	void __iomem *riva_ccu_base;
 	void __iomem *pronto_a2xb_base;
@@ -478,15 +473,18 @@ static struct {
 	struct cdev ctrl_dev, node_dev;
 	unsigned long state;
 	struct wcnss_driver_ops *ops;
+	struct qcom_smem_state *wake_state;
+	unsigned int wake_state_bit;
+	struct bt_profile_state bt_state;
+	u32 multi_sku;
+	char nv_name[NVBIN_FILE_SIZE];
+	u32 sw_pta;
 } *penv = NULL;
 
 static void *wcnss_ipc_log;
 
 #define IPC_NUM_LOG_PAGES	12
-#define wcnss_ipc_log_string(_x...) do {		\
-	if (wcnss_ipc_log)				\
-		ipc_log_string(wcnss_ipc_log, _x);	\
-	} while (0)
+#define wcnss_ipc_log_string(_x...)	ipc_log_string(wcnss_ipc_log, _x)
 
 void wcnss_log(enum wcnss_log_type type, const char *_fmt, ...)
 {
@@ -499,26 +497,26 @@ void wcnss_log(enum wcnss_log_type type, const char *_fmt, ...)
 	vaf.va = &args;
 	switch (type) {
 	case ERR:
-		pr_err("wcnss: %pV", &vaf);
+		pr_err("wcnss: %pV\n", &vaf);
 		wcnss_ipc_log_string("wcnss: %pV", &vaf);
 		break;
 	case WARN:
-		pr_warn("wcnss: %pV", &vaf);
+		pr_warn("wcnss: %pV\n", &vaf);
 		wcnss_ipc_log_string("wcnss: %pV", &vaf);
 		break;
 	case INFO:
-		pr_info("wcnss: %pV", &vaf);
+		pr_info("wcnss: %pV\n", &vaf);
 		wcnss_ipc_log_string("wcnss: %pV", &vaf);
 		break;
 	case DBG:
 #if defined(CONFIG_DYNAMIC_DEBUG)
-		pr_debug("wcnss: %pV", &vaf);
+		pr_debug("wcnss: %pV\n", &vaf);
 		wcnss_ipc_log_string("wcnss: %pV", &vaf);
 #elif defined(DEBUG)
-		pr_debug("wcnss: %pV", &vaf);
+		pr_debug("wcnss: %pV\n", &vaf);
 		wcnss_ipc_log_string("wcnss: %pV", &vaf);
 #else
-		pr_devel("wcnss: %pV", &vaf);
+		pr_devel("wcnss: %pV\n", &vaf);
 		wcnss_ipc_log_string("wcnss: %pV", &vaf);
 #endif
 		break;
@@ -527,7 +525,7 @@ void wcnss_log(enum wcnss_log_type type, const char *_fmt, ...)
 }
 EXPORT_SYMBOL(wcnss_log);
 
-static ssize_t wcnss_wlan_macaddr_store(struct device *dev,
+static ssize_t wcnss_mac_addr_store(struct device *dev,
 					struct device_attribute *attr,
 					const char *buf, size_t count)
 {
@@ -562,9 +560,9 @@ static ssize_t wcnss_wlan_macaddr_store(struct device *dev,
 	return count;
 }
 
-static ssize_t wcnss_wlan_macaddr_show(struct device *dev,
-				       struct device_attribute *attr,
-				       char *buf)
+static ssize_t wcnss_mac_addr_show(struct device *dev,
+				   struct device_attribute *attr,
+				   char *buf)
 {
 	if (!penv)
 		return -ENODEV;
@@ -575,12 +573,11 @@ static ssize_t wcnss_wlan_macaddr_show(struct device *dev,
 		penv->wlan_nv_mac_addr[4], penv->wlan_nv_mac_addr[5]);
 }
 
-static DEVICE_ATTR(wcnss_mac_addr, 0600, wcnss_wlan_macaddr_show,
-		   wcnss_wlan_macaddr_store);
+static DEVICE_ATTR_RW(wcnss_mac_addr);
 
-static ssize_t wcnss_thermal_mitigation_show(struct device *dev,
-					     struct device_attribute *attr,
-					     char *buf)
+static ssize_t thermal_mitigation_show(struct device *dev,
+				       struct device_attribute *attr,
+				       char *buf)
 {
 	if (!penv)
 		return -ENODEV;
@@ -588,9 +585,9 @@ static ssize_t wcnss_thermal_mitigation_show(struct device *dev,
 	return scnprintf(buf, PAGE_SIZE, "%u\n", penv->thermal_mitigation);
 }
 
-static ssize_t wcnss_thermal_mitigation_store(struct device *dev,
-					      struct device_attribute *attr,
-					      const char *buf, size_t count)
+static ssize_t thermal_mitigation_store(struct device *dev,
+					struct device_attribute *attr,
+					const char *buf, size_t count)
 {
 	int value;
 
@@ -605,8 +602,7 @@ static ssize_t wcnss_thermal_mitigation_store(struct device *dev,
 	return count;
 }
 
-static DEVICE_ATTR(thermal_mitigation, 0600, wcnss_thermal_mitigation_show,
-		   wcnss_thermal_mitigation_store);
+static DEVICE_ATTR_RW(thermal_mitigation);
 
 static ssize_t wcnss_version_show(struct device *dev,
 				  struct device_attribute *attr, char *buf)
@@ -617,7 +613,94 @@ static ssize_t wcnss_version_show(struct device *dev,
 	return scnprintf(buf, PAGE_SIZE, "%s", penv->wcnss_version);
 }
 
-static DEVICE_ATTR(wcnss_version, 0400, wcnss_version_show, NULL);
+static DEVICE_ATTR_RO(wcnss_version);
+
+static int wcnss_bt_profile_validate_cmd(char *dest_buf, size_t dest_buf_size,
+					 char const *source_buf,
+					 size_t source_buf_size)
+{
+	char *found;
+	int profile_idx = 0;
+
+	if (source_buf_size > (dest_buf_size - 1)) {
+		wcnss_log(ERR, "%s:Command length is larger than %zu bytes\n",
+			  __func__, dest_buf_size);
+		return -EINVAL;
+	}
+
+	/* sysfs already provides kernel space buffer so copy from user
+	 * is not needed. Doing this extra copy operation just to ensure
+	 * the local buf is properly null-terminated.
+	 */
+	strlcpy(dest_buf, source_buf, dest_buf_size);
+
+	/* default 'echo' cmd takes new line character to here */
+	if (dest_buf[source_buf_size - 1] == '\n')
+		dest_buf[source_buf_size - 1] = '\0';
+
+	while (profile_idx++ <= 4 && (found = strsep(&dest_buf, " ")) != NULL) {
+		if (profile_idx == 1 && !strcmp(found, "BT_ENABLED")) {
+			found = strsep(&dest_buf, " ");
+			penv->bt_state.bt_enabled = strcmp(found, "0");
+		} else if (profile_idx == 2 && !strcmp(found, "BT_ADV")) {
+			found = strsep(&dest_buf, " ");
+			penv->bt_state.bt_adv = strcmp(found, "0");
+		} else if (profile_idx == 3 && !strcmp(found, "BLE")) {
+			found = strsep(&dest_buf, " ");
+			penv->bt_state.bt_ble = strcmp(found, "0");
+		} else if (profile_idx == 4 && !strcmp(found, "A2DP")) {
+			found = strsep(&dest_buf, " ");
+			penv->bt_state.bt_a2dp = strcmp(found, "0");
+		} else if (profile_idx == 5 && !strcmp(found, "SCO")) {
+			found = strsep(&dest_buf, " ");
+			penv->bt_state.bt_sco = strcmp(found, "0");
+		} else {
+			return -EINVAL;
+		}
+	}
+
+	return 0;
+}
+
+static ssize_t bt_profile_store(struct device *dev,
+				struct device_attribute *attr,
+				const char *buf, size_t count)
+{
+	char buf_local[WCNSS_MAX_USR_BT_PROFILE_IND_CMD_SIZE + 1];
+	int ret;
+
+	ret = wcnss_bt_profile_validate_cmd(buf_local, sizeof(buf_local),
+					    buf, count);
+	if (ret)
+		return -EINVAL;
+
+	if (penv->ops) {
+		ret = penv->ops->bt_profile_state(penv->ops->priv_data,
+						  &penv->bt_state);
+		if (ret)
+			return ret;
+	}
+
+	return count;
+}
+
+static ssize_t bt_profile_show(struct device *dev,
+			       struct device_attribute *attr,
+			       char *buf)
+{
+	if (!penv)
+		return -ENODEV;
+
+	return scnprintf(buf, PAGE_SIZE,
+			 "BT_ENABLED = %d\nBT_ADV = %d\nBLE = %d\nA2DP = %d\nSCO = %d\n",
+			 penv->bt_state.bt_enabled,
+			 penv->bt_state.bt_adv,
+			 penv->bt_state.bt_ble,
+			 penv->bt_state.bt_a2dp,
+			 penv->bt_state.bt_sco);
+}
+
+static DEVICE_ATTR_RW(bt_profile);
 
 /* wcnss_reset_fiq() is invoked when host drivers fails to
  * communicate with WCNSS over SMD; so logging these registers
@@ -1239,6 +1322,31 @@ void wcnss_reset_fiq(bool clk_chk_en)
 }
 EXPORT_SYMBOL(wcnss_reset_fiq);
 
+static struct attribute *wcnss_attrs[] = {
+	&dev_attr_thermal_mitigation.attr,
+	&dev_attr_wcnss_version.attr,
+	&dev_attr_wcnss_mac_addr.attr,
+	&dev_attr_bt_profile.attr,
+	NULL,
+};
+
+static struct attribute_group wcnss_attr_group = {
+	.attrs = wcnss_attrs,
+};
+
+static int wcnss_create_sysfs_link(struct device *dev)
+{
+	int ret = 0;
+
+	ret = sysfs_create_link(kernel_kobj, &dev->kobj, "wcnss");
+	if (ret) {
+		wcnss_log(ERR,
+			  "Failed to create wcnss link, err = %d\n",
+			  ret);
+	}
+
+	return ret;
+}
 static int wcnss_create_sysfs(struct device *dev)
 {
 	int ret;
@@ -1246,34 +1354,28 @@ static int wcnss_create_sysfs(struct device *dev)
 	if (!dev)
 		return -ENODEV;
 
-	ret = device_create_file(dev, &dev_attr_thermal_mitigation);
-	if (ret)
+	ret = devm_device_add_group(dev, &wcnss_attr_group);
+	if (ret) {
+		wcnss_log(ERR,
+			  "Failed to create wcnss device group, err = %d\n",
+			  ret);
 		return ret;
+	}
 
-	ret = device_create_file(dev, &dev_attr_wcnss_version);
-	if (ret)
-		goto remove_thermal;
-
-	ret = device_create_file(dev, &dev_attr_wcnss_mac_addr);
-	if (ret)
-		goto remove_version;
-
-	return 0;
-
-remove_version:
-	device_remove_file(dev, &dev_attr_wcnss_version);
-remove_thermal:
-	device_remove_file(dev, &dev_attr_thermal_mitigation);
-
+	wcnss_create_sysfs_link(dev);
 	return ret;
+}
+
+static void wcnss_remove_sysfs_link(void)
+{
+	sysfs_remove_link(kernel_kobj, "wcnss");
 }
 
 static void wcnss_remove_sysfs(struct device *dev)
 {
 	if (dev) {
-		device_remove_file(dev, &dev_attr_thermal_mitigation);
-		device_remove_file(dev, &dev_attr_wcnss_version);
-		device_remove_file(dev, &dev_attr_wcnss_mac_addr);
+		wcnss_remove_sysfs_link();
+		devm_device_remove_group(dev, &wcnss_attr_group);
 	}
 }
 
@@ -1544,7 +1646,6 @@ wcnss_wlan_ctrl_remove(struct platform_device *pdev)
 static struct platform_driver wcnss_wlan_ctrl_driver = {
 	.driver = {
 		.name	= "WLAN_CTRL",
-		.owner	= THIS_MODULE,
 	},
 	.probe	= wcnss_wlan_ctrl_probe,
 	.remove	= wcnss_wlan_ctrl_remove,
@@ -1728,6 +1829,9 @@ int wcnss_register_driver(struct wcnss_driver_ops *ops, void *priv)
 	if (penv->state == WCNSS_SMD_OPEN)
 		ops->driver_state(ops->priv_data, WCNSS_SMD_OPEN);
 
+	if (penv->bt_state.bt_enabled)
+		ops->bt_profile_state(ops->priv_data, &penv->bt_state);
+
 out:
 	return ret;
 }
@@ -1756,6 +1860,17 @@ out:
 	return ret;
 }
 EXPORT_SYMBOL(wcnss_unregister_driver);
+
+void wcnss_update_bt_profile(void)
+{
+	if (!penv || !penv->pdev || !penv->ops)
+		return;
+
+	if (penv->bt_state.bt_enabled)
+		penv->ops->bt_profile_state(penv->ops->priv_data,
+					    &penv->bt_state);
+}
+EXPORT_SYMBOL(wcnss_update_bt_profile);
 
 void wcnss_wlan_register_pm_ops(struct device *dev,
 				const struct dev_pm_ops *pm_ops)
@@ -1961,14 +2076,14 @@ static int wcnss_wlan_resume_noirq(struct device *dev)
 void wcnss_prevent_suspend(void)
 {
 	if (penv)
-		__pm_stay_awake(&penv->wcnss_wake_lock);
+		__pm_stay_awake(penv->wcnss_wake_lock);
 }
 EXPORT_SYMBOL(wcnss_prevent_suspend);
 
 void wcnss_allow_suspend(void)
 {
 	if (penv)
-		__pm_relax(&penv->wcnss_wake_lock);
+		__pm_relax(penv->wcnss_wake_lock);
 }
 EXPORT_SYMBOL(wcnss_allow_suspend);
 
@@ -2032,6 +2147,7 @@ EXPORT_SYMBOL(wcnss_get_wlan_unsafe_channel);
 int wcnss_smd_tx(struct rpmsg_endpoint *channel, void *data, int len)
 {
 	int ret = 0;
+
 	ret = rpmsg_send(channel, data, len);
 	if (ret < 0)
 		return ret;
@@ -2303,7 +2419,7 @@ unlock_exit:
 static void wcnss_process_smd_msg(void *buf, int len)
 {
 	int rc = 0;
-	unsigned char build[WCNSS_MAX_BUILD_VER_LEN + 1];
+	unsigned char *build;
 	struct smd_msg_hdr *phdr;
 	struct smd_msg_hdr smd_msg;
 	struct wcnss_version *pversion;
@@ -2359,16 +2475,26 @@ static void wcnss_process_smd_msg(void *buf, int len)
 		break;
 
 	case WCNSS_BUILD_VER_RSP:
+		build = kmalloc(WCNSS_MAX_BUILD_VER_LEN + 1, GFP_ATOMIC);
+		if (!build) {
+			wcnss_log(ERR,
+				  "%s: mem alloc failed for build ver resp\n",
+				  __func__);
+			return;
+		}
+
 		if (len > sizeof(struct smd_msg_hdr) +
 		    WCNSS_MAX_BUILD_VER_LEN) {
 			wcnss_log(ERR,
 				  "invalid build version:%d\n", len);
+			kfree(build);
 			return;
 		}
 		memcpy(build, buf + sizeof(struct smd_msg_hdr),
 		       len - sizeof(struct smd_msg_hdr));
-		build[len] = 0;
+		build[len - sizeof(struct smd_msg_hdr)] = 0;
 		wcnss_log(INFO, "build version %s\n", build);
+		kfree(build);
 		break;
 
 	case WCNSS_NVBIN_DNLD_RSP:
@@ -2411,18 +2537,19 @@ static void wcnss_process_smd_msg(void *buf, int len)
 static void wcnssctrl_rx_handler(struct work_struct *work)
 {
 	struct rpmsg_event *event;
+	unsigned long flags;
 
-	spin_lock(&penv->event_lock);
+	spin_lock_irqsave(&penv->event_lock, flags);
 	while (!list_empty(&penv->event_list)) {
 		event = list_first_entry(&penv->event_list,
 					 struct rpmsg_event, list);
 		list_del(&event->list);
-		spin_unlock(&penv->event_lock);
+		spin_unlock_irqrestore(&penv->event_lock, flags);
 		wcnss_process_smd_msg(event->data, event->len);
 		kfree(event);
-		spin_lock(&penv->event_lock);
+		spin_lock_irqsave(&penv->event_lock, flags);
 	}
-	spin_unlock(&penv->event_lock);
+	spin_unlock_irqrestore(&penv->event_lock, flags);
 }
 
 static void wcnss_send_version_req(struct work_struct *worker)
@@ -2486,6 +2613,37 @@ static void wcnss_pm_qos_enable_pc(struct work_struct *worker)
 
 static DECLARE_RWSEM(wcnss_pm_sem);
 
+int wcnss_get_nv_name(char *nv_name)
+{
+	char variant[8] = {0};
+	int ret;
+
+	if (penv->multi_sku) {
+		ret = wcnss_get_iris_name(variant);
+		if (ret) {
+			wcnss_log(ERR, "Invalid IRIS name using default one\n");
+			scnprintf(nv_name, NVBIN_FILE_SIZE, "%s.bin",
+				  NVBIN_FILE);
+			return 0;
+		}
+
+		scnprintf(nv_name, NVBIN_FILE_SIZE, "%s_%s.bin",
+			  NVBIN_FILE, variant);
+	} else {
+		scnprintf(nv_name, NVBIN_FILE_SIZE, "%s.bin",
+			  NVBIN_FILE);
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL(wcnss_get_nv_name);
+
+int wcnss_is_sw_pta_enabled(void)
+{
+	return penv->sw_pta;
+}
+EXPORT_SYMBOL(wcnss_is_sw_pta_enabled);
+
 static void wcnss_nvbin_dnld(void)
 {
 	int ret = 0;
@@ -2502,12 +2660,14 @@ static void wcnss_nvbin_dnld(void)
 
 	down_read(&wcnss_pm_sem);
 
-	ret = request_firmware(&nv, NVBIN_FILE, dev);
+	wcnss_get_nv_name(penv->nv_name);
+
+	ret = request_firmware(&nv, penv->nv_name, dev);
 
 	if (ret || !nv || !nv->data || !nv->size) {
 		wcnss_log(ERR,
 			  "%s: request_firmware failed for %s (ret = %d)\n",
-		       __func__, NVBIN_FILE, ret);
+		       __func__, penv->nv_name, ret);
 		goto out;
 	}
 
@@ -2724,10 +2884,16 @@ static int wcnss_pm_notify(struct notifier_block *b,
 	switch (event) {
 	case PM_SUSPEND_PREPARE:
 		down_write(&wcnss_pm_sem);
+		if (penv->wake_state && penv->ops)
+			qcom_smem_state_update_bits(penv->wake_state,
+						    AWAKE_BIT, 0);
 		break;
 
 	case PM_POST_SUSPEND:
 		up_write(&wcnss_pm_sem);
+		if (penv->wake_state && penv->ops)
+			qcom_smem_state_update_bits(penv->wake_state, AWAKE_BIT,
+						    AWAKE_BIT);
 		break;
 	}
 
@@ -2901,7 +3067,7 @@ wcnss_trigger_config(struct platform_device *pdev)
 	INIT_WORK(&penv->wcnssctrl_nvbin_dnld_work, wcnss_nvbin_dnld_main);
 	INIT_DELAYED_WORK(&penv->wcnss_pm_qos_del_req, wcnss_pm_qos_enable_pc);
 
-	wakeup_source_init(&penv->wcnss_wake_lock, "wcnss");
+	penv->wcnss_wake_lock = wakeup_source_register(&pdev->dev, "wcnss");
 	/* Add pm_qos request to disable power collapse for DDR */
 	wcnss_disable_pc_add_req();
 
@@ -3185,7 +3351,6 @@ wcnss_trigger_config(struct platform_device *pdev)
 					 &penv->snoc_wcnss_clock_freq)) {
 			wcnss_log(DBG,
 			"%s: snoc clock frequency is not defined\n", __func__);
-			devm_clk_put(&penv->pdev->dev, penv->snoc_wcnss);
 			penv->snoc_wcnss = NULL;
 		}
 	}
@@ -3206,6 +3371,9 @@ wcnss_trigger_config(struct platform_device *pdev)
 				"battery voltage get failed:err=%d\n", rc);
 		}
 	}
+
+	device_property_read_u32(&pdev->dev, "qcom,multi_sku",
+				 &penv->multi_sku);
 
 	do {
 		/* trigger initialization of the WCNSS */
@@ -3235,7 +3403,7 @@ fail_ioremap2:
 	if (penv->fiq_reg)
 		iounmap(penv->fiq_reg);
 fail_ioremap:
-	wakeup_source_trash(&penv->wcnss_wake_lock);
+	wakeup_source_unregister(penv->wcnss_wake_lock);
 fail_res:
 	if (!has_pronto_hw)
 		wcnss_gpios_config(penv->gpios_5wire, false);
@@ -3642,6 +3810,9 @@ wcnss_wlan_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	}
 
+	device_property_read_u32(&pdev->dev, "qcom,sw_pta",
+				 &penv->sw_pta);
+
 	/* register sysfs entries */
 	ret = wcnss_create_sysfs(&pdev->dev);
 	if (ret) {
@@ -3677,6 +3848,15 @@ wcnss_wlan_probe(struct platform_device *pdev)
 	 */
 	wcnss_log(INFO, DEVICE " probed in built-in mode\n");
 
+	penv->wake_state = qcom_smem_state_get(&pdev->dev,
+					      "wake-state",
+					      &penv->wake_state_bit);
+	if (IS_ERR(penv->wake_state)) {
+		penv->wake_state = NULL;
+		wcnss_log(WARN, "%s: qcom_smem_wake_state_get failed",
+			  __func__);
+	}
+
 	return wcnss_cdev_register(pdev);
 }
 
@@ -3686,6 +3866,10 @@ wcnss_wlan_remove(struct platform_device *pdev)
 	if (penv->wcnss_notif_hdle)
 		subsys_notif_unregister_notifier(penv->wcnss_notif_hdle, &wnb);
 	wcnss_cdev_unregister(pdev);
+
+	if (penv->wake_state)
+		qcom_smem_state_put(penv->wake_state);
+
 	wcnss_remove_sysfs(&pdev->dev);
 	penv = NULL;
 	return 0;
@@ -3708,7 +3892,6 @@ static const struct of_device_id msm_wcnss_pronto_match[] = {
 static struct platform_driver wcnss_wlan_driver = {
 	.driver = {
 		.name	= DEVICE,
-		.owner	= THIS_MODULE,
 		.pm	= &wcnss_wlan_pm_ops,
 #ifdef CONFIG_WCNSS_CORE_PRONTO
 		.of_match_table = msm_wcnss_pronto_match,

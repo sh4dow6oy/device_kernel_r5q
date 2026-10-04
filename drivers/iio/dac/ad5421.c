@@ -184,7 +184,7 @@ static int ad5421_update_ctrl(struct iio_dev *indio_dev, unsigned int set,
 	unsigned int clr)
 {
 	struct ad5421_state *st = iio_priv(indio_dev);
-	unsigned int ret;
+	int ret;
 
 	mutex_lock(&indio_dev->mlock);
 
@@ -465,7 +465,6 @@ static const struct iio_info ad5421_info = {
 	.read_event_config =	ad5421_read_event_config,
 	.write_event_config =	ad5421_write_event_config,
 	.read_event_value =	ad5421_read_event_value,
-	.driver_module =	THIS_MODULE,
 };
 
 static int ad5421_probe(struct spi_device *spi)

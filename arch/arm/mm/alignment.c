@@ -776,7 +776,7 @@ static int alignment_get_arm(struct pt_regs *regs, u32 *ip, unsigned long *inst)
 	if (user_mode(regs))
 		fault = get_user(instr, ip);
 	else
-		fault = probe_kernel_address(ip, instr);
+		fault = get_kernel_nofault(instr, ip);
 
 	*inst = __mem_to_opcode_arm(instr);
 
@@ -791,7 +791,7 @@ static int alignment_get_thumb(struct pt_regs *regs, u16 *ip, u16 *inst)
 	if (user_mode(regs))
 		fault = get_user(instr, ip);
 	else
-		fault = probe_kernel_address(ip, instr);
+		fault = get_kernel_nofault(instr, ip);
 
 	*inst = __mem_to_opcode_thumb16(instr);
 
@@ -981,6 +981,7 @@ do_alignment(unsigned long addr, unsigned int fsr, struct pt_regs *regs)
 	if (ai_usermode & UM_SIGNAL) {
 		siginfo_t si;
 
+		clear_siginfo(&si);
 		si.si_signo = SIGBUS;
 		si.si_errno = 0;
 		si.si_code = BUS_ADRALN;

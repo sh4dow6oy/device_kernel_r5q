@@ -383,7 +383,6 @@ static const struct attribute_group mxs_lradc_adc_attribute_group = {
 };
 
 static const struct iio_info mxs_lradc_adc_iio_info = {
-	.driver_module		= THIS_MODULE,
 	.read_raw		= mxs_lradc_adc_read_raw,
 	.write_raw		= mxs_lradc_adc_write_raw,
 	.write_raw_get_fmt	= mxs_lradc_adc_write_raw_get_fmt,
@@ -456,7 +455,6 @@ static int mxs_lradc_adc_configure_trigger(struct iio_trigger *trig, bool state)
 }
 
 static const struct iio_trigger_ops mxs_lradc_adc_trigger_ops = {
-	.owner = THIS_MODULE,
 	.set_trigger_state = &mxs_lradc_adc_configure_trigger,
 };
 

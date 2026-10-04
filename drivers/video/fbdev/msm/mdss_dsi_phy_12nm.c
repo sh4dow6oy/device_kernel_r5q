@@ -1,15 +1,5 @@
-/* Copyright (c) 2018, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- */
+// SPDX-License-Identifier: GPL-2.0-only
+/* Copyright (c) 2018, 2020-2021, The Linux Foundation. All rights reserved. */
 
 #include <linux/iopoll.h>
 #include "mdss_dsi_phy.h"
@@ -25,6 +15,7 @@
 #define HSTX_CLKLANE_REQSTATE_TIM_CTRL       0x180
 #define HSTX_CLKLANE_HS0STATE_TIM_CTRL       0x188
 #define HSTX_CLKLANE_TRALSTATE_TIM_CTRL      0x18c
+#define HSTX_CLKLANE_EXITSTATE_TIM_CTRL      0x190
 #define HSTX_CLKLANE_CLKPOSTSTATE_TIM_CTRL   0x194
 #define HSTX_DATALANE_REQSTATE_TIM_CTRL      0x1c0
 #define HSTX_DATALANE_HS0STATE_TIM_CTRL      0x1c8
@@ -70,6 +61,8 @@ int mdss_dsi_12nm_phy_config(struct mdss_dsi_ctrl_pdata *ctrl)
 		(pd->timing_12nm[2] | BIT(6)));
 	DSI_PHY_W32(ctrl->phy_io.base, HSTX_CLKLANE_REQSTATE_TIM_CTRL,
 		pd->timing_12nm[3]);
+	DSI_PHY_W32(ctrl->phy_io.base, HSTX_CLKLANE_EXITSTATE_TIM_CTRL,
+		(pd->timing_12nm[7] | BIT(6) | BIT(7)));
 
 	/* DSI PHY data lane timings */
 	DSI_PHY_W32(ctrl->phy_io.base, HSTX_DATALANE_HS0STATE_TIM_CTRL,
@@ -104,6 +97,7 @@ int mdss_dsi_12nm_phy_shutdown(struct mdss_dsi_ctrl_pdata *ctrl)
 {
 	DSI_PHY_W32(ctrl->phy_io.base, SYS_CTRL, BIT(0) | BIT(3));
 	wmb(); /* make sure DSI PHY is disabled */
+	mdss_dsi_ctrl_phy_reset(ctrl);
 	return 0;
 }
 

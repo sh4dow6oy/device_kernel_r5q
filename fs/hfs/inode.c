@@ -49,7 +49,7 @@ static void hfs_write_failed(struct address_space *mapping, loff_t to)
 }
 
 static int hfs_write_begin(struct file *file, struct address_space *mapping,
-			loff_t pos, unsigned len, unsigned flags,
+			loff_t pos, unsigned int len, unsigned flags,
 			struct page **pagep, void **fsdata)
 {
 	int ret;
@@ -549,11 +549,11 @@ static struct dentry *hfs_file_lookup(struct inode *dir, struct dentry *dentry,
 	HFS_I(inode)->rsrc_inode = dir;
 	HFS_I(dir)->rsrc_inode = inode;
 	igrab(dir);
-	hlist_add_fake(&inode->i_hash);
+	inode_fake_hash(inode);
 	mark_inode_dirty(inode);
+	dont_mount(dentry);
 out:
-	d_add(dentry, inode);
-	return NULL;
+	return d_splice_alias(inode, dentry);
 }
 
 void hfs_evict_inode(struct inode *inode)

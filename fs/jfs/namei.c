@@ -175,8 +175,7 @@ static int jfs_create(struct inode *dip, struct dentry *dentry, umode_t mode,
 	if (rc) {
 		free_ea_wmap(ip);
 		clear_nlink(ip);
-		unlock_new_inode(ip);
-		iput(ip);
+		discard_new_inode(ip);
 	} else {
 		d_instantiate_new(dentry, ip);
 	}
@@ -309,8 +308,7 @@ static int jfs_mkdir(struct inode *dip, struct dentry *dentry, umode_t mode)
 	if (rc) {
 		free_ea_wmap(ip);
 		clear_nlink(ip);
-		unlock_new_inode(ip);
-		iput(ip);
+		discard_new_inode(ip);
 	} else {
 		d_instantiate_new(dentry, ip);
 	}
@@ -1059,8 +1057,7 @@ static int jfs_symlink(struct inode *dip, struct dentry *dentry,
 	if (rc) {
 		free_ea_wmap(ip);
 		clear_nlink(ip);
-		unlock_new_inode(ip);
-		iput(ip);
+		discard_new_inode(ip);
 	} else {
 		d_instantiate_new(dentry, ip);
 	}
@@ -1242,7 +1239,7 @@ static int jfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 				jfs_err("jfs_rename: dtInsert returned -EIO");
 			goto out_tx;
 		}
-		if (S_ISDIR(old_ip->i_mode))
+		if (S_ISDIR(old_ip->i_mode) && old_dir != new_dir)
 			inc_nlink(new_dir);
 	}
 	/*
@@ -1258,7 +1255,9 @@ static int jfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 		goto out_tx;
 	}
 	if (S_ISDIR(old_ip->i_mode)) {
-		drop_nlink(old_dir);
+		if (new_ip || old_dir != new_dir)
+			drop_nlink(old_dir);
+
 		if (old_dir != new_dir) {
 			/*
 			 * Change inode number of parent for moved directory
@@ -1446,8 +1445,7 @@ static int jfs_mknod(struct inode *dir, struct dentry *dentry,
 	if (rc) {
 		free_ea_wmap(ip);
 		clear_nlink(ip);
-		unlock_new_inode(ip);
-		iput(ip);
+		discard_new_inode(ip);
 	} else {
 		d_instantiate_new(dentry, ip);
 	}

@@ -1,13 +1,6 @@
-/* Copyright (c) 2012-2018, 2020, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2012-2018, 2020, The Linux Foundation. All rights reserved.
  */
 
 #include <net/ip.h>
@@ -643,11 +636,11 @@ static void _ipa_sram_settings_read_v1_1(void)
 	ipa_ctx->smem_sz = ipa_read_reg(ipa_ctx->mmio,
 			IPA_SHARED_MEM_SIZE_OFST_v1_1);
 	ipa_ctx->smem_reqd_sz = IPA_MEM_v1_RAM_END_OFST;
-	ipa_ctx->hdr_tbl_lcl = 1;
-	ipa_ctx->ip4_rt_tbl_lcl = 0;
-	ipa_ctx->ip6_rt_tbl_lcl = 0;
-	ipa_ctx->ip4_flt_tbl_lcl = 1;
-	ipa_ctx->ip6_flt_tbl_lcl = 1;
+	ipa_ctx->hdr_tbl_lcl = true;
+	ipa_ctx->ip4_rt_tbl_lcl = false;
+	ipa_ctx->ip6_rt_tbl_lcl = false;
+	ipa_ctx->ip4_flt_tbl_lcl = true;
+	ipa_ctx->ip6_flt_tbl_lcl = true;
 }
 
 static void _ipa_sram_settings_read_v2_0(void)
@@ -661,11 +654,11 @@ static void _ipa_sram_settings_read_v2_0(void)
 			IPA_SHARED_MEM_SIZE_SHARED_MEM_SIZE_BMSK_v2_0,
 			IPA_SHARED_MEM_SIZE_SHARED_MEM_SIZE_SHFT_v2_0);
 	ipa_ctx->smem_reqd_sz = IPA_MEM_PART(end_ofst);
-	ipa_ctx->hdr_tbl_lcl = 0;
-	ipa_ctx->ip4_rt_tbl_lcl = 0;
-	ipa_ctx->ip6_rt_tbl_lcl = 0;
-	ipa_ctx->ip4_flt_tbl_lcl = 0;
-	ipa_ctx->ip6_flt_tbl_lcl = 0;
+	ipa_ctx->hdr_tbl_lcl = false;
+	ipa_ctx->ip4_rt_tbl_lcl = false;
+	ipa_ctx->ip6_rt_tbl_lcl = false;
+	ipa_ctx->ip4_flt_tbl_lcl = false;
+	ipa_ctx->ip6_flt_tbl_lcl = false;
 }
 
 static void _ipa_sram_settings_read_v2_5(void)
@@ -679,8 +672,8 @@ static void _ipa_sram_settings_read_v2_5(void)
 		IPA_SHARED_MEM_SIZE_SHARED_MEM_SIZE_BMSK_v2_0,
 		IPA_SHARED_MEM_SIZE_SHARED_MEM_SIZE_SHFT_v2_0);
 	ipa_ctx->smem_reqd_sz = IPA_MEM_PART(end_ofst);
-	ipa_ctx->hdr_tbl_lcl = 0;
-	ipa_ctx->hdr_proc_ctx_tbl_lcl = 1;
+	ipa_ctx->hdr_tbl_lcl = false;
+	ipa_ctx->hdr_proc_ctx_tbl_lcl = true;
 
 	/*
 	 * when proc ctx table is located in internal memory,
@@ -690,10 +683,10 @@ static void _ipa_sram_settings_read_v2_5(void)
 		ipa_ctx->hdr_proc_ctx_tbl.start_offset =
 			IPA_MEM_PART(modem_hdr_proc_ctx_size);
 	}
-	ipa_ctx->ip4_rt_tbl_lcl = 0;
-	ipa_ctx->ip6_rt_tbl_lcl = 0;
-	ipa_ctx->ip4_flt_tbl_lcl = 0;
-	ipa_ctx->ip6_flt_tbl_lcl = 0;
+	ipa_ctx->ip4_rt_tbl_lcl = false;
+	ipa_ctx->ip6_rt_tbl_lcl = false;
+	ipa_ctx->ip4_flt_tbl_lcl = false;
+	ipa_ctx->ip6_flt_tbl_lcl = false;
 }
 
 static void _ipa_sram_settings_read_v2_6L(void)
@@ -707,11 +700,11 @@ static void _ipa_sram_settings_read_v2_6L(void)
 		IPA_SHARED_MEM_SIZE_SHARED_MEM_SIZE_BMSK_v2_0,
 		IPA_SHARED_MEM_SIZE_SHARED_MEM_SIZE_SHFT_v2_0);
 	ipa_ctx->smem_reqd_sz = IPA_MEM_PART(end_ofst);
-	ipa_ctx->hdr_tbl_lcl = 0;
-	ipa_ctx->ip4_rt_tbl_lcl = 0;
-	ipa_ctx->ip6_rt_tbl_lcl = 0;
-	ipa_ctx->ip4_flt_tbl_lcl = 0;
-	ipa_ctx->ip6_flt_tbl_lcl = 0;
+	ipa_ctx->hdr_tbl_lcl = false;
+	ipa_ctx->ip4_rt_tbl_lcl = false;
+	ipa_ctx->ip6_rt_tbl_lcl = false;
+	ipa_ctx->ip4_flt_tbl_lcl = false;
+	ipa_ctx->ip6_flt_tbl_lcl = false;
 }
 
 static void _ipa_cfg_route_v1_1(struct ipa_route *route)
@@ -4755,13 +4748,13 @@ static int ipa_tag_generate_force_close_desc(struct ipa_desc desc[],
 		desc[desc_idx].type = IPA_IMM_CMD_DESC;
 		desc[desc_idx].callback = ipa_tag_free_buf;
 		desc[desc_idx].user1 = reg_write_agg_close;
-		desc_idx++;
+		++desc_idx;
 	}
 
 	return desc_idx;
 
 fail_alloc_reg_write_agg_close:
-	for (i = 0; i < desc_idx; i++)
+	for (i = 0; i < desc_idx; ++i)
 		kfree(desc[desc_idx].user1);
 fail_no_desc:
 	return res;

@@ -29,11 +29,14 @@ static ssize_t brightness_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
 	struct led_classdev *led_cdev = dev_get_drvdata(dev);
+	unsigned int brightness;
 
-	/* no lock needed for this */
+	mutex_lock(&led_cdev->led_access);
 	led_update_brightness(led_cdev);
+	brightness = led_cdev->brightness;
+	mutex_unlock(&led_cdev->led_access);
 
-	return sprintf(buf, "%u\n", led_cdev->brightness);
+	return sprintf(buf, "%u\n", brightness);
 }
 
 static ssize_t brightness_store(struct device *dev,
@@ -57,6 +60,7 @@ static ssize_t brightness_store(struct device *dev,
 	if (state == LED_OFF && !(led_cdev->flags & LED_KEEP_TRIGGER))
 		led_trigger_remove(led_cdev);
 	led_set_brightness(led_cdev, state);
+	led_cdev->usr_brightness_req = state;
 
 	ret = size;
 unlock:
@@ -69,10 +73,32 @@ static ssize_t max_brightness_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
 	struct led_classdev *led_cdev = dev_get_drvdata(dev);
+	unsigned int max_brightness;
 
-	return sprintf(buf, "%u\n", led_cdev->max_brightness);
+	mutex_lock(&led_cdev->led_access);
+	max_brightness = led_cdev->max_brightness;
+	mutex_unlock(&led_cdev->led_access);
+
+	return sprintf(buf, "%u\n", max_brightness);
 }
-static DEVICE_ATTR_RO(max_brightness);
+
+static ssize_t max_brightness_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t size)
+{
+	struct led_classdev *led_cdev = dev_get_drvdata(dev);
+	unsigned long state;
+	ssize_t ret = -EINVAL;
+
+	ret = kstrtoul(buf, 10, &state);
+	if (ret)
+		return ret;
+
+	led_cdev->max_brightness = state;
+	led_set_brightness(led_cdev, led_cdev->usr_brightness_req);
+
+	return size;
+}
+static DEVICE_ATTR_RW(max_brightness);
 
 #ifdef CONFIG_LEDS_TRIGGERS
 static DEVICE_ATTR(trigger, 0644, led_trigger_show, led_trigger_store);
@@ -261,10 +287,14 @@ int of_led_classdev_register(struct device *parent, struct device_node *np,
 	if (ret < 0)
 		return ret;
 
+	mutex_init(&led_cdev->led_access);
+	mutex_lock(&led_cdev->led_access);
 	led_cdev->dev = device_create_with_groups(leds_class, parent, 0,
 				led_cdev, led_cdev->groups, "%s", name);
-	if (IS_ERR(led_cdev->dev))
+	if (IS_ERR(led_cdev->dev)) {
+		mutex_unlock(&led_cdev->led_access);
 		return PTR_ERR(led_cdev->dev);
+	}
 	led_cdev->dev->of_node = np;
 
 	if (ret)
@@ -275,6 +305,7 @@ int of_led_classdev_register(struct device *parent, struct device_node *np,
 		ret = led_add_brightness_hw_changed(led_cdev);
 		if (ret) {
 			device_unregister(led_cdev->dev);
+			mutex_unlock(&led_cdev->led_access);
 			return ret;
 		}
 	}
@@ -286,12 +317,6 @@ int of_led_classdev_register(struct device *parent, struct device_node *np,
 #ifdef CONFIG_LEDS_BRIGHTNESS_HW_CHANGED
 	led_cdev->brightness_hw_changed = -1;
 #endif
-	mutex_init(&led_cdev->led_access);
-	/* add to the list of leds */
-	down_write(&leds_list_lock);
-	list_add_tail(&led_cdev->node, &leds_list);
-	up_write(&leds_list_lock);
-
 	if (!led_cdev->max_brightness)
 		led_cdev->max_brightness = LED_FULL;
 
@@ -299,9 +324,16 @@ int of_led_classdev_register(struct device *parent, struct device_node *np,
 
 	led_init_core(led_cdev);
 
+	/* add to the list of leds */
+	down_write(&leds_list_lock);
+	list_add_tail(&led_cdev->node, &leds_list);
+	up_write(&leds_list_lock);
+
 #ifdef CONFIG_LEDS_TRIGGERS
 	led_trigger_set_default(led_cdev);
 #endif
+
+	mutex_unlock(&led_cdev->led_access);
 
 	dev_dbg(parent, "Registered led device: %s\n",
 			led_cdev->name);

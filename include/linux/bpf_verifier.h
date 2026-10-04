@@ -1,15 +1,14 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /* Copyright (c) 2011-2014 PLUMgrid, http://plumgrid.com
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of version 2 of the GNU General Public
- * License as published by the Free Software Foundation.
  */
 #ifndef _LINUX_BPF_VERIFIER_H
 #define _LINUX_BPF_VERIFIER_H 1
 
 #include <linux/bpf.h> /* for enum bpf_reg_type */
+#include <linux/btf.h> /* for struct btf and btf_id() */
 #include <linux/filter.h> /* for MAX_BPF_STACK */
 #include <linux/tnum.h>
+#include <linux/android_kabi.h>
 
 /* Maximum variable offset umax_value permitted when resolving memory accesses.
  * In practice this is far bigger than any realistic pointer offset; this limit
@@ -46,6 +45,8 @@ enum bpf_reg_liveness {
 struct bpf_reg_state {
 	/* Ordering of fields matters.  See states_equal() */
 	enum bpf_reg_type type;
+	/* Fixed part of pointer offset, pointer types only */
+	s32 off;
 	union {
 		/* valid when type == PTR_TO_PACKET */
 		int range;
@@ -53,26 +54,22 @@ struct bpf_reg_state {
 		/* valid when type == CONST_PTR_TO_MAP | PTR_TO_MAP_VALUE |
 		 *   PTR_TO_MAP_VALUE_OR_NULL
 		 */
-		struct {
-			struct bpf_map *map_ptr;
-			/* Non-zero for registers pointing to inner maps. */
-			u32 map_uid;
-		};
+		struct bpf_map *map_ptr;
 
+		/* for PTR_TO_BTF_ID */
 		struct {
 			struct btf *btf;
-			u32 btf_id; /* for PTR_TO_BTF_ID */
+			u32 btf_id;
 		};
 
 		u32 mem_size; /* for PTR_TO_MEM | PTR_TO_MEM_OR_NULL */
 
 		/* Max size from any of the above. */
-		unsigned long raw;
-
-		u32 subprogno; /* for PTR_TO_FUNC */
+		struct {
+			unsigned long raw1;
+			unsigned long raw2;
+		} raw;
 	};
-	/* Fixed part of pointer offset, pointer types only */
-	s32 off;
 	/* For PTR_TO_PACKET, used to find other pointers with the same variable
 	 * offset, so they can share range knowledge.
 	 * For PTR_TO_MAP_VALUE_OR_NULL this is used to share which map value we
@@ -203,16 +200,17 @@ struct bpf_func_state {
 	 * zero == main subprog
 	 */
 	u32 subprogno;
-	/* Every bpf_timer_start will increment async_entry_cnt. */
-	u32 async_entry_cnt;
-	bool in_callback_fn;
-	bool in_async_callback_fn;
 
 	/* The following fields should be last. See copy_func_state() */
 	int acquired_refs;
 	struct bpf_reference_state *refs;
 	int allocated_stack;
 	struct bpf_stack_state *stack;
+};
+
+struct bpf_idx_pair {
+	u32 prev_idx;
+	u32 idx;
 };
 
 struct bpf_id_pair {
@@ -222,11 +220,6 @@ struct bpf_id_pair {
 
 /* Maximum number of register states that can exist at once */
 #define BPF_ID_MAP_SIZE (MAX_BPF_REG + MAX_BPF_STACK / BPF_REG_SIZE)
-struct bpf_idx_pair {
-	u32 prev_idx;
-	u32 idx;
-};
-
 #define MAX_CALL_FRAMES 8
 struct bpf_verifier_state {
 	/* call stack tracking */
@@ -355,16 +348,18 @@ struct bpf_insn_aux_data {
 		};
 		struct {
 			enum bpf_reg_type reg_type;	/* type of pseudo_btf_id */
-			struct btf *btf;		/* BTF object for pseudo_btf_id */
 			union {
-				u32 btf_id;	/* btf_id for struct typed var */
+				struct {
+					struct btf *btf;
+					u32 btf_id;	/* btf_id for struct typed var */
+				};
 				u32 mem_size;	/* mem_size for non-struct typed var */
 			};
 		} btf_var;
 	};
 	u64 map_key_state; /* constant (32 bit) key tracking for maps */
 	int ctx_field_size; /* the ctx field size for load insn, maybe 0 */
-	u32 seen; /* this insn was processed by the verifier */
+	u32 seen; /* this insn was processed by the verifier at env->pass_cnt */
 	bool sanitize_stack_spill; /* subject to Spectre v4 sanitation */
 	bool zext_dst; /* this insn zero extends dst reg */
 	u8 alu_state; /* used in combination with alu_limit */
@@ -423,7 +418,8 @@ struct bpf_subprog_info {
 	bool has_tail_call;
 	bool tail_call_reachable;
 	bool has_ld_abs;
-	bool is_async_cb;
+
+	ANDROID_KABI_RESERVE(1);
 };
 
 /* single container for all structs
@@ -442,7 +438,7 @@ struct bpf_verifier_env {
 	struct bpf_verifier_state_list **explored_states; /* search pruning optimization */
 	struct bpf_verifier_state_list *free_list;
 	struct bpf_map *used_maps[MAX_USED_MAPS]; /* array of map's used by eBPF program */
-	struct btf_mod_pair used_btfs[MAX_USED_BTFS]; /* array of BTFs used by BPF program */
+	struct btf_mod_pair used_btfs[MAX_USED_BTFS]; /* array of BTF's used by BPF program */
 	u32 used_map_cnt;		/* number of used maps */
 	u32 used_btf_cnt;		/* number of used BTF objects */
 	u32 id_gen;			/* used to generate unique reg IDs */
@@ -483,6 +479,9 @@ struct bpf_verifier_env {
 	u32 peak_states;
 	/* longest register parentage chain walked for liveness marking */
 	u32 longest_mark_read_walk;
+
+	ANDROID_KABI_RESERVE(1);
+	ANDROID_KABI_RESERVE(2);
 };
 
 __printf(2, 0) void bpf_verifier_vlog(struct bpf_verifier_log *log,
@@ -516,16 +515,17 @@ bpf_prog_offload_remove_insns(struct bpf_verifier_env *env, u32 off, u32 cnt);
 
 int check_ctx_reg(struct bpf_verifier_env *env,
 		  const struct bpf_reg_state *reg, int regno);
+int check_mem_reg(struct bpf_verifier_env *env, struct bpf_reg_state *reg,
+		   u32 regno, u32 mem_size);
 
 /* this lives here instead of in bpf.h because it needs to dereference tgt_prog */
-u32 btf_obj_id(const struct btf *btf);
-
 static inline u64 bpf_trampoline_compute_key(const struct bpf_prog *tgt_prog,
-						     struct btf *btf, u32 btf_id)
+					     struct btf *btf, u32 btf_id)
 {
 	if (tgt_prog)
 		return ((u64)tgt_prog->aux->id << 32) | btf_id;
-	return ((u64)btf_obj_id(btf) << 32) | 0x80000000 | btf_id;
+	else
+		return ((u64)btf_obj_id(btf) << 32) | 0x80000000 | btf_id;
 }
 
 int bpf_check_attach_target(struct bpf_verifier_log *log,

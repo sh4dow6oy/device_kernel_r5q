@@ -1,14 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2011-2012, 2014, 2016-2017 The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #include <linux/dma-mapping.h>
@@ -160,11 +152,10 @@ static long amrwb_in_ioctl(struct file *file,
 	}
 	case AUDIO_GET_AMRWB_ENC_CONFIG: {
 		if (copy_to_user((void *)arg, audio->enc_cfg,
-				sizeof(struct msm_audio_amrwb_enc_config))) {
+				sizeof(struct msm_audio_amrwb_enc_config)))
 			pr_err("%s: copy_to_user for AUDIO_GET_AMRWB_ENC_CONFIG failed\n",
 				__func__);
 			rc = -EFAULT;
-		}
 		break;
 	}
 	case AUDIO_SET_AMRWB_ENC_CONFIG: {

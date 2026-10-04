@@ -1,23 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*****************************************************************************/
 
 /*
  *      devio.c  --  User space communication with USB devices.
  *
  *      Copyright (C) 1999-2000  Thomas Sailer (sailer@ife.ee.ethz.ch)
- *
- *      This program is free software; you can redistribute it and/or modify
- *      it under the terms of the GNU General Public License as published by
- *      the Free Software Foundation; either version 2 of the License, or
- *      (at your option) any later version.
- *
- *      This program is distributed in the hope that it will be useful,
- *      but WITHOUT ANY WARRANTY; without even the implied warranty of
- *      MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *      GNU General Public License for more details.
- *
- *      You should have received a copy of the GNU General Public License
- *      along with this program; if not, write to the Free Software
- *      Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  *
  *  This file implements the usbfs/x/y files, where
  *  x is the bus number and y the device number.
@@ -148,7 +135,7 @@ static int usbfs_increase_memory_usage(u64 amount)
 {
 	u64 lim;
 
-	lim = ACCESS_ONCE(usbfs_memory_mb);
+	lim = READ_ONCE(usbfs_memory_mb);
 	lim <<= 20;
 
 	atomic64_add(amount, &usbfs_memory_usage);
@@ -598,14 +585,15 @@ static void async_completed(struct urb *urb)
 	struct siginfo sinfo;
 	struct pid *pid = NULL;
 	const struct cred *cred = NULL;
+	unsigned long flags;
 	int signr;
 
-	spin_lock(&ps->lock);
+	spin_lock_irqsave(&ps->lock, flags);
 	list_move_tail(&as->asynclist, &ps->async_completed);
 	as->status = urb->status;
 	signr = as->signr;
 	if (signr) {
-		memset(&sinfo, 0, sizeof(sinfo));
+		clear_siginfo(&sinfo);
 		sinfo.si_signo = as->signr;
 		sinfo.si_errno = as->status;
 		sinfo.si_code = SI_ASYNCIO;
@@ -624,7 +612,7 @@ static void async_completed(struct urb *urb)
 		cancel_bulk_urbs(ps, as->bulk_addr);
 
 	wake_up(&ps->wait);
-	spin_unlock(&ps->lock);
+	spin_unlock_irqrestore(&ps->lock, flags);
 
 	if (signr) {
 		kill_pid_info_as_cred(sinfo.si_signo, &sinfo, pid, cred);
@@ -923,7 +911,7 @@ static int parse_usbdevfs_streams(struct usb_dev_state *ps,
 	if (num_streams_ret && (num_streams < 2 || num_streams > 65536))
 		return -EINVAL;
 
-	eps = kmalloc(num_eps * sizeof(*eps), GFP_KERNEL);
+	eps = kmalloc_array(num_eps, sizeof(*eps), GFP_KERNEL);
 	if (!eps)
 		return -ENOMEM;
 
@@ -988,10 +976,6 @@ static struct usb_device *usbdev_lookup_by_devt(dev_t devt)
 	return to_usb_device(dev);
 }
 
-#ifdef CONFIG_USB_DEBUG_DETAILED_LOG
-static unsigned int prev_cmd = 0;
-static int prev_ret = 0;
-#endif
 /*
  * file operations
  */
@@ -1045,10 +1029,6 @@ static int usbdev_open(struct inode *inode, struct file *file)
 	usb_unlock_device(dev);
 	snoop(&dev->dev, "opened by process %d: %s\n", task_pid_nr(current),
 			current->comm);
-#ifdef CONFIG_USB_DEBUG_DETAILED_LOG
-	prev_cmd = 0;
-	prev_ret = 0;
-#endif
 	return ret;
 
  out_unlock_device:
@@ -1209,7 +1189,12 @@ static int proc_bulk(struct usb_dev_state *ps, void __user *arg)
 	ret = usbfs_increase_memory_usage(len1 + sizeof(struct urb));
 	if (ret)
 		return ret;
-	tbuf = kmalloc(len1, GFP_KERNEL);
+
+	/*
+	 * len1 can be almost arbitrarily large.  Don't WARN if it's
+	 * too big, just fail the request.
+	 */
+	tbuf = kmalloc(len1, GFP_KERNEL | __GFP_NOWARN);
 	if (!tbuf) {
 		ret = -ENOMEM;
 		goto done;
@@ -1281,9 +1266,6 @@ static int proc_resetep(struct usb_dev_state *ps, void __user *arg)
 	ret = checkintf(ps, ret);
 	if (ret)
 		return ret;
-#ifdef CONFIG_USB_DEBUG_DETAILED_LOG
-	dev_info(&ps->dev->dev,"%s epnum %d\n", __func__, ep);
-#endif
 	check_reset_of_active_ep(ps->dev, ep, "RESETEP");
 	usb_reset_endpoint(ps->dev, ep);
 	return 0;
@@ -1354,9 +1336,6 @@ static int proc_resetdevice(struct usb_dev_state *ps)
 	 * privilege to do such things and any of the interfaces are
 	 * currently claimed.
 	 */
-#ifdef CONFIG_USB_DEBUG_DETAILED_LOG
-	dev_info(&ps->dev->dev,"%s\n", __func__);
-#endif
 	if (ps->privileges_dropped && actconfig) {
 		for (i = 0; i < actconfig->desc.bNumInterfaces; ++i) {
 			interface = actconfig->interface[i];
@@ -1655,8 +1634,9 @@ static int proc_do_submiturb(struct usb_dev_state *ps, struct usbdevfs_urb *uurb
 	as->mem_usage = u;
 
 	if (num_sgs) {
-		as->urb->sg = kmalloc(num_sgs * sizeof(struct scatterlist),
-				      GFP_KERNEL);
+		as->urb->sg = kmalloc_array(num_sgs,
+					    sizeof(struct scatterlist),
+					    GFP_KERNEL | __GFP_NOWARN);
 		if (!as->urb->sg) {
 			ret = -ENOMEM;
 			goto error;
@@ -1691,7 +1671,7 @@ static int proc_do_submiturb(struct usb_dev_state *ps, struct usbdevfs_urb *uurb
 					(uurb_start - as->usbm->vm_start);
 		} else {
 			as->urb->transfer_buffer = kmalloc(uurb->buffer_length,
-					GFP_KERNEL);
+					GFP_KERNEL | __GFP_NOWARN);
 			if (!as->urb->transfer_buffer) {
 				ret = -ENOMEM;
 				goto error;
@@ -1729,8 +1709,6 @@ static int proc_do_submiturb(struct usb_dev_state *ps, struct usbdevfs_urb *uurb
 		u |= URB_ISO_ASAP;
 	if (allow_short && uurb->flags & USBDEVFS_URB_SHORT_NOT_OK)
 		u |= URB_SHORT_NOT_OK;
-	if (uurb->flags & USBDEVFS_URB_NO_FSBR)
-		u |= URB_NO_FSBR;
 	if (allow_zero && uurb->flags & USBDEVFS_URB_ZERO_PACKET)
 		u |= URB_ZERO_PACKET;
 	if (uurb->flags & USBDEVFS_URB_NO_INTERRUPT)
@@ -2143,9 +2121,6 @@ static int proc_claiminterface(struct usb_dev_state *ps, void __user *arg)
 
 	if (get_user(ifnum, (unsigned int __user *)arg))
 		return -EFAULT;
-#ifdef CONFIG_USB_DEBUG_DETAILED_LOG
-	dev_info(&ps->dev->dev,"%s: ifnum %d\n", __func__, ifnum);
-#endif
 	return claimintf(ps, ifnum);
 }
 
@@ -2156,9 +2131,6 @@ static int proc_releaseinterface(struct usb_dev_state *ps, void __user *arg)
 
 	if (get_user(ifnum, (unsigned int __user *)arg))
 		return -EFAULT;
-#ifdef CONFIG_USB_DEBUG_DETAILED_LOG
-	dev_info(&ps->dev->dev,"%s: ifnum %d\n", __func__, ifnum);
-#endif
 	ret = releaseintf(ps, ifnum);
 	if (ret < 0)
 		return ret;
@@ -2204,9 +2176,6 @@ static int proc_ioctl(struct usb_dev_state *ps, struct usbdevfs_ioctl *ctl)
 		retval = -EINVAL;
 	else switch (ctl->ioctl_code) {
 
-#ifdef CONFIG_USB_DEBUG_DETAILED_LOG
-	dev_info(&ps->dev->dev,"%s ioctl_code %d\n", __func__, ctl->ioctl_code);
-#endif
 	/* disconnect kernel driver from interface */
 	case USBDEVFS_DISCONNECT:
 		if (intf->dev.driver) {
@@ -2342,12 +2311,7 @@ static int proc_disconnect_claim(struct usb_dev_state *ps, void __user *arg)
 					sizeof(dc.driver)) == 0)
 			return -EBUSY;
 
-#ifdef CONFIG_USB_DEBUG_DETAILED_LOG
-		dev_info(&intf->dev, "%s,intfnum %d disconnect by usbfs\n",
-				__func__, dc.interface);
-#else
 		dev_dbg(&intf->dev, "disconnect by usbfs\n");
-#endif
 		usb_driver_release_interface(driver, intf);
 	}
 
@@ -2613,102 +2577,12 @@ static long usbdev_do_ioctl(struct file *file, unsigned int cmd,
 	return ret;
 }
 
-#ifdef CONFIG_USB_DEBUG_DETAILED_LOG
-static int usbdev_log(unsigned int cmd, int ret)
-{
-	char *cmd_string;
-
-	switch (cmd) {
-	case USBDEVFS_CONTROL:
-		cmd_string = "CONTROL";
-		break;
-	case USBDEVFS_BULK:
-		cmd_string = "BULK";
-		break;
-	case USBDEVFS_RESETEP:
-		cmd_string = "RESETEP";
-		break;
-	case USBDEVFS_RESET:
-		cmd_string = "RESET";
-		break;
-	case USBDEVFS_CLEAR_HALT:
-		cmd_string = "CLEAR_HALT";
-		break;
-	case USBDEVFS_GETDRIVER:
-		cmd_string = "GETDRIVER";
-		break;
-	case USBDEVFS_CONNECTINFO:
-		cmd_string = "CONNECTINFO";
-		break;
-	case USBDEVFS_SETINTERFACE:
-		cmd_string = "SETINTERFACE";
-		break;
-	case USBDEVFS_SETCONFIGURATION:
-		cmd_string = "SETCONFIGURATION";
-		break;
-	case USBDEVFS_SUBMITURB:
-		cmd_string = "SUBMITURB";
-		break;
-	case USBDEVFS_DISCARDURB:
-		cmd_string = "DISCARDURB";
-		break;
-	case USBDEVFS_REAPURB:
-		cmd_string = "REAPURB";
-		break;
-	case USBDEVFS_REAPURBNDELAY:
-		cmd_string = "REAPURBNDELAY";
-		break;
-	case USBDEVFS_DISCSIGNAL:
-		cmd_string = "DISCSIGNAL";
-		break;
-	case USBDEVFS_CLAIMINTERFACE:
-		cmd_string = "CLAIMINTERFACE";
-		break;
-	case USBDEVFS_RELEASEINTERFACE:
-		cmd_string = "RELEASEINTERFACE";
-		break;
-	case USBDEVFS_IOCTL:
-		cmd_string = "IOCTL";
-		break;
-	case USBDEVFS_CLAIM_PORT:
-		cmd_string = "CLAIM_PORT";
-		break;
-	case USBDEVFS_RELEASE_PORT:
-		cmd_string = "RELEASE_PORT";
-		break;
-	case USBDEVFS_GET_CAPABILITIES:
-		cmd_string = "GET_CAPABILITIES";
-		break;
-	case USBDEVFS_DISCONNECT_CLAIM:
-		cmd_string = "DISCONNECT_CLAIM";
-		break;
-	default:
-		cmd_string = "DEFAULT";
-		break;
-	}
-	if ((prev_cmd != cmd) || (prev_ret != ret)) {
-		printk(KERN_ERR "%s: %s error ret=%d\n", __func__, cmd_string, ret);
-		prev_cmd = cmd;
-		prev_ret = ret;
-	}
-	return 0;
-}
-#endif
-
 static long usbdev_ioctl(struct file *file, unsigned int cmd,
 			unsigned long arg)
 {
 	int ret;
 
 	ret = usbdev_do_ioctl(file, cmd, (void __user *)arg);
-#ifdef CONFIG_USB_DEBUG_DETAILED_LOG
-	if (ret < 0)
-		usbdev_log(cmd, ret);
-	else {
-		prev_cmd = 0;
-		prev_ret = 0;
-	}
-#endif
 
 	return ret;
 }
@@ -2726,19 +2600,19 @@ static long usbdev_compat_ioctl(struct file *file, unsigned int cmd,
 #endif
 
 /* No kernel lock - fine */
-static unsigned int usbdev_poll(struct file *file,
+static __poll_t usbdev_poll(struct file *file,
 				struct poll_table_struct *wait)
 {
 	struct usb_dev_state *ps = file->private_data;
-	unsigned int mask = 0;
+	__poll_t mask = 0;
 
 	poll_wait(file, &ps->wait, wait);
 	if (file->f_mode & FMODE_WRITE && !list_empty(&ps->async_completed))
-		mask |= POLLOUT | POLLWRNORM;
+		mask |= EPOLLOUT | EPOLLWRNORM;
 	if (!connected(ps))
-		mask |= POLLHUP;
+		mask |= EPOLLHUP;
 	if (list_empty(&ps->list))
-		mask |= POLLERR;
+		mask |= EPOLLERR;
 	return mask;
 }
 
@@ -2767,7 +2641,7 @@ static void usbdev_remove(struct usb_device *udev)
 		wake_up_all(&ps->wait);
 		list_del_init(&ps->list);
 		if (ps->discsignr) {
-			memset(&sinfo, 0, sizeof(sinfo));
+			clear_siginfo(&sinfo);
 			sinfo.si_signo = ps->discsignr;
 			sinfo.si_errno = EPIPE;
 			sinfo.si_code = SI_ASYNCIO;

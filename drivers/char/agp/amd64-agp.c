@@ -156,7 +156,7 @@ static u64 amd64_configure(struct pci_dev *hammer, u64 gatt_table)
 
 	/* Address to map to */
 	pci_read_config_dword(hammer, AMD64_GARTAPERTUREBASE, &tmp);
-	aperturebase = tmp << 25;
+	aperturebase = (u64)tmp << 25;
 	aper_base = (aperturebase & PCI_BASE_ADDRESS_MEM_MASK);
 
 	enable_gart_translation(hammer, gatt_table);
@@ -277,7 +277,7 @@ static int fix_northbridge(struct pci_dev *nb, struct pci_dev *agp, u16 cap)
 	pci_read_config_dword(nb, AMD64_GARTAPERTURECTL, &nb_order);
 	nb_order = (nb_order >> 1) & 7;
 	pci_read_config_dword(nb, AMD64_GARTAPERTUREBASE, &nb_base);
-	nb_aper = nb_base << 25;
+	nb_aper = (u64)nb_base << 25;
 
 	/* Northbridge seems to contain crap. Try the AGP bridge. */
 
@@ -545,7 +545,7 @@ static int agp_amd64_probe(struct pci_dev *pdev,
 	/* Fill in the mode register */
 	pci_read_config_dword(pdev, bridge->capndx+PCI_AGP_STATUS, &bridge->mode);
 
-	if (cache_nbs(pdev, cap_ptr) == -1) {
+	if (cache_nbs(pdev, cap_ptr) < 0) {
 		agp_put_bridge(bridge);
 		return -ENODEV;
 	}

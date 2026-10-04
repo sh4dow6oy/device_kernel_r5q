@@ -19,9 +19,6 @@
 #include <linux/sched_clock.h>
 #include <linux/seqlock.h>
 #include <linux/bitops.h>
-#ifdef CONFIG_SEC_DEBUG
-#include <linux/sec_debug.h>
-#endif
 
 /**
  * struct clock_read_data - data required to read from sched_clock()
@@ -115,9 +112,6 @@ unsigned long long notrace sched_clock(void)
 		res = rd->epoch_ns + cyc_to_ns(cyc, rd->mult, rd->shift);
 	} while (read_seqcount_retry(&cd.seq, seq));
 
-#ifdef CONFIG_SEC_DEBUG
-	sec_debug_save_last_ns(res);
-#endif
 	return res;
 }
 
@@ -246,7 +240,7 @@ sched_clock_register(u64 (*read)(void), int bits, unsigned long rate)
 	pr_debug("Registered %pF as sched_clock source\n", read);
 }
 
-void __init sched_clock_postinit(void)
+void __init generic_sched_clock_init(void)
 {
 	/*
 	 * If no sched_clock() function has been provided at that point,

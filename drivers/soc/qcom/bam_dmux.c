@@ -1,4 +1,5 @@
-/* Copyright (c) 2011-2016, 2019, 2021 The Linux Foundation. All rights reserved.
+// SPDX-License-Identifier: GPL-2.0-only
+/* Copyright (c) 2011-2016, 2019 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -165,7 +166,7 @@ static atomic_t bam_dmux_a2_pwr_cntl_in_cnt = ATOMIC_INIT(0);
 
 struct bam_ch_info {
 	uint32_t status;
-	void (*notify)(void *, int, unsigned long);
+	void (*notify)(void *priv, int event_type, unsigned long data);
 	void *priv;
 	spinlock_t lock;
 	struct platform_device *pdev;
@@ -264,7 +265,7 @@ static DEFINE_RWLOCK(ul_wakeup_lock);
 static DECLARE_WORK(kickoff_ul_wakeup, kickoff_ul_wakeup_func);
 static int bam_connection_is_active;
 static int wait_for_ack;
-static struct wakeup_source bam_wakelock;
+static struct wakeup_source *bam_wakelock;
 static int a2_pc_disabled;
 static DEFINE_MUTEX(dfab_status_lock);
 static int dfab_is_on;
@@ -281,7 +282,7 @@ static int ssr_skipped_disconnect;
 static struct completion shutdown_completion;
 
 struct outside_notify_func {
-	void (*notify)(void *, int, unsigned long);
+	void (*notify)(void *priv, int event_type, unsigned long data);
 	void *priv;
 	struct list_head list_node;
 };
@@ -534,7 +535,7 @@ static void bam_mux_process_data(struct sk_buff *rx_skb)
 	struct bam_mux_hdr *rx_hdr;
 	unsigned long event_data;
 	uint8_t ch_id;
-	void (*notify)(void *, int, unsigned long);
+	void (*notify)(void *priv, int event_type, unsigned long data);
 	void *priv;
 
 	rx_hdr = (struct bam_mux_hdr *)rx_skb->data;
@@ -1085,7 +1086,8 @@ static uint8_t create_open_signal(void)
 }
 
 int msm_bam_dmux_open(uint32_t id, void *priv,
-			void (*notify)(void *, int, unsigned long))
+			void (*notify)(void *priv,
+				int event_type, unsigned long data))
 {
 	struct bam_mux_hdr *hdr;
 	unsigned long flags;
@@ -1118,6 +1120,12 @@ int msm_bam_dmux_open(uint32_t id, void *priv,
 	}
 	if (!bam_ch_is_remote_open(id)) {
 		DBG("%s: Remote not open; ch: %d\n", __func__, id);
+		spin_unlock_irqrestore(&bam_ch[id].lock, flags);
+		kfree(hdr);
+		return -ENODEV;
+	}
+	if (in_global_reset) {
+		BAM_DMUX_LOG("%s: In SSR... ch_id[%d]\n", __func__, id);
 		spin_unlock_irqrestore(&bam_ch[id].lock, flags);
 		kfree(hdr);
 		return -ENODEV;
@@ -1197,6 +1205,12 @@ int msm_bam_dmux_close(uint32_t id)
 	if (bam_ch_is_in_reset(id)) {
 		read_unlock(&ul_wakeup_lock);
 		bam_ch[id].status &= ~BAM_CH_IN_RESET;
+		return 0;
+	}
+
+	if (in_global_reset) {
+		BAM_DMUX_LOG("%s: In SSR... ch_id[%d]\n", __func__, id);
+		read_unlock(&ul_wakeup_lock);
 		return 0;
 	}
 
@@ -1630,16 +1644,9 @@ static ssize_t debug_read(struct file *file, char __user *buf,
 	return simple_read_from_buffer(buf, count, ppos, debug_buffer, bsize);
 }
 
-static int debug_open(struct inode *inode, struct file *file)
-{
-	file->private_data = inode->i_private;
-	return 0;
-}
-
-
 static const struct file_operations debug_ops = {
 	.read = debug_read,
-	.open = debug_open,
+	.open = simple_open,
 };
 
 static void debug_create(const char *name, mode_t mode,
@@ -1662,7 +1669,7 @@ static void notify_all(int event, unsigned long data)
 	unsigned long flags;
 	struct list_head *temp;
 	struct outside_notify_func *func;
-	void (*notify)(void *, int, unsigned long);
+	void (*notify)(void *priv, int event_type, unsigned long data);
 	void *priv;
 
 	BAM_DMUX_LOG("%s: event=%d, data=%lu\n", __func__, event, data);
@@ -2168,7 +2175,7 @@ static void grab_wakelock(void)
 	BAM_DMUX_LOG("%s: ref count = %d\n", __func__,
 						wakelock_reference_count);
 	if (wakelock_reference_count == 0)
-		__pm_stay_awake(&bam_wakelock);
+		__pm_stay_awake(bam_wakelock);
 	++wakelock_reference_count;
 	spin_unlock_irqrestore(&wakelock_reference_lock, flags);
 }
@@ -2188,7 +2195,7 @@ static void release_wakelock(void)
 						wakelock_reference_count);
 	--wakelock_reference_count;
 	if (wakelock_reference_count == 0)
-		__pm_relax(&bam_wakelock);
+		__pm_relax(bam_wakelock);
 	spin_unlock_irqrestore(&wakelock_reference_lock, flags);
 }
 
@@ -2818,7 +2825,7 @@ static int bam_dmux_probe(struct platform_device *pdev)
 	init_completion(&shutdown_completion);
 	complete_all(&shutdown_completion);
 	INIT_DELAYED_WORK(&ul_timeout_work, ul_timeout);
-	wakeup_source_init(&bam_wakelock, "bam_dmux_wakelock");
+	bam_wakelock = wakeup_source_register(NULL, "bam_dmux_wakelock");
 	init_srcu_struct(&bam_dmux_srcu);
 
 	subsys_h = subsys_notif_register_notifier("modem", &restart_notifier);
@@ -2904,7 +2911,6 @@ static struct platform_driver bam_dmux_driver = {
 	.probe		= bam_dmux_probe,
 	.driver		= {
 		.name	= "BAM_RMNT",
-		.owner	= THIS_MODULE,
 		.of_match_table = msm_match_table,
 	},
 };
@@ -2925,7 +2931,7 @@ static int __init bam_dmux_init(void)
 	bam_ipc_log_txt = ipc_log_context_create(BAM_IPC_LOG_PAGES, "bam_dmux",
 			0);
 	if (!bam_ipc_log_txt)
-		pr_err("%s : unable to create IPC Logging Context", __func__);
+		pr_err("%s : unable to create IPC Logging Context\n", __func__);
 
 	rx_timer_interval = DEFAULT_POLLING_MIN_SLEEP;
 

@@ -333,6 +333,14 @@ static int raw_notifier(struct notifier_block *nb, unsigned long msg,
 	return NOTIFY_DONE;
 }
 
+static void raw_sock_destruct(struct sock *sk)
+{
+	struct raw_sock *ro = raw_sk(sk);
+
+	free_percpu(ro->uniq);
+	can_sock_destruct(sk);
+}
+
 static int raw_init(struct sock *sk)
 {
 	struct raw_sock *ro = raw_sk(sk);
@@ -356,6 +364,8 @@ static int raw_init(struct sock *sk)
 	ro->uniq = alloc_percpu(struct uniqframe);
 	if (unlikely(!ro->uniq))
 		return -ENOMEM;
+
+	sk->sk_destruct = raw_sock_destruct;
 
 	/* set notifier */
 	spin_lock(&raw_notifier_lock);
@@ -406,7 +416,6 @@ static int raw_release(struct socket *sock)
 	ro->ifindex = 0;
 	ro->bound   = 0;
 	ro->count   = 0;
-	free_percpu(ro->uniq);
 
 	sock_orphan(sk);
 	sock->sk = NULL;
@@ -427,6 +436,8 @@ static int raw_bind(struct socket *sock, struct sockaddr *uaddr, int len)
 	int notify_enetdown = 0;
 
 	if (len < sizeof(*addr))
+		return -EINVAL;
+	if (addr->can_family != AF_CAN)
 		return -EINVAL;
 
 	lock_sock(sk);
@@ -495,7 +506,7 @@ static int raw_bind(struct socket *sock, struct sockaddr *uaddr, int len)
 }
 
 static int raw_getname(struct socket *sock, struct sockaddr *uaddr,
-		       int *len, int peer)
+		       int peer)
 {
 	struct sockaddr_can *addr = (struct sockaddr_can *)uaddr;
 	struct sock *sk = sock->sk;
@@ -508,9 +519,7 @@ static int raw_getname(struct socket *sock, struct sockaddr *uaddr,
 	addr->can_family  = AF_CAN;
 	addr->can_ifindex = ro->ifindex;
 
-	*len = sizeof(*addr);
-
-	return 0;
+	return sizeof(*addr);
 }
 
 static int raw_setsockopt(struct socket *sock, int level, int optname,

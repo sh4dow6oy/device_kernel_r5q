@@ -64,7 +64,6 @@ struct snd_compr_params {
  * @pcm_io_frames: Frames rendered or received by DSP into a mixer or an audio
  * output/input. This field should be used for A/V sync or time estimates.
  * @sampling_rate: sampling rate of audio
- * @timestamp: timestamp of audio clips
  */
 struct snd_compr_tstamp {
 	__u32 byte_offset;
@@ -72,7 +71,6 @@ struct snd_compr_tstamp {
 	__u32 pcm_frames;
 	__u32 pcm_io_frames;
 	__u32 sampling_rate;
-	__u64 timestamp;
 } __attribute__((packed, aligned(4)));
 
 /**
@@ -134,16 +132,16 @@ struct snd_compr_audio_info {
 	__u32 reserved[15];
 } __attribute__((packed, aligned(4)));
 
+#define SND_COMPR_AUDIO_INFO
+
 #define SNDRV_COMPRESS_RENDER_MODE_AUDIO_MASTER 0
 #define SNDRV_COMPRESS_RENDER_MODE_STC_MASTER 1
 #define SNDRV_COMPRESS_RENDER_MODE_TTP 2
 #define SNDRV_COMPRESS_RENDER_MODE_TTP_PASS_THROUGH 3
+#define SNDRV_COMPRESS_RENDER_MODE_ABSOLUTETIME 4
 
 #define SNDRV_COMPRESS_CLK_REC_MODE_NONE 0
 #define SNDRV_COMPRESS_CLK_REC_MODE_AUTO 1
-
-#define SNDRV_COMPRESS_TIMESTAMP_VALID 0x00000000
-#define SNDRV_COMPRESS_TIMESTAMP_CONTINUE 0x00000001
 
 enum sndrv_compress_latency_mode {
 	SNDRV_COMPRESS_LEGACY_LATENCY_MODE = 0,
@@ -178,6 +176,7 @@ enum sndrv_compress_encoder {
 	SNDRV_COMPRESS_ADJUST_SESSION_CLOCK = 11,
 	SNDRV_COMPRESS_LATENCY_MODE = 12,
 	SNDRV_COMPRESS_IN_TTP_OFFSET = 13,
+	SNDRV_COMPRESS_OUT_EXTERNAL_SINK_LATENCY = 14,
 };
 
 #define SNDRV_COMPRESS_MIN_BLK_SIZE SNDRV_COMPRESS_MIN_BLK_SIZE
@@ -192,6 +191,8 @@ enum sndrv_compress_encoder {
 #define SNDRV_COMPRESS_ADJUST_SESSION_CLOCK SNDRV_COMPRESS_ADJUST_SESSION_CLOCK
 #define SNDRV_COMPRESS_LATENCY_MODE SNDRV_COMPRESS_LATENCY_MODE
 #define SNDRV_COMPRESS_IN_TTP_OFFSET SNDRV_COMPRESS_IN_TTP_OFFSET
+#define SNDRV_COMPRESS_OUT_EXTERNAL_SINK_LATENCY \
+		SNDRV_COMPRESS_OUT_EXTERNAL_SINK_LATENCY
 
 /**
  * struct snd_compr_metadata - compressed stream metadata

@@ -123,6 +123,7 @@ static unsigned int daio_device_index(enum DAIOTYP type, struct hw *hw)
 		switch (type) {
 		case SPDIFOO:	return 0;
 		case SPDIFIO:	return 0;
+		case SPDIFI1:	return 1;
 		case LINEO1:	return 4;
 		case LINEO2:	return 7;
 		case LINEO3:	return 5;
@@ -398,7 +399,8 @@ static int dao_rsc_init(struct dao *dao,
 	if (err)
 		return err;
 
-	dao->imappers = kzalloc(sizeof(void *)*desc->msr*2, GFP_KERNEL);
+	dao->imappers = kzalloc(array3_size(sizeof(void *), desc->msr, 2),
+				GFP_KERNEL);
 	if (!dao->imappers) {
 		err = -ENOMEM;
 		goto error1;

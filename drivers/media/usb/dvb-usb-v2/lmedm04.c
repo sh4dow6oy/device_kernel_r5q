@@ -21,7 +21,7 @@
  *
  * LME2510C + M88RS2000
  *
- * For firmware see Documentation/dvb/lmedm04.txt
+ * For firmware see Documentation/media/dvb-drivers/lmedm04.rst
  *
  * I2C addresses:
  * 0xd0 - STV0288	- Demodulator
@@ -49,7 +49,7 @@
  * GNU General Public License for more details.
  *
  *
- * see Documentation/dvb/README.dvb-usb for more information
+ * see Documentation/media/dvb-drivers/dvb-usb.rst for more information
  *
  * Known Issues :
  *	LME2510: Non Intel USB chipsets fail to maintain High Speed on
@@ -411,6 +411,7 @@ static int lme2510_int_read(struct dvb_usb_adapter *adap)
 	struct dvb_usb_device *d = adap_to_d(adap);
 	struct lme2510_state *lme_int = adap_to_priv(adap);
 	struct usb_host_endpoint *ep;
+	int ret;
 
 	lme_int->lme_urb = usb_alloc_urb(0, GFP_ATOMIC);
 
@@ -434,13 +435,22 @@ static int lme2510_int_read(struct dvb_usb_adapter *adap)
 
 	/* Quirk of pipe reporting PIPE_BULK but behaves as interrupt */
 	ep = usb_pipe_endpoint(d->udev, lme_int->lme_urb->pipe);
+	if (!ep) {
+		usb_free_urb(lme_int->lme_urb);
+		return -ENODEV;
+	}
 
 	if (usb_endpoint_type(&ep->desc) == USB_ENDPOINT_XFER_BULK)
 		lme_int->lme_urb->pipe = usb_rcvbulkpipe(d->udev, 0xa);
 
 	lme_int->lme_urb->transfer_flags |= URB_NO_TRANSFER_DMA_MAP;
 
-	usb_submit_urb(lme_int->lme_urb, GFP_ATOMIC);
+	ret = usb_submit_urb(lme_int->lme_urb, GFP_ATOMIC);
+	if (ret) {
+		usb_free_urb(lme_int->lme_urb);
+		return ret;
+	}
+
 	info("INT Interrupt Service Started");
 
 	return 0;

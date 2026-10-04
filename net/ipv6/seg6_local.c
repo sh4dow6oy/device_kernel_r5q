@@ -601,7 +601,7 @@ static struct seg6_action_desc *__get_action_desc(int action)
 	struct seg6_action_desc *desc;
 	int i, count;
 
-	count = sizeof(seg6_action_table) / sizeof(struct seg6_action_desc);
+	count = ARRAY_SIZE(seg6_action_table);
 	for (i = 0; i < count; i++) {
 		desc = &seg6_action_table[i];
 		if (desc->action == action)
@@ -656,11 +656,9 @@ static int parse_nla_srh(struct nlattr **attrs, struct seg6_local_lwt *slwt)
 	if (!seg6_validate_srh(srh, len, false))
 		return -EINVAL;
 
-	slwt->srh = kmalloc(len, GFP_KERNEL);
+	slwt->srh = kmemdup(srh, len, GFP_KERNEL);
 	if (!slwt->srh)
 		return -ENOMEM;
-
-	memcpy(slwt->srh, srh, len);
 
 	slwt->headroom += len;
 
@@ -830,8 +828,9 @@ static int parse_nla_bpf(struct nlattr **attrs, struct seg6_local_lwt *slwt)
 	int ret;
 	u32 fd;
 
-	ret = nla_parse_nested(tb, SEG6_LOCAL_BPF_PROG_MAX,
-			       attrs[SEG6_LOCAL_BPF], bpf_prog_policy, NULL);
+	ret = nla_parse_nested_deprecated(tb, SEG6_LOCAL_BPF_PROG_MAX,
+					  attrs[SEG6_LOCAL_BPF],
+					  bpf_prog_policy, NULL);
 	if (ret < 0)
 		return ret;
 
@@ -860,7 +859,7 @@ static int put_nla_bpf(struct sk_buff *skb, struct seg6_local_lwt *slwt)
 	if (!slwt->bpf.prog)
 		return 0;
 
-	nest = nla_nest_start(skb, SEG6_LOCAL_BPF);
+	nest = nla_nest_start_noflag(skb, SEG6_LOCAL_BPF);
 	if (!nest)
 		return -EMSGSIZE;
 
@@ -954,8 +953,9 @@ static int parse_nla_action(struct nlattr **attrs, struct seg6_local_lwt *slwt)
 	return 0;
 }
 
-static int seg6_local_build_state(struct nlattr *nla, unsigned int family,
-				  const void *cfg, struct lwtunnel_state **ts,
+static int seg6_local_build_state(struct net *net, struct nlattr *nla,
+				  unsigned int family, const void *cfg,
+				  struct lwtunnel_state **ts,
 				  struct netlink_ext_ack *extack)
 {
 	struct nlattr *tb[SEG6_LOCAL_MAX + 1];
@@ -966,8 +966,8 @@ static int seg6_local_build_state(struct nlattr *nla, unsigned int family,
 	if (family != AF_INET6)
 		return -EINVAL;
 
-	err = nla_parse_nested(tb, SEG6_LOCAL_MAX, nla, seg6_local_policy,
-			       extack);
+	err = nla_parse_nested_deprecated(tb, SEG6_LOCAL_MAX, nla,
+					  seg6_local_policy, extack);
 
 	if (err < 0)
 		return err;

@@ -10,6 +10,7 @@
 #include <linux/seq_file.h>
 #include <linux/refcount.h>
 #include <linux/mutex.h>
+#include <trace/hooks/memory.h>
 
 enum bpf_struct_ops_state {
 	BPF_STRUCT_OPS_STATE_INIT,
@@ -433,7 +434,7 @@ static int bpf_struct_ops_map_update_elem(struct bpf_map *map, void *key,
 		tprogs[BPF_TRAMP_FENTRY].nr_progs = 1;
 		flags = st_ops->func_models[i].ret_size > 0 ?
 			BPF_TRAMP_F_RET_FENTRY_RET : 0;
-		err = arch_prepare_bpf_trampoline(image,
+		err = arch_prepare_bpf_trampoline(NULL, image,
 						  st_map->image + PAGE_SIZE,
 						  &st_ops->func_models[i],
 						  flags, tprogs, NULL);
@@ -451,7 +452,9 @@ static int bpf_struct_ops_map_update_elem(struct bpf_map *map, void *key,
 	bpf_map_inc(map);
 
 	set_memory_ro((long)st_map->image, 1);
+	trace_android_vh_set_memory_ro((unsigned long)st_map->image, 1);
 	set_memory_x((long)st_map->image, 1);
+	trace_android_vh_set_memory_x((unsigned long)st_map->image, 1);
 	err = st_ops->reg(kdata);
 	if (likely(!err)) {
 		/* Pair with smp_load_acquire() during lookup_elem().
@@ -535,6 +538,8 @@ static void bpf_struct_ops_map_free(struct bpf_map *map)
 	if (st_map->progs)
 		bpf_struct_ops_map_put_progs(st_map);
 	bpf_map_area_free(st_map->progs);
+	trace_android_vh_set_memory_rw((unsigned long)st_map->image, 1);
+	trace_android_vh_set_memory_nx((unsigned long)st_map->image, 1);
 	bpf_jit_free_exec(st_map->image);
 	bpf_map_area_free(st_map->uvalue);
 	bpf_map_area_free(st_map);
@@ -551,12 +556,10 @@ static int bpf_struct_ops_map_alloc_check(union bpf_attr *attr)
 static struct bpf_map *bpf_struct_ops_map_alloc(union bpf_attr *attr)
 {
 	const struct bpf_struct_ops *st_ops;
-	size_t map_total_size, st_map_size;
+	size_t st_map_size;
 	struct bpf_struct_ops_map *st_map;
 	const struct btf_type *t, *vt;
-	struct bpf_map_memory mem;
 	struct bpf_map *map;
-	int err;
 
 	if (!bpf_capable())
 		return ERR_PTR(-EPERM);
@@ -576,20 +579,11 @@ static struct bpf_map *bpf_struct_ops_map_alloc(union bpf_attr *attr)
 		 * struct bpf_struct_ops_tcp_congestions_ops
 		 */
 		(vt->size - sizeof(struct bpf_struct_ops_value));
-	map_total_size = st_map_size +
-		/* uvalue */
-		sizeof(vt->size) +
-		/* struct bpf_progs **progs */
-		 btf_type_vlen(t) * sizeof(struct bpf_prog *);
-	err = bpf_map_charge_init(&mem, map_total_size);
-	if (err < 0)
-		return ERR_PTR(err);
 
 	st_map = bpf_map_area_alloc(st_map_size, NUMA_NO_NODE);
-	if (!st_map) {
-		bpf_map_charge_finish(&mem);
+	if (!st_map)
 		return ERR_PTR(-ENOMEM);
-	}
+
 	st_map->st_ops = st_ops;
 	map = &st_map->map;
 
@@ -600,14 +594,12 @@ static struct bpf_map *bpf_struct_ops_map_alloc(union bpf_attr *attr)
 	st_map->image = bpf_jit_alloc_exec(PAGE_SIZE);
 	if (!st_map->uvalue || !st_map->progs || !st_map->image) {
 		bpf_struct_ops_map_free(map);
-		bpf_map_charge_finish(&mem);
 		return ERR_PTR(-ENOMEM);
 	}
 
 	mutex_init(&st_map->lock);
 	set_vm_flush_reset_perms(st_map->image);
 	bpf_map_init_from_attr(map, attr);
-	bpf_map_charge_move(&map->memory, &mem);
 
 	return map;
 }

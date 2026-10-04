@@ -1,13 +1,7 @@
-/* Copyright (c) 2014-2019, The Linux Foundation. All rights reserved.
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2014-2019, The Linux Foundation. All rights reserved.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #include <linux/kernel.h>
@@ -185,10 +179,10 @@
 
 /* spread out etm register write */
 #define etm_writel(etm, val, off)	\
-		   do {	  \
-			   writel_relaxed_no_log(val, etm->base + off);	\
-			   udelay(20);   \
-		   } while(0);  \
+do {							\
+	writel_relaxed_no_log(val, etm->base + off);	\
+	udelay(20);					\
+} while (0)
 
 #define etm_writel_log(etm, val, off)	\
 		   __raw_writel(val, etm->base + off)
@@ -245,7 +239,6 @@ struct etm_ctx {
 
 static struct etm_ctx *etm[NR_CPUS];
 static int cnt;
-static bool hibernation_freeze;
 
 static struct clk *clock[NR_CPUS];
 
@@ -319,10 +312,9 @@ static inline void etm_mm_save_state(struct etm_ctx *etmdata)
 		etmdata->state[i++] = etm_readl(etmdata, TRCPRGCTLR);
 		if (!(etmdata->state[0] & BIT(0))) {
 			atomic_notifier_call_chain(&etm_save_notifier_list,
-					0, NULL);
+							0, NULL);
 			break;
 		}
-
 		/* main control and configuration registers */
 		etmdata->state[i++] = etm_readl(etmdata, TRCPROCSELR);
 		etmdata->state[i++] = etm_readl(etmdata, TRCCONFIGR);
@@ -429,7 +421,6 @@ static inline void etm_mm_restore_state(struct etm_ctx *etmdata)
 			etm_os_unlock(etmdata);
 			break;
 		}
-
 		/* main control and configuration registers */
 		etm_writel(etmdata, etmdata->state[i++], TRCPROCSELR);
 		etm_writel(etmdata, etmdata->state[i++], TRCCONFIGR);
@@ -1440,8 +1431,7 @@ void msm_jtag_etm_save_state(void)
 
 	cpu = raw_smp_processor_id();
 
-	if (!etm[cpu] || etm[cpu]->save_restore_disabled
-				|| hibernation_freeze)
+	if (!etm[cpu] || etm[cpu]->save_restore_disabled)
 		return;
 
 	if (etm[cpu]->save_restore_enabled) {
@@ -1459,8 +1449,7 @@ void msm_jtag_etm_restore_state(void)
 
 	cpu = raw_smp_processor_id();
 
-	if (!etm[cpu] || etm[cpu]->save_restore_disabled
-				|| hibernation_freeze)
+	if (!etm[cpu] || etm[cpu]->save_restore_disabled)
 		return;
 
 	/*
@@ -1618,7 +1607,7 @@ static int jtag_mm_etm_probe(struct platform_device *pdev, uint32_t cpu)
 					 "qcom,save-restore-disable");
 
 	if (skip_etm_save_restore())
-		etmdata->save_restore_disabled = 1;
+		etmdata->save_restore_disabled = true;
 
 	/* Allocate etm state save space per core */
 	etmdata->state = devm_kzalloc(dev,
@@ -1728,54 +1717,6 @@ static int jtag_mm_remove(struct platform_device *pdev)
 	return 0;
 }
 
-static void msm_jtag_etm_save_state_hib(void *unused_info)
-{
-	msm_jtag_etm_save_state();
-}
-
-static void msm_jtag_etm_restore_state_hib(void *unused_info)
-{
-	msm_jtag_etm_restore_state();
-}
-
-static int jtag_mm_freeze(struct device *dev)
-{
-	int cpu;
-
-	if (hibernation_freeze)
-		return 0;
-	get_online_cpus();
-	on_each_cpu(msm_jtag_etm_save_state_hib,
-				NULL, true);
-	for_each_online_cpu(cpu)
-		clk_disable_unprepare(clock[cpu]);
-	put_online_cpus();
-	hibernation_freeze = true;
-	return 0;
-}
-
-static int jtag_mm_restore(struct device *dev)
-{
-	int cpu;
-
-	if (!hibernation_freeze)
-		return 0;
-	get_online_cpus();
-	for_each_online_cpu(cpu)
-		clk_prepare_enable(clock[cpu]);
-	on_each_cpu(msm_jtag_etm_restore_state_hib,
-					NULL, true);
-	put_online_cpus();
-	hibernation_freeze = false;
-	return 0;
-}
-
-static const struct dev_pm_ops jtag_mm_pm_ops = {
-	.freeze = jtag_mm_freeze,
-	.restore = jtag_mm_restore,
-	.thaw = jtag_mm_restore,
-};
-
 static const struct of_device_id msm_qdss_mm_match[] = {
 	{ .compatible = "qcom,jtagv8-mm"},
 	{}
@@ -1786,9 +1727,7 @@ static struct platform_driver jtag_mm_driver = {
 	.remove         = jtag_mm_remove,
 	.driver         = {
 		.name   = "msm-jtagv8-mm",
-		.owner	= THIS_MODULE,
 		.of_match_table	= msm_qdss_mm_match,
-		.pm = &jtag_mm_pm_ops,
 		},
 };
 

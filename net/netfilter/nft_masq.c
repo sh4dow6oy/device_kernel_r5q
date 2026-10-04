@@ -42,7 +42,7 @@ int nft_masq_init(const struct nft_ctx *ctx,
 		  const struct nft_expr *expr,
 		  const struct nlattr * const tb[])
 {
-	u32 plen = FIELD_SIZEOF(struct nf_nat_range, min_addr.all);
+	u32 plen = sizeof_field(struct nf_nat_range, min_addr.all);
 	struct nft_masq *priv = nft_expr_priv(expr);
 	int err;
 
@@ -69,7 +69,7 @@ int nft_masq_init(const struct nft_ctx *ctx,
 		}
 	}
 
-	return nf_ct_netns_get(ctx->net, ctx->afi->family);
+	return nf_ct_netns_get(ctx->net, ctx->family);
 }
 EXPORT_SYMBOL_GPL(nft_masq_init);
 

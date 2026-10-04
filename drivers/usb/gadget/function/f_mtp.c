@@ -125,6 +125,7 @@ struct mtp_dev {
 
 	wait_queue_head_t read_wq;
 	wait_queue_head_t write_wq;
+	wait_queue_head_t intr_wq;
 	struct usb_request *rx_req[RX_REQ_MAX];
 	int rx_done;
 
@@ -468,17 +469,6 @@ static struct usb_request
 	return req;
 }
 
-/* Make bulk-out requests be divisible by the maxpacket size */
-static void set_read_req_length(struct usb_request *req)
-{
-	struct mtp_dev *dev = _mtp_dev;
-	unsigned int	rem;
-
-	rem = req->length % dev->ep_out->maxpacket;
-	if (rem > 0)
-		req->length += dev->ep_out->maxpacket - rem;
-}
-
 static void mtp_complete_in(struct usb_ep *ep, struct usb_request *req)
 {
 	struct mtp_dev *dev = _mtp_dev;
@@ -510,6 +500,8 @@ static void mtp_complete_intr(struct usb_ep *ep, struct usb_request *req)
 		dev->state = STATE_ERROR;
 
 	mtp_req_put(dev, &dev->intr_idle, req);
+
+	wake_up(&dev->intr_wq);
 }
 
 static int mtp_create_bulk_endpoints(struct mtp_dev *dev,
@@ -667,8 +659,6 @@ requeue_req:
 	req = dev->rx_req[0];
 	req->length = len;
 	dev->rx_done = 0;
-	set_read_req_length(req);
-	mutex_unlock(&dev->read_mutex);
 	ret = usb_ep_queue(dev->ep_out, req, GFP_KERNEL);
 	if (ret < 0) {
 		r = -EIO;
@@ -1064,16 +1054,18 @@ static int mtp_send_event(struct mtp_dev *dev, struct mtp_event *event)
 	int ret;
 	int length = event->length;
 
-	mtp_log("enter: (%zu)\n", event->length);
+	mtp_log("(%zu)\n", event->length);
 
 	if (length < 0 || length > INTR_BUFFER_SIZE)
 		return -EINVAL;
 	if (dev->state == STATE_OFFLINE)
 		return -ENODEV;
 
-	req = mtp_req_get(dev, &dev->intr_idle);
+	ret = wait_event_interruptible_timeout(dev->intr_wq,
+			(req = mtp_req_get(dev, &dev->intr_idle)),
+			msecs_to_jiffies(1000));
 	if (!req)
-		return -EBUSY;
+		return -ETIME;
 
 	if (copy_from_user(req->buf, (void __user *)event->data, length)) {
 		mtp_req_put(dev, &dev->intr_idle, req);
@@ -1084,7 +1076,6 @@ static int mtp_send_event(struct mtp_dev *dev, struct mtp_event *event)
 	if (ret)
 		mtp_req_put(dev, &dev->intr_idle, req);
 
-	mtp_log("exit: (%d)\n", ret);
 	return ret;
 }
 
@@ -1096,7 +1087,6 @@ static long mtp_send_receive_ioctl(struct file *fp, unsigned int code,
 	struct work_struct *work;
 	int ret = -EINVAL;
 
-	mtp_log("entering ioctl with state: %d\n", dev->state);
 	if (mtp_lock(&dev->ioctl_excl)) {
 		mtp_log("ioctl returning EBUSY state:%d\n", dev->state);
 		return -EBUSY;
@@ -1431,6 +1421,12 @@ mtp_function_bind(struct usb_configuration *c, struct usb_function *f)
 	dev->cdev = cdev;
 	mtp_log("dev: %pK\n", dev);
 
+	/* ChipIdea controller supports 16K request length for IN endpoint */
+	if (cdev->gadget->is_chipidea && mtp_tx_req_len > 16384) {
+		mtp_log("Truncating Tx Req length to 16K for ChipIdea\n");
+		mtp_tx_req_len = 16384;
+	}
+
 	/* allocate interface ID(s) */
 	id = usb_interface_id(c, f);
 	if (id < 0)
@@ -1712,6 +1708,7 @@ static int __mtp_setup(struct mtp_instance *fi_mtp)
 	spin_lock_init(&dev->lock);
 	init_waitqueue_head(&dev->read_wq);
 	init_waitqueue_head(&dev->write_wq);
+	init_waitqueue_head(&dev->intr_wq);
 	atomic_set(&dev->open_excl, 0);
 	atomic_set(&dev->ioctl_excl, 0);
 	INIT_LIST_HEAD(&dev->tx_idle);
@@ -1915,11 +1912,7 @@ struct usb_function *function_alloc_mtp_ptp(struct usb_function_instance *fi,
 	dev->function.unbind = mtp_function_unbind;
 	dev->function.set_alt = mtp_function_set_alt;
 	dev->function.disable = mtp_function_disable;
-#ifdef CONFIG_USB_ANDROID_SAMSUNG_COMPOSITE
-	dev->function.ctrlrequest = mtp_ctrlreq_configfs;
-#else
 	dev->function.setup = mtp_ctrlreq_configfs;
-#endif
 	dev->function.free_func = mtp_free;
 	fi->f = &dev->function;
 

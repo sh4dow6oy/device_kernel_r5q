@@ -1,14 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2016-2020, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * Copyright (c) 2016-2021, The Linux Foundation. All rights reserved.
  */
 
 #define pr_fmt(fmt)	"LCDB: %s: " fmt, __func__
@@ -1018,7 +1010,9 @@ static irqreturn_t qpnp_lcdb_sc_irq_handler(int irq, void *data)
 	int rc;
 	u8 val, val2[2] = {0};
 
+	mutex_lock(&lcdb->lcdb_mutex);
 	rc = qpnp_lcdb_read(lcdb, lcdb->base + INT_RT_STATUS_REG, &val, 1);
+	mutex_unlock(&lcdb->lcdb_mutex);
 	if (rc < 0)
 		goto irq_handled;
 
@@ -1058,8 +1052,15 @@ static irqreturn_t qpnp_lcdb_sc_irq_handler(int irq, void *data)
 			/* blanking time */
 			usleep_range(2000, 2100);
 			/* Read the SC status again to confirm true SC */
+			mutex_lock(&lcdb->lcdb_mutex);
+			/*
+			 * Wait for the completion of LCDB module enable,
+			 * which could be initiated in a previous SC event,
+			 * to avoid multiple module disable/enable calls.
+			 */
 			rc = qpnp_lcdb_read(lcdb,
 				lcdb->base + INT_RT_STATUS_REG, &val, 1);
+			mutex_unlock(&lcdb->lcdb_mutex);
 			if (rc < 0)
 				goto irq_handled;
 
@@ -1324,7 +1325,7 @@ static int qpnp_lcdb_set_soft_start(struct qpnp_lcdb *lcdb,
 	rc = qpnp_lcdb_masked_write(lcdb,
 			lcdb->base + offset, SOFT_START_MASK, val);
 	if (rc < 0)
-		pr_err("Failed to write %s soft-start time %d rc=%d",
+		pr_err("Failed to write %s soft-start time %d rc=%d\n",
 			(type == LDO) ? "LDO" : "NCP", soft_start_us[i], rc);
 
 	return rc;
@@ -1508,7 +1509,7 @@ static struct regulator_ops qpnp_lcdb_ncp_ops = {
 
 static int qpnp_lcdb_regulator_register(struct qpnp_lcdb *lcdb, u8 type)
 {
-	int rc = 0, off_on_delay = 0;
+	int rc = 0, off_on_delay = 0, voltage_step = VOLTAGE_STEP_50_MV;
 	struct regulator_init_data *init_data;
 	struct regulator_config cfg = {};
 	struct regulator_desc *rdesc;
@@ -1523,12 +1524,16 @@ static int qpnp_lcdb_regulator_register(struct qpnp_lcdb *lcdb, u8 type)
 		rdesc			= &lcdb->ldo.rdesc;
 		rdesc->ops		= &qpnp_lcdb_ldo_ops;
 		rdesc->off_on_delay	= off_on_delay;
+		rdesc->n_voltages = ((MAX_VOLTAGE_MV - MIN_VOLTAGE_MV)
+					/ voltage_step) + 1;
 		rdev			= lcdb->ldo.rdev;
 	} else if (type == NCP) {
 		node			= lcdb->ncp.node;
 		rdesc			= &lcdb->ncp.rdesc;
 		rdesc->ops		= &qpnp_lcdb_ncp_ops;
 		rdesc->off_on_delay	= off_on_delay;
+		rdesc->n_voltages = ((MAX_VOLTAGE_MV - MIN_VOLTAGE_MV)
+					/ voltage_step) + 1;
 		rdev			= lcdb->ncp.rdev;
 	} else {
 		pr_err("Invalid regulator type %d\n", type);
@@ -1791,7 +1796,7 @@ static int qpnp_lcdb_init_ldo(struct qpnp_lcdb *lcdb)
 				lcdb->ldo.pd_strength ?
 				LDO_PD_STRENGTH_BIT : 0);
 			if (rc < 0) {
-				pr_err("Failed to configure LDO PD strength %s rc=%d",
+				pr_err("Failed to configure LDO PD strength %s rc=%d\n",
 						lcdb->ldo.pd_strength ?
 						"(strong)" : "(weak)", rc);
 				return rc;
@@ -1807,7 +1812,7 @@ static int qpnp_lcdb_init_ldo(struct qpnp_lcdb *lcdb)
 					SET_LDO_ILIM_MASK | EN_LDO_ILIM_BIT,
 					val);
 			if (rc < 0) {
-				pr_err("Failed to configure LDO ilim_ma (CTL1=%d) rc=%d",
+				pr_err("Failed to configure LDO ilim_ma (CTL1=%d) rc=%d\n",
 							val, rc);
 				return rc;
 			}
@@ -1817,7 +1822,7 @@ static int qpnp_lcdb_init_ldo(struct qpnp_lcdb *lcdb)
 					lcdb->base + LCDB_LDO_ILIM_CTL2_REG,
 					SET_LDO_ILIM_MASK, val);
 			if (rc < 0) {
-				pr_err("Failed to configure LDO ilim_ma (CTL2=%d) rc=%d",
+				pr_err("Failed to configure LDO ilim_ma (CTL2=%d) rc=%d\n",
 							val, rc);
 				return rc;
 			}
@@ -1898,7 +1903,7 @@ static int qpnp_lcdb_init_ncp(struct qpnp_lcdb *lcdb)
 				lcdb->ncp.pd_strength ?
 				NCP_PD_STRENGTH_BIT : 0);
 			if (rc < 0) {
-				pr_err("Failed to configure NCP PD strength %s rc=%d",
+				pr_err("Failed to configure NCP PD strength %s rc=%d\n",
 					lcdb->ncp.pd_strength ?
 					"(strong)" : "(weak)", rc);
 				return rc;
@@ -1915,7 +1920,7 @@ static int qpnp_lcdb_init_ncp(struct qpnp_lcdb *lcdb)
 						LCDB_NCP_ILIM_CTL1_REG,
 				SET_NCP_ILIM_MASK | EN_NCP_ILIM_BIT, val);
 			if (rc < 0) {
-				pr_err("Failed to configure NCP ilim_ma (CTL1=%d) rc=%d",
+				pr_err("Failed to configure NCP ilim_ma (CTL1=%d) rc=%d\n",
 								val, rc);
 				return rc;
 			}
@@ -1924,7 +1929,7 @@ static int qpnp_lcdb_init_ncp(struct qpnp_lcdb *lcdb)
 					lcdb->base + LCDB_NCP_ILIM_CTL2_REG,
 					SET_NCP_ILIM_MASK, val);
 			if (rc < 0) {
-				pr_err("Failed to configure NCP ilim_ma (CTL2=%d) rc=%d",
+				pr_err("Failed to configure NCP ilim_ma (CTL2=%d) rc=%d\n",
 							val, rc);
 				return rc;
 			}
@@ -1997,7 +2002,7 @@ static int qpnp_lcdb_init_bst(struct qpnp_lcdb *lcdb)
 				lcdb->bst.pd_strength ?
 				BOOST_PD_STRENGTH_BIT : 0);
 			if (rc < 0) {
-				pr_err("Failed to configure NCP PD strength %s rc=%d",
+				pr_err("Failed to configure NCP PD strength %s rc=%d\n",
 					lcdb->bst.pd_strength ?
 					"(strong)" : "(weak)", rc);
 				return rc;
@@ -2012,7 +2017,7 @@ static int qpnp_lcdb_init_bst(struct qpnp_lcdb *lcdb)
 				LCDB_BST_ILIM_CTL_REG,
 				SET_BST_ILIM_MASK | EN_BST_ILIM_BIT, val);
 			if (rc < 0) {
-				pr_err("Failed to configure BST ilim_ma rc=%d",
+				pr_err("Failed to configure BST ilim_ma rc=%d\n",
 									rc);
 				return rc;
 			}
@@ -2023,7 +2028,7 @@ static int qpnp_lcdb_init_bst(struct qpnp_lcdb *lcdb)
 					LCDB_PS_CTL_REG, EN_PS_BIT,
 					lcdb->bst.ps ? EN_PS_BIT : 0);
 			if (rc < 0) {
-				pr_err("Failed to disable BST PS rc=%d", rc);
+				pr_err("Failed to disable BST PS rc=%d\n", rc);
 				return rc;
 			}
 		}
@@ -2037,7 +2042,7 @@ static int qpnp_lcdb_init_bst(struct qpnp_lcdb *lcdb)
 						LCDB_PS_CTL_REG,
 						mask | EN_PS_BIT, val);
 			if (rc < 0) {
-				pr_err("Failed to configure BST PS threshold rc=%d",
+				pr_err("Failed to configure BST PS threshold rc=%d\n",
 								rc);
 				return rc;
 			}

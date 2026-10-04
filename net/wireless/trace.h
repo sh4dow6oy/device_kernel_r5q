@@ -112,24 +112,29 @@
 	} while (0)
 
 #define CHAN_ENTRY __field(enum nl80211_band, band) \
-		   __field(u16, center_freq)
+		   __field(u32, center_freq)		\
+		   __field(u16, freq_offset)
 #define CHAN_ASSIGN(chan)					  \
 	do {							  \
 		if (chan) {					  \
 			__entry->band = chan->band;		  \
 			__entry->center_freq = chan->center_freq; \
+			__entry->freq_offset = chan->freq_offset; \
 		} else {					  \
 			__entry->band = 0;			  \
 			__entry->center_freq = 0;		  \
+			__entry->freq_offset = 0;		  \
 		}						  \
 	} while (0)
-#define CHAN_PR_FMT "band: %d, freq: %u"
-#define CHAN_PR_ARG __entry->band, __entry->center_freq
+#define CHAN_PR_FMT "band: %d, freq: %u.%03u"
+#define CHAN_PR_ARG __entry->band, __entry->center_freq, __entry->freq_offset
 
 #define CHAN_DEF_ENTRY __field(enum nl80211_band, band)		\
 		       __field(u32, control_freq)			\
+		       __field(u32, freq_offset)			\
 		       __field(u32, width)				\
 		       __field(u32, center_freq1)			\
+		       __field(u32, freq1_offset)			\
 		       __field(u32, center_freq2)
 #define CHAN_DEF_ASSIGN(chandef)					\
 	do {								\
@@ -137,21 +142,27 @@
 			__entry->band = (chandef)->chan->band;		\
 			__entry->control_freq =				\
 				(chandef)->chan->center_freq;		\
+			__entry->freq_offset =				\
+				(chandef)->chan->freq_offset;		\
 			__entry->width = (chandef)->width;		\
 			__entry->center_freq1 = (chandef)->center_freq1;\
+			__entry->freq1_offset = (chandef)->freq1_offset;\
 			__entry->center_freq2 = (chandef)->center_freq2;\
 		} else {						\
 			__entry->band = 0;				\
 			__entry->control_freq = 0;			\
+			__entry->freq_offset = 0;			\
 			__entry->width = 0;				\
 			__entry->center_freq1 = 0;			\
+			__entry->freq1_offset = 0;			\
 			__entry->center_freq2 = 0;			\
 		}							\
 	} while (0)
 #define CHAN_DEF_PR_FMT							\
-	"band: %d, control freq: %u, width: %d, cf1: %u, cf2: %u"
+	"band: %d, control freq: %u.%03u, width: %d, cf1: %u.%03u, cf2: %u"
 #define CHAN_DEF_PR_ARG __entry->band, __entry->control_freq,		\
-			__entry->width, __entry->center_freq1,		\
+			__entry->freq_offset, __entry->width,		\
+			__entry->center_freq1, __entry->freq1_offset,	\
 			__entry->center_freq2
 
 #define SINFO_ENTRY __field(int, generation)	    \
@@ -1904,6 +1915,32 @@ TRACE_EVENT(rdev_mgmt_tx,
 		  BOOL_TO_STR(__entry->dont_wait_for_ack))
 );
 
+TRACE_EVENT(rdev_tx_control_port,
+	TP_PROTO(struct wiphy *wiphy, struct net_device *netdev,
+		 const u8 *buf, size_t len, const u8 *dest, __be16 proto,
+		 bool unencrypted),
+	TP_ARGS(wiphy, netdev, buf, len, dest, proto, unencrypted),
+	TP_STRUCT__entry(
+		WIPHY_ENTRY
+		NETDEV_ENTRY
+		MAC_ENTRY(dest)
+		__field(__be16, proto)
+		__field(bool, unencrypted)
+	),
+	TP_fast_assign(
+		WIPHY_ASSIGN;
+		NETDEV_ASSIGN;
+		MAC_ASSIGN(dest, dest);
+		__entry->proto = proto;
+		__entry->unencrypted = unencrypted;
+	),
+	TP_printk(WIPHY_PR_FMT ", " NETDEV_PR_FMT ", " MAC_PR_FMT ","
+		  " proto: 0x%x, unencrypted: %s",
+		  WIPHY_PR_ARG, NETDEV_PR_ARG, MAC_PR_ARG(dest),
+		  be16_to_cpu(__entry->proto),
+		  BOOL_TO_STR(__entry->unencrypted))
+);
+
 TRACE_EVENT(rdev_set_noack_map,
 	TP_PROTO(struct wiphy *wiphy, struct net_device *netdev,
 		 u16 noack_map),
@@ -2589,20 +2626,20 @@ DEFINE_EVENT(cfg80211_netdev_mac_evt, cfg80211_del_sta,
 );
 
 TRACE_EVENT(cfg80211_rx_mgmt,
-	TP_PROTO(struct wireless_dev *wdev, int freq, int sig_mbm),
-	TP_ARGS(wdev, freq, sig_mbm),
+	TP_PROTO(struct wireless_dev *wdev, int freq, int sig_dbm),
+	TP_ARGS(wdev, freq, sig_dbm),
 	TP_STRUCT__entry(
 		WDEV_ENTRY
 		__field(int, freq)
-		__field(int, sig_mbm)
+		__field(int, sig_dbm)
 	),
 	TP_fast_assign(
 		WDEV_ASSIGN;
 		__entry->freq = freq;
-		__entry->sig_mbm = sig_mbm;
+		__entry->sig_dbm = sig_dbm;
 	),
-	TP_printk(WDEV_PR_FMT ", freq: %d, sig mbm: %d",
-		  WDEV_PR_ARG, __entry->freq, __entry->sig_mbm)
+	TP_printk(WDEV_PR_FMT ", freq: %d, sig dbm: %d",
+		  WDEV_PR_ARG, __entry->freq, __entry->sig_dbm)
 );
 
 TRACE_EVENT(cfg80211_mgmt_tx_status,
@@ -2620,6 +2657,29 @@ TRACE_EVENT(cfg80211_mgmt_tx_status,
 	),
 	TP_printk(WDEV_PR_FMT", cookie: %llu, ack: %s",
 		  WDEV_PR_ARG, __entry->cookie, BOOL_TO_STR(__entry->ack))
+);
+
+TRACE_EVENT(cfg80211_rx_control_port,
+	TP_PROTO(struct net_device *netdev, struct sk_buff *skb,
+		 bool unencrypted),
+	TP_ARGS(netdev, skb, unencrypted),
+	TP_STRUCT__entry(
+		NETDEV_ENTRY
+		__field(int, len)
+		MAC_ENTRY(from)
+		__field(u16, proto)
+		__field(bool, unencrypted)
+	),
+	TP_fast_assign(
+		NETDEV_ASSIGN;
+		__entry->len = skb->len;
+		MAC_ASSIGN(from, eth_hdr(skb)->h_source);
+		__entry->proto = be16_to_cpu(skb->protocol);
+		__entry->unencrypted = unencrypted;
+	),
+	TP_printk(NETDEV_PR_FMT ", len=%d, " MAC_PR_FMT ", proto: 0x%x, unencrypted: %s",
+		  NETDEV_PR_ARG, __entry->len, MAC_PR_ARG(from),
+		  __entry->proto, BOOL_TO_STR(__entry->unencrypted))
 );
 
 TRACE_EVENT(cfg80211_cqm_rssi_notify,
@@ -3173,10 +3233,11 @@ TRACE_EVENT(rdev_set_mcast_rate,
 		       sizeof(int) * NUM_NL80211_BANDS);
 	),
 	TP_printk(WIPHY_PR_FMT ", " NETDEV_PR_FMT ", "
-		  "mcast_rates [2.4GHz=0x%x, 5.2GHz=0x%x, 60GHz=0x%x]",
+		  "mcast_rates [2.4GHz=0x%x, 5.2GHz=0x%x, 6GHz=0x%x, 60GHz=0x%x]",
 		  WIPHY_PR_ARG, NETDEV_PR_ARG,
 		  __entry->mcast_rate[NL80211_BAND_2GHZ],
 		  __entry->mcast_rate[NL80211_BAND_5GHZ],
+		  __entry->mcast_rate[NL80211_BAND_6GHZ],
 		  __entry->mcast_rate[NL80211_BAND_60GHZ])
 );
 
@@ -3217,6 +3278,20 @@ TRACE_EVENT(rdev_set_multicast_to_unicast,
 	TP_printk(WIPHY_PR_FMT ", " NETDEV_PR_FMT ", unicast: %s",
 		  WIPHY_PR_ARG, NETDEV_PR_ARG,
 		  BOOL_TO_STR(__entry->enabled))
+);
+
+TRACE_EVENT(rdev_get_txq_stats,
+	TP_PROTO(struct wiphy *wiphy, struct wireless_dev *wdev),
+	TP_ARGS(wiphy, wdev),
+	TP_STRUCT__entry(
+		WIPHY_ENTRY
+		WDEV_ENTRY
+	),
+	TP_fast_assign(
+		WIPHY_ASSIGN;
+		WDEV_ASSIGN;
+	),
+	TP_printk(WIPHY_PR_FMT ", " WDEV_PR_FMT, WIPHY_PR_ARG, WDEV_PR_ARG)
 );
 
 TRACE_EVENT(rdev_update_owe_info,

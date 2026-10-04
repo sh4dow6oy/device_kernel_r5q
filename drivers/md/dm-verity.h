@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (C) 2012 Red Hat, Inc.
  * Copyright (C) 2015 Google, Inc.
@@ -5,14 +6,12 @@
  * Author: Mikulas Patocka <mpatocka@redhat.com>
  *
  * Based on Chromium dm-verity driver (C) 2011 The Chromium OS Authors
- *
- * This file is released under the GPLv2.
  */
 
 #ifndef DM_VERITY_H
 #define DM_VERITY_H
 
-#include "dm-bufio.h"
+#include <linux/dm-bufio.h>
 #include <linux/device-mapper.h>
 #include <crypto/hash.h>
 
@@ -55,7 +54,7 @@ struct dm_verity {
 	unsigned int ahash_reqsize;/* the size of temporary space for crypto */
 	int hash_failed;	/* set to 1 if hash of any block failed */
 	enum verity_mode mode;	/* mode for handling verification errors */
-	unsigned corrupted_errs;/* Number of errors for corrupted blocks */
+	atomic_t corrupted_errs;/* Number of errors for corrupted blocks */
 
 	struct workqueue_struct *verify_wq;
 
@@ -123,8 +122,7 @@ extern int verity_hash_for_block(struct dm_verity *v, struct dm_verity_io *io,
 
 extern void verity_status(struct dm_target *ti, status_type_t type,
 			unsigned status_flags, char *result, unsigned maxlen);
-extern int verity_prepare_ioctl(struct dm_target *ti,
-                struct block_device **bdev, fmode_t *mode);
+extern int verity_prepare_ioctl(struct dm_target *ti, struct block_device **bdev);
 extern int verity_iterate_devices(struct dm_target *ti,
 				iterate_devices_callout_fn fn, void *data);
 extern void verity_io_hints(struct dm_target *ti, struct queue_limits *limits);
@@ -132,4 +130,5 @@ extern void verity_dtr(struct dm_target *ti);
 extern int verity_ctr(struct dm_target *ti, unsigned argc, char **argv);
 extern int verity_map(struct dm_target *ti, struct bio *bio);
 extern void dm_verity_avb_error_handler(void);
+
 #endif /* DM_VERITY_H */

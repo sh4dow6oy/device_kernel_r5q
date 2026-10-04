@@ -46,6 +46,7 @@
 #include <net/ipv6.h>
 #include <net/mpls.h>
 #include <net/ndisc.h>
+#include <net/nsh.h>
 
 #include "conntrack.h"
 #include "datapath.h"
@@ -55,12 +56,12 @@
 
 u64 ovs_flow_used_time(unsigned long flow_jiffies)
 {
-	struct timespec cur_ts;
+	struct timespec64 cur_ts;
 	u64 cur_ms, idle_ms;
 
-	ktime_get_ts(&cur_ts);
+	ktime_get_ts64(&cur_ts);
 	idle_ms = jiffies_to_msecs(jiffies - flow_jiffies);
-	cur_ms = (u64)cur_ts.tv_sec * MSEC_PER_SEC +
+	cur_ms = (u64)(u32)cur_ts.tv_sec * MSEC_PER_SEC +
 		 cur_ts.tv_nsec / NSEC_PER_MSEC;
 
 	return cur_ms - idle_ms;
@@ -308,6 +309,10 @@ static bool icmp6hdr_ok(struct sk_buff *skb)
 
 /**
  * Parse vlan tag from vlan header.
+ * @skb: skb containing frame to parse
+ * @key_vh: pointer to parsed vlan tag
+ * @untag_vlan: should the vlan header be removed from the frame
+ *
  * Returns ERROR on memory error.
  * Returns 0 if it encounters a non-vlan or incomplete packet.
  * Returns 1 after successfully parsing vlan tag.
@@ -491,13 +496,57 @@ invalid:
 	return 0;
 }
 
+static int parse_nsh(struct sk_buff *skb, struct sw_flow_key *key)
+{
+	struct nshhdr *nh;
+	unsigned int nh_ofs = skb_network_offset(skb);
+	u8 version, length;
+	int err;
+
+	err = check_header(skb, nh_ofs + NSH_BASE_HDR_LEN);
+	if (unlikely(err))
+		return err;
+
+	nh = nsh_hdr(skb);
+	version = nsh_get_ver(nh);
+	length = nsh_hdr_len(nh);
+
+	if (version != 0)
+		return -EINVAL;
+
+	err = check_header(skb, nh_ofs + length);
+	if (unlikely(err))
+		return err;
+
+	nh = nsh_hdr(skb);
+	key->nsh.base.flags = nsh_get_flags(nh);
+	key->nsh.base.ttl = nsh_get_ttl(nh);
+	key->nsh.base.mdtype = nh->mdtype;
+	key->nsh.base.np = nh->np;
+	key->nsh.base.path_hdr = nh->path_hdr;
+	switch (key->nsh.base.mdtype) {
+	case NSH_M_TYPE1:
+		if (length != NSH_M_TYPE1_LEN)
+			return -EINVAL;
+		memcpy(key->nsh.context, nh->md1.context,
+		       sizeof(nh->md1));
+		break;
+	case NSH_M_TYPE2:
+		memset(key->nsh.context, 0,
+		       sizeof(nh->md1));
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
 /**
  * key_extract - extracts a flow key from an Ethernet frame.
  * @skb: sk_buff that contains the frame, with skb->data pointing to the
  * Ethernet header
  * @key: output flow key
- *
- * The caller must ensure that skb->len >= ETH_HLEN.
  *
  * Returns 0 if successful, otherwise a negative errno value.
  *
@@ -519,7 +568,6 @@ invalid:
 static int key_extract(struct sk_buff *skb, struct sw_flow_key *key)
 {
 	int error;
-	struct ethhdr *eth;
 
 	/* Flags are always used as part of stats */
 	key->tp.flags = 0;
@@ -535,6 +583,13 @@ static int key_extract(struct sk_buff *skb, struct sw_flow_key *key)
 		skb_reset_network_header(skb);
 		key->eth.type = skb->protocol;
 	} else {
+		struct ethhdr *eth;
+		int err;
+
+		err = check_header(skb, ETH_HLEN);
+		if (unlikely(err))
+			return err;
+
 		eth = eth_hdr(skb);
 		ether_addr_copy(key->eth.src, eth->h_source);
 		ether_addr_copy(key->eth.dst, eth->h_dest);
@@ -749,6 +804,10 @@ static int key_extract(struct sk_buff *skb, struct sw_flow_key *key)
 				memset(&key->tp, 0, sizeof(key->tp));
 			}
 		}
+	} else if (key->eth.type == htons(ETH_P_NSH)) {
+		error = parse_nsh(skb, key);
+		if (error)
+			return error;
 	}
 	return 0;
 }

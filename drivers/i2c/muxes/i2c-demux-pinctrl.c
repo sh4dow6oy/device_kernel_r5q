@@ -18,6 +18,7 @@
 #include <linux/of.h>
 #include <linux/pinctrl/consumer.h>
 #include <linux/platform_device.h>
+#include <linux/pm_runtime.h>
 #include <linux/slab.h>
 #include <linux/sysfs.h>
 
@@ -105,7 +106,7 @@ static int i2c_demux_activate_master(struct i2c_demux_pinctrl_priv *priv, u32 ne
 	priv->cur_adap.owner = THIS_MODULE;
 	priv->cur_adap.algo = &priv->algo;
 	priv->cur_adap.algo_data = priv;
-	priv->cur_adap.dev.parent = priv->dev;
+	priv->cur_adap.dev.parent = &adap->dev;
 	priv->cur_adap.class = adap->class;
 	priv->cur_adap.retries = adap->retries;
 	priv->cur_adap.timeout = adap->timeout;
@@ -258,8 +259,12 @@ static int i2c_demux_pinctrl_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, priv);
 
+	pm_runtime_no_callbacks(&pdev->dev);
+
 	/* switch to first parent as active master */
-	i2c_demux_activate_master(priv, 0);
+	err = i2c_demux_activate_master(priv, 0);
+	if (err)
+		goto err_rollback;
 
 	err = device_create_file(&pdev->dev, &dev_attr_available_masters);
 	if (err)

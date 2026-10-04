@@ -536,7 +536,7 @@ static bool dsu_pmu_validate_group(struct perf_event *event)
 	memset(fake_hw.used_mask, 0, sizeof(fake_hw.used_mask));
 	if (!dsu_pmu_validate_event(event->pmu, &fake_hw, leader))
 		return false;
-	list_for_each_entry(sibling, &leader->sibling_list, group_entry) {
+	for_each_sibling_event(sibling, leader) {
 		if (!dsu_pmu_validate_event(event->pmu, &fake_hw, sibling))
 			return false;
 	}
@@ -659,10 +659,8 @@ static void dsu_pmu_probe_pmu(struct dsu_pmu *dsu_pmu)
 		return;
 	cpmceid[0] = __dsu_pmu_read_pmceid(0);
 	cpmceid[1] = __dsu_pmu_read_pmceid(1);
-	bitmap_from_u32array(dsu_pmu->cpmceid_bitmap,
-				DSU_PMU_MAX_COMMON_EVENTS,
-				cpmceid,
-				ARRAY_SIZE(cpmceid));
+	bitmap_from_arr32(dsu_pmu->cpmceid_bitmap, cpmceid,
+			  DSU_PMU_MAX_COMMON_EVENTS);
 }
 
 static void dsu_pmu_set_active_cpu(int cpu, struct dsu_pmu *dsu_pmu)
@@ -826,7 +824,11 @@ static int __init dsu_pmu_init(void)
 	if (ret < 0)
 		return ret;
 	dsu_pmu_cpuhp_state = ret;
-	return platform_driver_register(&dsu_pmu_driver);
+	ret = platform_driver_register(&dsu_pmu_driver);
+	if (ret)
+		cpuhp_remove_multi_state(dsu_pmu_cpuhp_state);
+
+	return ret;
 }
 
 static void __exit dsu_pmu_exit(void)

@@ -11,6 +11,7 @@
 #include <linux/kthread.h>
 #include <linux/completion.h>
 #include <linux/err.h>
+#include <linux/cgroup.h>
 #include <linux/cpuset.h>
 #include <linux/unistd.h>
 #include <linux/file.h>
@@ -20,7 +21,6 @@
 #include <linux/freezer.h>
 #include <linux/ptrace.h>
 #include <linux/uaccess.h>
-#include <linux/cgroup.h>
 #include <trace/events/sched.h>
 
 static DEFINE_SPINLOCK(kthread_create_lock);
@@ -47,6 +47,9 @@ struct kthread {
 	void *data;
 	struct completion parked;
 	struct completion exited;
+#ifdef CONFIG_BLK_CGROUP
+	struct cgroup_subsys_state *blkcg_css;
+#endif
 };
 
 enum KTHREAD_BITS {
@@ -73,11 +76,17 @@ static inline struct kthread *to_kthread(struct task_struct *k)
 
 void free_kthread_struct(struct task_struct *k)
 {
+	struct kthread *kthread;
+
 	/*
 	 * Can be NULL if this kthread was created by kernel_thread()
 	 * or if kmalloc() in kthread() failed.
 	 */
-	kfree(to_kthread(k));
+	kthread = to_kthread(k);
+#ifdef CONFIG_BLK_CGROUP
+	WARN_ON_ONCE(kthread && kthread->blkcg_css);
+#endif
+	kfree(kthread);
 }
 
 /**
@@ -162,7 +171,7 @@ void *kthread_probe_data(struct task_struct *task)
 	struct kthread *kthread = to_kthread(task);
 	void *data = NULL;
 
-	probe_kernel_read(&data, &kthread->data, sizeof(data));
+	copy_from_kernel_nofault(&data, &kthread->data, sizeof(data));
 	return data;
 }
 
@@ -182,8 +191,15 @@ static void __kthread_parkme(struct kthread *self)
 		if (!test_bit(KTHREAD_SHOULD_PARK, &self->flags))
 			break;
 
-		complete_all(&self->parked);
-		schedule();
+		/*
+		 * Thread is going to call schedule(), do not preempt it,
+		 * or the caller of kthread_park() may spend more time in
+		 * wait_task_inactive().
+		 */
+		preempt_disable();
+		complete(&self->parked);
+		schedule_preempt_disabled();
+		preempt_enable();
 	}
 	__set_current_state(TASK_RUNNING);
 }
@@ -204,7 +220,7 @@ static int kthread(void *_create)
 	struct kthread *self;
 	int ret;
 
-	self = kmalloc(sizeof(*self), GFP_KERNEL);
+	self = kzalloc(sizeof(*self), GFP_KERNEL);
 	set_kthread_struct(self);
 
 	/* If user was SIGKILLed, I release the structure. */
@@ -220,7 +236,6 @@ static int kthread(void *_create)
 		do_exit(-ENOMEM);
 	}
 
-	self->flags = 0;
 	self->data = data;
 	init_completion(&self->exited);
 	init_completion(&self->parked);
@@ -229,8 +244,14 @@ static int kthread(void *_create)
 	/* OK, tell user we're spawned, wait for stop or wakeup */
 	__set_current_state(TASK_UNINTERRUPTIBLE);
 	create->result = current;
+	/*
+	 * Thread is going to call schedule(), do not preempt it,
+	 * or the creator may spend more time in wait_task_inactive().
+	 */
+	preempt_disable();
 	complete(done);
-	schedule();
+	schedule_preempt_disabled();
+	preempt_enable();
 
 	ret = -EINTR;
 	if (!test_bit(KTHREAD_SHOULD_STOP, &self->flags)) {
@@ -489,7 +510,6 @@ void kthread_unpark(struct task_struct *k)
 	if (test_bit(KTHREAD_IS_PER_CPU, &kthread->flags))
 		__kthread_bind(k, kthread->cpu, TASK_PARKED);
 
-	reinit_completion(&kthread->parked);
 	clear_bit(KTHREAD_SHOULD_PARK, &kthread->flags);
 	/*
 	 * __kthread_parkme() will either see !SHOULD_PARK or get the wakeup.
@@ -516,6 +536,9 @@ int kthread_park(struct task_struct *k)
 
 	if (WARN_ON(k->flags & PF_EXITING))
 		return -ENOSYS;
+
+	if (WARN_ON_ONCE(test_bit(KTHREAD_SHOULD_PARK, &kthread->flags)))
+		return -EBUSY;
 
 	set_bit(KTHREAD_SHOULD_PARK, &kthread->flags);
 	if (k != current) {
@@ -858,15 +881,14 @@ EXPORT_SYMBOL_GPL(kthread_queue_work);
 /**
  * kthread_delayed_work_timer_fn - callback that queues the associated kthread
  *	delayed work when the timer expires.
- * @__data: pointer to the data associated with the timer
+ * @t: pointer to the expired timer
  *
  * The format of the function is defined by struct timer_list.
  * It should have been called from irqsafe timer with irq already off.
  */
-void kthread_delayed_work_timer_fn(unsigned long __data)
+void kthread_delayed_work_timer_fn(struct timer_list *t)
 {
-	struct kthread_delayed_work *dwork =
-		(struct kthread_delayed_work *)__data;
+	struct kthread_delayed_work *dwork = from_timer(dwork, t, timer);
 	struct kthread_work *work = &dwork->work;
 	struct kthread_worker *worker = work->worker;
 
@@ -898,8 +920,7 @@ void __kthread_queue_delayed_work(struct kthread_worker *worker,
 	struct timer_list *timer = &dwork->timer;
 	struct kthread_work *work = &dwork->work;
 
-	WARN_ON_ONCE(timer->function != kthread_delayed_work_timer_fn ||
-		     timer->data != (unsigned long)dwork);
+	WARN_ON_ONCE(timer->function != kthread_delayed_work_timer_fn);
 
 	/*
 	 * If @delay is 0, queue @dwork->work immediately.  This is for
@@ -1240,3 +1261,54 @@ void kthread_destroy_worker(struct kthread_worker *worker)
 	kfree(worker);
 }
 EXPORT_SYMBOL(kthread_destroy_worker);
+
+#ifdef CONFIG_BLK_CGROUP
+/**
+ * kthread_associate_blkcg - associate blkcg to current kthread
+ * @css: the cgroup info
+ *
+ * Current thread must be a kthread. The thread is running jobs on behalf of
+ * other threads. In some cases, we expect the jobs attach cgroup info of
+ * original threads instead of that of current thread. This function stores
+ * original thread's cgroup info in current kthread context for later
+ * retrieval.
+ */
+void kthread_associate_blkcg(struct cgroup_subsys_state *css)
+{
+	struct kthread *kthread;
+
+	if (!(current->flags & PF_KTHREAD))
+		return;
+	kthread = to_kthread(current);
+	if (!kthread)
+		return;
+
+	if (kthread->blkcg_css) {
+		css_put(kthread->blkcg_css);
+		kthread->blkcg_css = NULL;
+	}
+	if (css) {
+		css_get(css);
+		kthread->blkcg_css = css;
+	}
+}
+EXPORT_SYMBOL(kthread_associate_blkcg);
+
+/**
+ * kthread_blkcg - get associated blkcg css of current kthread
+ *
+ * Current thread must be a kthread.
+ */
+struct cgroup_subsys_state *kthread_blkcg(void)
+{
+	struct kthread *kthread;
+
+	if (current->flags & PF_KTHREAD) {
+		kthread = to_kthread(current);
+		if (kthread)
+			return kthread->blkcg_css;
+	}
+	return NULL;
+}
+EXPORT_SYMBOL(kthread_blkcg);
+#endif

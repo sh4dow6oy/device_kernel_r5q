@@ -105,6 +105,7 @@ static unsigned int fq_codel_classify(struct sk_buff *skb, struct Qdisc *sch,
 		case TC_ACT_QUEUED:
 		case TC_ACT_TRAP:
 			*qerr = NET_XMIT_SUCCESS | __NET_XMIT_STOLEN;
+			/* fall through */
 		case TC_ACT_SHOT:
 			return 0;
 		}
@@ -283,7 +284,7 @@ static void drop_func(struct sk_buff *skb, void *ctx)
 	qdisc_qstats_drop(sch);
 }
 
-static struct sk_buff *fq_codel_dequeue(struct Qdisc *sch)
+static struct sk_buff *__fq_codel_dequeue(struct Qdisc *sch)
 {
 	struct fq_codel_sched_data *q = qdisc_priv(sch);
 	struct sk_buff *skb;
@@ -326,15 +327,50 @@ begin:
 	}
 	qdisc_bstats_update(sch, skb);
 	flow->deficit -= qdisc_pkt_len(skb);
-	/* We cant call qdisc_tree_reduce_backlog() if our qlen is 0,
-	 * or HTB crashes. Defer it for next round.
-	 */
-	if (q->cstats.drop_count && sch->q.qlen) {
+
+	return skb;
+}
+
+static void fq_codel_dequeue_drop(struct Qdisc *sch)
+{
+	struct fq_codel_sched_data *q = qdisc_priv(sch);
+
+	if (q->cstats.drop_count) {
 		qdisc_tree_reduce_backlog(sch, q->cstats.drop_count,
 					  q->cstats.drop_len);
 		q->cstats.drop_count = 0;
 		q->cstats.drop_len = 0;
 	}
+}
+
+static struct sk_buff *fq_codel_dequeue(struct Qdisc *sch)
+{
+	struct sk_buff *skb;
+
+	skb =  __fq_codel_dequeue(sch);
+
+	fq_codel_dequeue_drop(sch);
+
+	return skb;
+}
+
+static struct sk_buff *fq_codel_peek(struct Qdisc *sch)
+{
+	struct sk_buff *skb = skb_peek(&sch->gso_skb);
+
+	if (!skb) {
+		skb = __fq_codel_dequeue(sch);
+
+		if (skb) {
+			__skb_queue_head(&sch->gso_skb, skb);
+			/* it's still part of the queue */
+			qdisc_qstats_backlog_inc(sch, skb);
+			sch->q.qlen++;
+		}
+
+		fq_codel_dequeue_drop(sch);
+	}
+
 	return skb;
 }
 
@@ -376,17 +412,19 @@ static const struct nla_policy fq_codel_policy[TCA_FQ_CODEL_MAX + 1] = {
 	[TCA_FQ_CODEL_MEMORY_LIMIT] = { .type = NLA_U32 },
 };
 
-static int fq_codel_change(struct Qdisc *sch, struct nlattr *opt)
+static int fq_codel_change(struct Qdisc *sch, struct nlattr *opt,
+			   struct netlink_ext_ack *extack)
 {
 	struct fq_codel_sched_data *q = qdisc_priv(sch);
 	struct nlattr *tb[TCA_FQ_CODEL_MAX + 1];
+	u32 quantum = 0;
 	int err;
 
 	if (!opt)
 		return -EINVAL;
 
-	err = nla_parse_nested(tb, TCA_FQ_CODEL_MAX, opt, fq_codel_policy,
-			       NULL);
+	err = nla_parse_nested_deprecated(tb, TCA_FQ_CODEL_MAX, opt,
+					  fq_codel_policy, NULL);
 	if (err < 0)
 		return err;
 	if (tb[TCA_FQ_CODEL_FLOWS]) {
@@ -396,6 +434,13 @@ static int fq_codel_change(struct Qdisc *sch, struct nlattr *opt)
 		if (!q->flows_cnt ||
 		    q->flows_cnt > 65536)
 			return -EINVAL;
+	}
+	if (tb[TCA_FQ_CODEL_QUANTUM]) {
+		quantum = max(256U, nla_get_u32(tb[TCA_FQ_CODEL_QUANTUM]));
+		if (quantum > FQ_CODEL_QUANTUM_MAX) {
+			NL_SET_ERR_MSG(extack, "Invalid quantum");
+			return -EINVAL;
+		}
 	}
 	sch_tree_lock(sch);
 
@@ -423,8 +468,8 @@ static int fq_codel_change(struct Qdisc *sch, struct nlattr *opt)
 	if (tb[TCA_FQ_CODEL_ECN])
 		q->cparams.ecn = !!nla_get_u32(tb[TCA_FQ_CODEL_ECN]);
 
-	if (tb[TCA_FQ_CODEL_QUANTUM])
-		q->quantum = max(256U, nla_get_u32(tb[TCA_FQ_CODEL_QUANTUM]));
+	if (quantum)
+		q->quantum = quantum;
 
 	if (tb[TCA_FQ_CODEL_DROP_BATCH_SIZE])
 		q->drop_batch_size = max(1U, nla_get_u32(tb[TCA_FQ_CODEL_DROP_BATCH_SIZE]));
@@ -457,7 +502,8 @@ static void fq_codel_destroy(struct Qdisc *sch)
 	kvfree(q->flows);
 }
 
-static int fq_codel_init(struct Qdisc *sch, struct nlattr *opt)
+static int fq_codel_init(struct Qdisc *sch, struct nlattr *opt,
+			 struct netlink_ext_ack *extack)
 {
 	struct fq_codel_sched_data *q = qdisc_priv(sch);
 	int i;
@@ -476,23 +522,28 @@ static int fq_codel_init(struct Qdisc *sch, struct nlattr *opt)
 	q->cparams.mtu = psched_mtu(qdisc_dev(sch));
 
 	if (opt) {
-		int err = fq_codel_change(sch, opt);
+		err = fq_codel_change(sch, opt, extack);
 		if (err)
-			return err;
+			goto init_failure;
 	}
 
-	err = tcf_block_get(&q->block, &q->filter_list);
+	err = tcf_block_get(&q->block, &q->filter_list, sch, extack);
 	if (err)
-		return err;
+		goto init_failure;
 
 	if (!q->flows) {
-		q->flows = kvzalloc(q->flows_cnt *
-					   sizeof(struct fq_codel_flow), GFP_KERNEL);
-		if (!q->flows)
-			return -ENOMEM;
-		q->backlogs = kvzalloc(q->flows_cnt * sizeof(u32), GFP_KERNEL);
-		if (!q->backlogs)
-			return -ENOMEM;
+		q->flows = kvcalloc(q->flows_cnt,
+				    sizeof(struct fq_codel_flow),
+				    GFP_KERNEL);
+		if (!q->flows) {
+			err = -ENOMEM;
+			goto init_failure;
+		}
+		q->backlogs = kvcalloc(q->flows_cnt, sizeof(u32), GFP_KERNEL);
+		if (!q->backlogs) {
+			err = -ENOMEM;
+			goto alloc_failure;
+		}
 		for (i = 0; i < q->flows_cnt; i++) {
 			struct fq_codel_flow *flow = q->flows + i;
 
@@ -505,6 +556,13 @@ static int fq_codel_init(struct Qdisc *sch, struct nlattr *opt)
 	else
 		sch->flags &= ~TCQ_F_CAN_BYPASS;
 	return 0;
+
+alloc_failure:
+	kvfree(q->flows);
+	q->flows = NULL;
+init_failure:
+	q->flows_cnt = 0;
+	return err;
 }
 
 static int fq_codel_dump(struct Qdisc *sch, struct sk_buff *skb)
@@ -512,7 +570,7 @@ static int fq_codel_dump(struct Qdisc *sch, struct sk_buff *skb)
 	struct fq_codel_sched_data *q = qdisc_priv(sch);
 	struct nlattr *opts;
 
-	opts = nla_nest_start(skb, TCA_OPTIONS);
+	opts = nla_nest_start_noflag(skb, TCA_OPTIONS);
 	if (opts == NULL)
 		goto nla_put_failure;
 
@@ -553,6 +611,8 @@ static int fq_codel_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 	};
 	struct list_head *pos;
 
+	sch_tree_lock(sch);
+
 	st.qdisc_stats.maxpacket = q->cstats.maxpacket;
 	st.qdisc_stats.drop_overlimit = q->drop_overlimit;
 	st.qdisc_stats.ecn_mark = q->cstats.ecn_mark;
@@ -561,7 +621,6 @@ static int fq_codel_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 	st.qdisc_stats.memory_usage  = q->memory_usage;
 	st.qdisc_stats.drop_overmemory = q->drop_overmemory;
 
-	sch_tree_lock(sch);
 	list_for_each(pos, &q->new_flows)
 		st.qdisc_stats.new_flows_len++;
 
@@ -585,8 +644,6 @@ static unsigned long fq_codel_find(struct Qdisc *sch, u32 classid)
 static unsigned long fq_codel_bind(struct Qdisc *sch, unsigned long parent,
 			      u32 classid)
 {
-	/* we cannot bypass queue discipline anymore */
-	sch->flags &= ~TCQ_F_CAN_BYPASS;
 	return 0;
 }
 
@@ -594,7 +651,8 @@ static void fq_codel_unbind(struct Qdisc *q, unsigned long cl)
 {
 }
 
-static struct tcf_block *fq_codel_tcf_block(struct Qdisc *sch, unsigned long cl)
+static struct tcf_block *fq_codel_tcf_block(struct Qdisc *sch, unsigned long cl,
+					    struct netlink_ext_ack *extack)
 {
 	struct fq_codel_sched_data *q = qdisc_priv(sch);
 
@@ -696,7 +754,7 @@ static struct Qdisc_ops fq_codel_qdisc_ops __read_mostly = {
 	.priv_size	=	sizeof(struct fq_codel_sched_data),
 	.enqueue	=	fq_codel_enqueue,
 	.dequeue	=	fq_codel_dequeue,
-	.peek		=	qdisc_peek_dequeued,
+	.peek		=	fq_codel_peek,
 	.init		=	fq_codel_init,
 	.reset		=	fq_codel_reset,
 	.destroy	=	fq_codel_destroy,

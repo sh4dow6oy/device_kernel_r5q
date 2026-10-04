@@ -35,7 +35,6 @@ MODULE_LICENSE("GPL");
 
 #define INPUT_MAX_CHAR_DEVICES		1024
 #define INPUT_FIRST_DYNAMIC_DEV		256
-
 static DEFINE_IDA(input_ida);
 
 static LIST_HEAD(input_dev_list);
@@ -88,7 +87,7 @@ static void input_start_autorepeat(struct input_dev *dev, int code)
 {
 	if (test_bit(EV_REP, dev->evbit) &&
 	    dev->rep[REP_PERIOD] && dev->rep[REP_DELAY] &&
-	    dev->timer.data) {
+	    dev->timer.function) {
 		dev->repeat_key = code;
 		mod_timer(&dev->timer,
 			  jiffies + msecs_to_jiffies(dev->rep[REP_DELAY]));
@@ -191,9 +190,9 @@ static void input_pass_event(struct input_dev *dev,
  * dev->event_lock here to avoid racing with input_event
  * which may cause keys get "stuck".
  */
-static void input_repeat_key(unsigned long data)
+static void input_repeat_key(struct timer_list *t)
 {
-	struct input_dev *dev = (void *) data;
+	struct input_dev *dev = from_timer(dev, t, timer);
 	unsigned long flags;
 
 	spin_lock_irqsave(&dev->event_lock, flags);
@@ -205,6 +204,7 @@ static void input_repeat_key(unsigned long data)
 			input_value_sync
 		};
 
+		input_set_timestamp(dev, ktime_get());
 		input_pass_values(dev, vals, ARRAY_SIZE(vals));
 
 		if (dev->rep[REP_PERIOD])
@@ -264,8 +264,7 @@ static int input_handle_abs_event(struct input_dev *dev,
 	}
 
 	/* Flush pending "slot" event */
-	if (is_mt_event && mt && mt->slot !=
-		input_abs_get_val(dev, ABS_MT_SLOT)) {
+	if (is_mt_event && mt && mt->slot != input_abs_get_val(dev, ABS_MT_SLOT)) {
 		input_abs_set_val(dev, ABS_MT_SLOT, mt->slot);
 		return INPUT_PASS_TO_HANDLERS | INPUT_SLOT;
 	}
@@ -410,15 +409,19 @@ static void input_handle_event(struct input_dev *dev,
 	}
 
 	if (disposition & INPUT_FLUSH) {
-		if (dev->num_vals >= 2) {
+		if (dev->num_vals >= 2)
 			input_pass_values(dev, dev->vals, dev->num_vals);
-			dev->prev_num_vals = dev->num_vals;
-		}
 		dev->num_vals = 0;
+		/*
+		 * Reset the timestamp on flush so we won't end up
+		 * with a stale one. Note we only need to reset the
+		 * monolithic one as we use its presence when deciding
+		 * whether to generate a synthetic timestamp.
+		 */
+		dev->timestamp[INPUT_CLK_MONO] = ktime_set(0, 0);
 	} else if (dev->num_vals >= dev->max_vals - 2) {
 		dev->vals[dev->num_vals++] = input_value_sync;
 		input_pass_values(dev, dev->vals, dev->num_vals);
-		dev->prev_num_vals = dev->num_vals;
 		dev->num_vals = 0;
 	}
 
@@ -573,9 +576,7 @@ static void __input_release_device(struct input_handle *handle)
 	if (grabber == handle) {
 		rcu_assign_pointer(dev->grab, NULL);
 		/* Make sure input_pass_event() notices that grab is gone */
-		pr_err("sec_input: %s: dev:%s++\n", __func__, dev->name);
 		synchronize_rcu();
-		pr_err("sec_input: %s: dev:%s--\n", __func__, dev->name);
 
 		list_for_each_entry(handle, &dev->h_list, d_node)
 			if (handle->open && handle->handler->start)
@@ -625,22 +626,17 @@ int input_open_device(struct input_handle *handle)
 
 	handle->open++;
 
-	dev->users_private++;
-	if (!dev->disabled && !dev->users++ && dev->open)
+	if (!dev->users++ && dev->open)
 		retval = dev->open(dev);
 
 	if (retval) {
-		dev->users_private--;
-		if (!dev->disabled)
-			dev->users--;
+		dev->users--;
 		if (!--handle->open) {
-			pr_err("sec_input: %s: dev:%s++\n", __func__, dev->name);
 			/*
 			 * Make sure we are not delivering any more events
 			 * through this handle
 			 */
 			synchronize_rcu();
-			pr_err("sec_input: %s: dev:%s--\n", __func__, dev->name);
 		}
 	}
 
@@ -682,68 +678,21 @@ void input_close_device(struct input_handle *handle)
 
 	__input_release_device(handle);
 
-	--dev->users_private;
-	if (!dev->disabled && !--dev->users && dev->close)
+	if (!--dev->users && dev->close)
 		dev->close(dev);
 
 	if (!--handle->open) {
-		pr_err("sec_input: %s: dev:%s++\n", __func__, dev->name);
 		/*
 		 * synchronize_rcu() makes sure that input_pass_event()
 		 * completed and that no more input events are delivered
 		 * through this handle
 		 */
 		synchronize_rcu();
-		pr_err("sec_input: %s: dev:%s--\n", __func__, dev->name);
 	}
 
 	mutex_unlock(&dev->mutex);
 }
 EXPORT_SYMBOL(input_close_device);
-
-static int input_enable_device(struct input_dev *dev)
-{
-	int retval;
-
-	retval = mutex_lock_interruptible(&dev->mutex);
-	if (retval)
-		return retval;
-
-	if (!dev->disabled)
-		goto out;
-
-	if (dev->users_private && dev->open) {
-		retval = dev->open(dev);
-		if (retval)
-			goto out;
-	}
-	dev->users = dev->users_private;
-	dev->disabled = false;
-
-out:
-	mutex_unlock(&dev->mutex);
-
-	return retval;
-}
-
-static int input_disable_device(struct input_dev *dev)
-{
-	int retval;
-
-	retval = mutex_lock_interruptible(&dev->mutex);
-	if (retval)
-		return retval;
-
-	if (!dev->disabled) {
-		dev->disabled = true;
-		if (dev->users && dev->close)
-			dev->close(dev);
-		dev->users = 0;
-	}
-
-	mutex_unlock(&dev->mutex);
-	return 0;
-}
 
 /*
  * Simulate keyup events for all keys that are marked as pressed.
@@ -1132,12 +1081,12 @@ static inline void input_wakeup_procfs_readers(void)
 	wake_up(&input_devices_poll_wait);
 }
 
-static unsigned int input_proc_devices_poll(struct file *file, poll_table *wait)
+static __poll_t input_proc_devices_poll(struct file *file, poll_table *wait)
 {
 	poll_wait(file, &input_devices_poll_wait, wait);
 	if (file->f_version != input_devices_state) {
 		file->f_version = input_devices_state;
-		return POLLIN | POLLRDNORM;
+		return EPOLLIN | EPOLLRDNORM;
 	}
 
 	return 0;
@@ -1523,50 +1472,16 @@ static ssize_t input_dev_show_properties(struct device *dev,
 }
 static DEVICE_ATTR(properties, S_IRUGO, input_dev_show_properties, NULL);
 
-static ssize_t input_dev_show_enabled(struct device *dev,
-					 struct device_attribute *attr,
-					 char *buf)
-{
-	struct input_dev *input_dev = to_input_dev(dev);
-
-	return scnprintf(buf, PAGE_SIZE, "%d\n", !input_dev->disabled);
-}
-
-static ssize_t input_dev_store_enabled(struct device *dev,
-				       struct device_attribute *attr,
-				       const char *buf, size_t size)
-{
-	int ret;
-	bool enable;
-	struct input_dev *input_dev = to_input_dev(dev);
-
-	ret = strtobool(buf, &enable);
-	if (ret)
-		return ret;
-
-	if (enable)
-		ret = input_enable_device(input_dev);
-	else
-		ret = input_disable_device(input_dev);
-	if (ret)
-		return ret;
-
-	return size;
-}
-
-static DEVICE_ATTR(enabled, S_IRUGO | S_IWUSR,
-		   input_dev_show_enabled, input_dev_store_enabled);
 static struct attribute *input_dev_attrs[] = {
 	&dev_attr_name.attr,
 	&dev_attr_phys.attr,
 	&dev_attr_uniq.attr,
 	&dev_attr_modalias.attr,
 	&dev_attr_properties.attr,
-	&dev_attr_enabled.attr,
 	NULL
 };
 
-static struct attribute_group input_dev_attr_group = {
+static const struct attribute_group input_dev_attr_group = {
 	.attrs	= input_dev_attrs,
 };
 
@@ -1593,7 +1508,7 @@ static struct attribute *input_dev_id_attrs[] = {
 	NULL
 };
 
-static struct attribute_group input_dev_id_attr_group = {
+static const struct attribute_group input_dev_id_attr_group = {
 	.name	= "id",
 	.attrs	= input_dev_id_attrs,
 };
@@ -1663,7 +1578,7 @@ static struct attribute *input_dev_caps_attrs[] = {
 	NULL
 };
 
-static struct attribute_group input_dev_caps_attr_group = {
+static const struct attribute_group input_dev_caps_attr_group = {
 	.name	= "capabilities",
 	.attrs	= input_dev_caps_attrs,
 };
@@ -1872,7 +1787,7 @@ static int input_dev_suspend(struct device *dev)
 	 * Keys that are pressed now are unlikely to be
 	 * still pressed when we resume.
 	 */
-	/* input_dev_release_keys(input_dev); */
+	input_dev_release_keys(input_dev);
 
 	/* Turn off LEDs and sounds, if any are active. */
 	input_dev_toggle(input_dev, false);
@@ -1936,7 +1851,7 @@ static const struct dev_pm_ops input_dev_pm_ops = {
 };
 #endif /* CONFIG_PM */
 
-static struct device_type input_dev_type = {
+static const struct device_type input_dev_type = {
 	.groups		= input_dev_attr_groups,
 	.release	= input_dev_release,
 	.uevent		= input_dev_uevent,
@@ -1977,7 +1892,7 @@ struct input_dev *input_allocate_device(void)
 		device_initialize(&dev->dev);
 		mutex_init(&dev->mutex);
 		spin_lock_init(&dev->event_lock);
-		init_timer(&dev->timer);
+		timer_setup(&dev->timer, NULL, 0);
 		INIT_LIST_HEAD(&dev->h_list);
 		INIT_LIST_HEAD(&dev->node);
 
@@ -2084,6 +1999,46 @@ void input_free_device(struct input_dev *dev)
 EXPORT_SYMBOL(input_free_device);
 
 /**
+ * input_set_timestamp - set timestamp for input events
+ * @dev: input device to set timestamp for
+ * @timestamp: the time at which the event has occurred
+ *   in CLOCK_MONOTONIC
+ *
+ * This function is intended to provide to the input system a more
+ * accurate time of when an event actually occurred. The driver should
+ * call this function as soon as a timestamp is acquired ensuring
+ * clock conversions in input_set_timestamp are done correctly.
+ *
+ * The system entering suspend state between timestamp acquisition and
+ * calling input_set_timestamp can result in inaccurate conversions.
+ */
+void input_set_timestamp(struct input_dev *dev, ktime_t timestamp)
+{
+	dev->timestamp[INPUT_CLK_MONO] = timestamp;
+	dev->timestamp[INPUT_CLK_REAL] = ktime_mono_to_real(timestamp);
+	dev->timestamp[INPUT_CLK_BOOT] = ktime_mono_to_any(timestamp,
+							   TK_OFFS_BOOT);
+}
+EXPORT_SYMBOL(input_set_timestamp);
+
+/**
+ * input_get_timestamp - get timestamp for input events
+ * @dev: input device to get timestamp from
+ *
+ * A valid timestamp is a timestamp of non-zero value.
+ */
+ktime_t *input_get_timestamp(struct input_dev *dev)
+{
+	const ktime_t invalid_timestamp = ktime_set(0, 0);
+
+	if (!ktime_compare(dev->timestamp[INPUT_CLK_MONO], invalid_timestamp))
+		input_set_timestamp(dev, ktime_get());
+
+	return dev->timestamp;
+}
+EXPORT_SYMBOL(input_get_timestamp);
+
+/**
  * input_set_capability - mark device as capable of a certain event
  * @dev: device that is capable of emitting or accepting event
  * @type: type of the event (EV_KEY, EV_REL, etc...)
@@ -2144,8 +2099,7 @@ void input_set_capability(struct input_dev *dev, unsigned int type, unsigned int
 		break;
 
 	default:
-		pr_err("input_set_capability: unknown type %u (code %u)\n",
-		       type, code);
+		pr_err("%s: unknown type %u (code %u)\n", __func__, type, code);
 		dump_stack();
 		return;
 	}
@@ -2248,7 +2202,6 @@ static void devm_input_device_unregister(struct device *dev, void *res)
  */
 void input_enable_softrepeat(struct input_dev *dev, int delay, int period)
 {
-	dev->timer.data = (unsigned long) dev;
 	dev->timer.function = input_repeat_key;
 	dev->rep[REP_DELAY] = delay;
 	dev->rep[REP_PERIOD] = period;

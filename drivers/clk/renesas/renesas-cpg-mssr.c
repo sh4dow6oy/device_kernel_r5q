@@ -26,6 +26,7 @@
 #include <linux/platform_device.h>
 #include <linux/pm_clock.h>
 #include <linux/pm_domain.h>
+#include <linux/psci.h>
 #include <linux/reset-controller.h>
 #include <linux/slab.h>
 
@@ -106,6 +107,9 @@ static const u16 srcr[] = {
  * @num_core_clks: Number of Core Clocks in clks[]
  * @num_mod_clks: Number of Module Clocks in clks[]
  * @last_dt_core_clk: ID of the last Core Clock exported to DT
+ * @notifiers: Notifier chain to save/restore clock state for system resume
+ * @smstpcr_saved[].mask: Mask of SMSTPCR[] bits under our control
+ * @smstpcr_saved[].val: Saved values of SMSTPCR[]
  */
 struct cpg_mssr_priv {
 #ifdef CONFIG_RESET_CONTROLLER
@@ -119,6 +123,12 @@ struct cpg_mssr_priv {
 	unsigned int num_core_clks;
 	unsigned int num_mod_clks;
 	unsigned int last_dt_core_clk;
+
+	struct raw_notifier_head notifiers;
+	struct {
+		u32 mask;
+		u32 val;
+	} smstpcr_saved[ARRAY_SIZE(smstpcr)];
 };
 
 
@@ -294,7 +304,8 @@ static void __init cpg_mssr_register_core_clk(const struct cpg_core_clk *core,
 
 		if (core->type == CLK_TYPE_DIV6P1) {
 			clk = cpg_div6_register(core->name, 1, &parent_name,
-						priv->base + core->offset);
+						priv->base + core->offset,
+						&priv->notifiers);
 		} else {
 			clk = clk_register_fixed_factor(NULL, core->name,
 							parent_name, 0,
@@ -302,10 +313,16 @@ static void __init cpg_mssr_register_core_clk(const struct cpg_core_clk *core,
 		}
 		break;
 
+	case CLK_TYPE_FR:
+		clk = clk_register_fixed_rate(NULL, core->name, NULL, 0,
+					      core->mult);
+		break;
+
 	default:
 		if (info->cpg_clk_register)
 			clk = info->cpg_clk_register(dev, core, info,
-						     priv->clks, priv->base);
+						     priv->clks, priv->base,
+						     &priv->notifiers);
 		else
 			dev_err(dev, "%s has unsupported core clock type %u\n",
 				core->name, core->type);
@@ -331,7 +348,7 @@ static void __init cpg_mssr_register_mod_clk(const struct mssr_mod_clk *mod,
 	struct mstp_clock *clock = NULL;
 	struct device *dev = priv->dev;
 	unsigned int id = mod->id;
-	struct clk_init_data init;
+	struct clk_init_data init = {};
 	struct clk *parent, *clk;
 	const char *parent_name;
 	unsigned int i;
@@ -360,15 +377,7 @@ static void __init cpg_mssr_register_mod_clk(const struct mssr_mod_clk *mod,
 
 	init.name = mod->name;
 	init.ops = &cpg_mstp_clock_ops;
-	init.flags = CLK_IS_BASIC | CLK_SET_RATE_PARENT;
-	for (i = 0; i < info->num_crit_mod_clks; i++)
-		if (id == info->crit_mod_clks[i]) {
-			dev_dbg(dev, "MSTP %s setting CLK_IS_CRITICAL\n",
-				mod->name);
-			init.flags |= CLK_IS_CRITICAL;
-			break;
-		}
-
+	init.flags = CLK_SET_RATE_PARENT;
 	parent_name = __clk_get_name(parent);
 	init.parent_names = &parent_name;
 	init.num_parents = 1;
@@ -377,12 +386,22 @@ static void __init cpg_mssr_register_mod_clk(const struct mssr_mod_clk *mod,
 	clock->priv = priv;
 	clock->hw.init = &init;
 
+	for (i = 0; i < info->num_crit_mod_clks; i++)
+		if (id == info->crit_mod_clks[i] &&
+		    cpg_mstp_clock_is_enabled(&clock->hw)) {
+			dev_dbg(dev, "MSTP %s setting CLK_IS_CRITICAL\n",
+				mod->name);
+			init.flags |= CLK_IS_CRITICAL;
+			break;
+		}
+
 	clk = clk_register(NULL, &clock->hw);
 	if (IS_ERR(clk))
 		goto fail;
 
 	dev_dbg(dev, "Module clock %pC at %lu Hz\n", clk, clk_get_rate(clk));
 	priv->clks[id] = clk;
+	priv->smstpcr_saved[clock->index / 32].mask |= BIT(clock->index % 32);
 	return;
 
 fail:
@@ -393,7 +412,6 @@ fail:
 
 struct cpg_mssr_clk_domain {
 	struct generic_pm_domain genpd;
-	struct device_node *np;
 	unsigned int num_core_pm_clks;
 	unsigned int core_pm_clks[0];
 };
@@ -405,7 +423,7 @@ static bool cpg_mssr_is_pm_clk(const struct of_phandle_args *clkspec,
 {
 	unsigned int i;
 
-	if (clkspec->np != pd->np || clkspec->args_count != 2)
+	if (clkspec->np != pd->genpd.dev.of_node || clkspec->args_count != 2)
 		return false;
 
 	switch (clkspec->args[0]) {
@@ -456,16 +474,12 @@ found:
 		return PTR_ERR(clk);
 
 	error = pm_clk_create(dev);
-	if (error) {
-		dev_err(dev, "pm_clk_create failed %d\n", error);
+	if (error)
 		goto fail_put;
-	}
 
 	error = pm_clk_add_clk(dev, clk);
-	if (error) {
-		dev_err(dev, "pm_clk_add_clk %pC failed %d\n", clk, error);
+	if (error)
 		goto fail_destroy;
-	}
 
 	return 0;
 
@@ -495,13 +509,13 @@ static int __init cpg_mssr_add_clk_domain(struct device *dev,
 	if (!pd)
 		return -ENOMEM;
 
-	pd->np = np;
 	pd->num_core_pm_clks = num_core_pm_clks;
 	memcpy(pd->core_pm_clks, core_pm_clks, pm_size);
 
 	genpd = &pd->genpd;
 	genpd->name = np->name;
-	genpd->flags = GENPD_FLAG_PM_CLK;
+	genpd->flags = GENPD_FLAG_PM_CLK | GENPD_FLAG_ALWAYS_ON |
+		       GENPD_FLAG_ACTIVE_WAKEUP;
 	genpd->attach_dev = cpg_mssr_attach_dev;
 	genpd->detach_dev = cpg_mssr_detach_dev;
 	pm_genpd_init(genpd, &pm_domain_always_on_gov, false);
@@ -628,6 +642,36 @@ static const struct of_device_id cpg_mssr_match[] = {
 		.data = &r8a7745_cpg_mssr_info,
 	},
 #endif
+#ifdef CONFIG_CLK_R8A77470
+	{
+		.compatible = "renesas,r8a77470-cpg-mssr",
+		.data = &r8a77470_cpg_mssr_info,
+	},
+#endif
+#ifdef CONFIG_CLK_R8A774A1
+	{
+		.compatible = "renesas,r8a774a1-cpg-mssr",
+		.data = &r8a774a1_cpg_mssr_info,
+	},
+#endif
+#ifdef CONFIG_CLK_R8A774B1
+	{
+		.compatible = "renesas,r8a774b1-cpg-mssr",
+		.data = &r8a774b1_cpg_mssr_info,
+	},
+#endif
+#ifdef CONFIG_CLK_R8A774C0
+	{
+		.compatible = "renesas,r8a774c0-cpg-mssr",
+		.data = &r8a774c0_cpg_mssr_info,
+	},
+#endif
+#ifdef CONFIG_CLK_R8A774E1
+	{
+		.compatible = "renesas,r8a774e1-cpg-mssr",
+		.data = &r8a774e1_cpg_mssr_info,
+	},
+#endif
 #ifdef CONFIG_CLK_R8A7790
 	{
 		.compatible = "renesas,r8a7790-cpg-mssr",
@@ -669,6 +713,30 @@ static const struct of_device_id cpg_mssr_match[] = {
 		.data = &r8a7796_cpg_mssr_info,
 	},
 #endif
+#ifdef CONFIG_CLK_R8A77965
+	{
+		.compatible = "renesas,r8a77965-cpg-mssr",
+		.data = &r8a77965_cpg_mssr_info,
+	},
+#endif
+#ifdef CONFIG_CLK_R8A77970
+	{
+		.compatible = "renesas,r8a77970-cpg-mssr",
+		.data = &r8a77970_cpg_mssr_info,
+	},
+#endif
+#ifdef CONFIG_CLK_R8A77980
+	{
+		.compatible = "renesas,r8a77980-cpg-mssr",
+		.data = &r8a77980_cpg_mssr_info,
+	},
+#endif
+#ifdef CONFIG_CLK_R8A77990
+	{
+		.compatible = "renesas,r8a77990-cpg-mssr",
+		.data = &r8a77990_cpg_mssr_info,
+	},
+#endif
 #ifdef CONFIG_CLK_R8A77995
 	{
 		.compatible = "renesas,r8a77995-cpg-mssr",
@@ -682,6 +750,85 @@ static void cpg_mssr_del_clk_provider(void *data)
 {
 	of_clk_del_provider(data);
 }
+
+#if defined(CONFIG_PM_SLEEP) && defined(CONFIG_ARM_PSCI_FW)
+static int cpg_mssr_suspend_noirq(struct device *dev)
+{
+	struct cpg_mssr_priv *priv = dev_get_drvdata(dev);
+	unsigned int reg;
+
+	/* This is the best we can do to check for the presence of PSCI */
+	if (!psci_ops.cpu_suspend)
+		return 0;
+
+	/* Save module registers with bits under our control */
+	for (reg = 0; reg < ARRAY_SIZE(priv->smstpcr_saved); reg++) {
+		if (priv->smstpcr_saved[reg].mask)
+			priv->smstpcr_saved[reg].val =
+				readl(priv->base + SMSTPCR(reg));
+	}
+
+	/* Save core clocks */
+	raw_notifier_call_chain(&priv->notifiers, PM_EVENT_SUSPEND, NULL);
+
+	return 0;
+}
+
+static int cpg_mssr_resume_noirq(struct device *dev)
+{
+	struct cpg_mssr_priv *priv = dev_get_drvdata(dev);
+	unsigned int reg, i;
+	u32 mask, oldval, newval;
+
+	/* This is the best we can do to check for the presence of PSCI */
+	if (!psci_ops.cpu_suspend)
+		return 0;
+
+	/* Restore core clocks */
+	raw_notifier_call_chain(&priv->notifiers, PM_EVENT_RESUME, NULL);
+
+	/* Restore module clocks */
+	for (reg = 0; reg < ARRAY_SIZE(priv->smstpcr_saved); reg++) {
+		mask = priv->smstpcr_saved[reg].mask;
+		if (!mask)
+			continue;
+
+		oldval = readl(priv->base + SMSTPCR(reg));
+		newval = oldval & ~mask;
+		newval |= priv->smstpcr_saved[reg].val & mask;
+		if (newval == oldval)
+			continue;
+
+		writel(newval, priv->base + SMSTPCR(reg));
+
+		/* Wait until enabled clocks are really enabled */
+		mask &= ~priv->smstpcr_saved[reg].val;
+		if (!mask)
+			continue;
+
+		for (i = 1000; i > 0; --i) {
+			oldval = readl(priv->base + MSTPSR(reg));
+			if (!(oldval & mask))
+				break;
+			cpu_relax();
+		}
+
+		if (!i)
+			dev_warn(dev, "Failed to enable SMSTP %p[0x%x]\n",
+				 priv->base + SMSTPCR(reg), oldval & mask);
+	}
+
+	return 0;
+}
+
+static const struct dev_pm_ops cpg_mssr_pm = {
+	SET_NOIRQ_SYSTEM_SLEEP_PM_OPS(cpg_mssr_suspend_noirq,
+				      cpg_mssr_resume_noirq)
+};
+#define DEV_PM_OPS	&cpg_mssr_pm
+#else
+#define DEV_PM_OPS	NULL
+#endif /* CONFIG_PM_SLEEP && CONFIG_ARM_PSCI_FW */
 
 static int __init cpg_mssr_probe(struct platform_device *pdev)
 {
@@ -718,10 +865,12 @@ static int __init cpg_mssr_probe(struct platform_device *pdev)
 	if (!clks)
 		return -ENOMEM;
 
+	dev_set_drvdata(dev, priv);
 	priv->clks = clks;
 	priv->num_core_clks = info->num_total_core_clks;
 	priv->num_mod_clks = info->num_hw_mod_clks;
 	priv->last_dt_core_clk = info->last_dt_core_clk;
+	RAW_INIT_NOTIFIER_HEAD(&priv->notifiers);
 
 	for (i = 0; i < nclks; i++)
 		clks[i] = ERR_PTR(-ENOENT);
@@ -758,6 +907,7 @@ static struct platform_driver cpg_mssr_driver = {
 	.driver		= {
 		.name	= "renesas-cpg-mssr",
 		.of_match_table = cpg_mssr_match,
+		.pm = DEV_PM_OPS,
 	},
 };
 

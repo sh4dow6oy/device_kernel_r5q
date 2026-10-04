@@ -1,4 +1,5 @@
-/* Copyright (c) 2011-2018, 2020, Linux Foundation. All rights reserved.
+// SPDX-License-Identifier: GPL-2.0-only
+/* Copyright (c) 2011-2018, 2020-2021, Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -61,38 +62,254 @@ static char bam_ch_names[BAM_DMUX_NUM_FUNCS][BAM_DMUX_CH_NAME_MAX_LEN];
 #define EXTRA_ALLOCATION_SIZE_U_BAM	128
 
 static unsigned int bam_pending_pkts_limit = BAM_PENDING_PKTS_LIMIT;
-module_param(bam_pending_pkts_limit, uint, 0644);
+static ssize_t bam_pending_pkts_limit_show(struct device *dev,
+					struct device_attribute	*attr,
+					char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "%d\n", bam_pending_pkts_limit);
+}
+
+static ssize_t bam_pending_pkts_limit_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	int val;
+
+	if (kstrtos32(buf, 0, &val))
+		return -EINVAL;
+
+	bam_pending_pkts_limit = val;
+
+	return count;
+
+}
+static DEVICE_ATTR_RW(bam_pending_pkts_limit);
 
 static unsigned int bam_pending_bytes_limit = BAM_PENDING_BYTES_LIMIT;
-module_param(bam_pending_bytes_limit, uint, 0644);
+static ssize_t bam_pending_bytes_limit_show(struct device *dev,
+					struct device_attribute *attr,
+					char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "%d\n", bam_pending_bytes_limit);
+}
+
+static ssize_t bam_pending_bytes_limit_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	int val;
+
+	if (kstrtos32(buf, 0, &val))
+		return -EINVAL;
+
+	bam_pending_bytes_limit = val;
+
+	return count;
+
+}
+static DEVICE_ATTR_RW(bam_pending_bytes_limit);
 
 static unsigned int bam_pending_bytes_fctrl_en_thold =
 					BAM_PENDING_BYTES_FCTRL_EN_TSHOLD;
-module_param(bam_pending_bytes_fctrl_en_thold, uint, 0644);
+static ssize_t bam_pending_bytes_fctrl_en_thold_show(struct device *dev,
+				 struct device_attribute *attr, char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "%d\n",
+					bam_pending_bytes_fctrl_en_thold);
+}
+
+static ssize_t bam_pending_bytes_fctrl_en_thold_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	int val;
+
+	if (kstrtos32(buf, 0, &val))
+		return -EINVAL;
+
+	bam_pending_bytes_fctrl_en_thold = val;
+
+	return count;
+
+}
+static DEVICE_ATTR_RW(bam_pending_bytes_fctrl_en_thold);
 
 static unsigned int bam_mux_tx_pkt_drop_thld = BAM_MUX_TX_PKT_DROP_THRESHOLD;
-module_param(bam_mux_tx_pkt_drop_thld, uint, 0644);
+static ssize_t bam_mux_tx_pkt_drop_thld_show(struct device *dev,
+				 struct device_attribute *attr, char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "%d\n", bam_mux_tx_pkt_drop_thld);
+}
+
+static ssize_t bam_mux_tx_pkt_drop_thld_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	int val;
+
+	if (kstrtos32(buf, 0, &val))
+		return -EINVAL;
+
+	bam_mux_tx_pkt_drop_thld = val;
+
+	return count;
+
+}
+static DEVICE_ATTR_RW(bam_mux_tx_pkt_drop_thld);
 
 static unsigned int bam_mux_rx_fctrl_en_thld = BAM_MUX_RX_PKT_FCTRL_EN_TSHOLD;
-module_param(bam_mux_rx_fctrl_en_thld, uint, 0644);
+static ssize_t bam_mux_rx_fctrl_en_thld_show(struct device *dev,
+				 struct device_attribute *attr, char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "%d\n", bam_mux_rx_fctrl_en_thld);
+}
+
+static ssize_t bam_mux_rx_fctrl_en_thld_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	int val;
+
+	if (kstrtos32(buf, 0, &val))
+		return -EINVAL;
+
+	bam_mux_rx_fctrl_en_thld = val;
+
+	return count;
+
+}
+static DEVICE_ATTR_RW(bam_mux_rx_fctrl_en_thld);
 
 static unsigned int bam_mux_rx_fctrl_support = BAM_MUX_RX_PKT_FLOW_CTRL_SUPPORT;
-module_param(bam_mux_rx_fctrl_support, uint, 0644);
+static ssize_t bam_mux_rx_fctrl_support_show(struct device *dev,
+				 struct device_attribute *attr, char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "%d\n", bam_mux_rx_fctrl_support);
+}
+
+static ssize_t bam_mux_rx_fctrl_support_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	int val;
+
+	if (kstrtos32(buf, 0, &val))
+		return -EINVAL;
+
+	bam_mux_rx_fctrl_support = val;
+
+	return count;
+
+}
+static DEVICE_ATTR_RW(bam_mux_rx_fctrl_support);
 
 static unsigned int bam_mux_rx_fctrl_dis_thld = BAM_MUX_RX_PKT_FCTRL_DIS_TSHOLD;
-module_param(bam_mux_rx_fctrl_dis_thld, uint, 0644);
+static ssize_t bam_mux_rx_fctrl_dis_thld_show(struct device *dev,
+				 struct device_attribute *attr, char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "%d\n", bam_mux_rx_fctrl_dis_thld);
+}
+
+static ssize_t bam_mux_rx_fctrl_dis_thld_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	int val;
+
+	if (kstrtos32(buf, 0, &val))
+		return -EINVAL;
+
+	bam_mux_rx_fctrl_dis_thld = val;
+
+	return count;
+
+}
+static DEVICE_ATTR_RW(bam_mux_rx_fctrl_dis_thld);
 
 static unsigned int bam_mux_tx_q_size = BAM_MUX_TX_Q_SIZE;
-module_param(bam_mux_tx_q_size, uint, 0644);
+static ssize_t bam_mux_tx_q_size_show(struct device *dev,
+				struct device_attribute	*attr,
+				char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "%d\n", bam_mux_tx_q_size);
+}
+
+static ssize_t bam_mux_tx_q_size_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	int val;
+
+	if (kstrtos32(buf, 0, &val))
+		return -EINVAL;
+
+	bam_mux_tx_q_size = val;
+
+	return count;
+
+}
+static DEVICE_ATTR_RW(bam_mux_tx_q_size);
 
 static unsigned int bam_mux_rx_q_size = BAM_MUX_RX_Q_SIZE;
-module_param(bam_mux_rx_q_size, uint, 0644);
+static ssize_t bam_mux_rx_q_size_show(struct device *dev,
+				struct device_attribute	*attr,
+				char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "%d\n", bam_mux_rx_q_size);
+}
+
+static ssize_t bam_mux_rx_q_size_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	int val;
+
+	if (kstrtos32(buf, 0, &val))
+		return -EINVAL;
+
+	bam_mux_rx_q_size = val;
+
+	return count;
+
+}
+static DEVICE_ATTR_RW(bam_mux_rx_q_size);
 
 static unsigned long bam_mux_rx_req_size = BAM_MUX_RX_REQ_SIZE;
-module_param(bam_mux_rx_req_size, ulong, 0444);
+static ssize_t bam_mux_rx_req_size_show(struct device *dev,
+				struct device_attribute	*attr,
+				char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "%d\n", bam_mux_rx_req_size);
+}
+
+static ssize_t bam_mux_rx_req_size_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	int val;
+
+	if (kstrtos32(buf, 0, &val))
+		return -EINVAL;
+
+	bam_mux_rx_req_size = val;
+
+	return count;
+
+}
+static DEVICE_ATTR_RW(bam_mux_rx_req_size);
 
 static unsigned int dl_intr_threshold = DL_INTR_THRESHOLD;
-module_param(dl_intr_threshold, uint, 0644);
+static ssize_t dl_intr_threshold_show(struct device *dev,
+				struct device_attribute	*attr,
+				char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "%d\n", dl_intr_threshold);
+}
+
+static ssize_t dl_intr_threshold_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	int val;
+
+	if (kstrtos32(buf, 0, &val))
+		return -EINVAL;
+
+	dl_intr_threshold = val;
+
+	return count;
+
+}
+static DEVICE_ATTR_RW(dl_intr_threshold);
 
 #define BAM_CH_OPENED			BIT(0)
 #define BAM_CH_READY			BIT(1)
@@ -181,7 +398,7 @@ static int gbam_alloc_requests(struct usb_ep *ep, struct list_head *head,
 	int i;
 	struct usb_request *req;
 
-	pr_debug("%s: ep:%pK head:%pK num:%d cb:%pK", __func__,
+	pr_debug("%s: ep:%pK head:%pK num:%d cb:%pK\n", __func__,
 			ep, head, num, cb);
 
 	for (i = 0; i < num; i++) {
@@ -736,7 +953,8 @@ static int _gbam_start_io(struct gbam_port *port, bool in)
 	struct list_head	*idle;
 	unsigned int		queue_size;
 	spinlock_t		*spinlock;
-	void		(*ep_complete)(struct usb_ep *, struct usb_request *);
+	void		(*ep_complete)(struct usb_ep *ep,
+					struct usb_request *req);
 
 	if (in)
 		spinlock = &port->port_lock_dl;
@@ -822,9 +1040,10 @@ static void gbam_notify(void *p, int event, unsigned long data)
 	case BAM_DMUX_TRANSMIT_SIZE:
 		d = &port->data_ch;
 		if (test_bit(BAM_CH_OPENED, &d->flags))
-			pr_warn("%s, BAM channel opened already", __func__);
+			pr_warn("%s, BAM channel opened already\n", __func__);
 		bam_mux_rx_req_size = data;
-		pr_debug("%s rx_req_size: %lu", __func__, bam_mux_rx_req_size);
+		pr_debug("%s rx_req_size: %lu\n", __func__,
+						bam_mux_rx_req_size);
 		break;
 	}
 }
@@ -932,6 +1151,46 @@ static void gbam_connect_work(struct work_struct *w)
 	pr_debug("%s: done\n", __func__);
 }
 
+static int gbam_sys_init(struct device *dev)
+{
+	int ret = 0;
+
+	if (!dev)
+		return -EINVAL;
+
+	device_create_file(dev, &dev_attr_bam_pending_pkts_limit);
+	device_create_file(dev, &dev_attr_bam_pending_bytes_limit);
+	device_create_file(dev, &dev_attr_bam_pending_bytes_fctrl_en_thold);
+	device_create_file(dev, &dev_attr_bam_mux_tx_pkt_drop_thld);
+	device_create_file(dev, &dev_attr_bam_mux_rx_fctrl_en_thld);
+	device_create_file(dev, &dev_attr_bam_mux_rx_fctrl_support);
+	device_create_file(dev, &dev_attr_bam_mux_rx_fctrl_dis_thld);
+	device_create_file(dev, &dev_attr_bam_mux_tx_q_size);
+	device_create_file(dev, &dev_attr_bam_mux_rx_q_size);
+	device_create_file(dev, &dev_attr_bam_mux_rx_req_size);
+	device_create_file(dev, &dev_attr_dl_intr_threshold);
+
+	return ret;
+
+}
+
+static void gbam_sys_remove(struct device *dev)
+{
+
+	device_remove_file(dev, &dev_attr_bam_pending_pkts_limit);
+	device_remove_file(dev, &dev_attr_bam_pending_bytes_limit);
+	device_remove_file(dev, &dev_attr_bam_pending_bytes_fctrl_en_thold);
+	device_remove_file(dev, &dev_attr_bam_mux_tx_pkt_drop_thld);
+	device_remove_file(dev, &dev_attr_bam_mux_rx_fctrl_en_thld);
+	device_remove_file(dev, &dev_attr_bam_mux_rx_fctrl_support);
+	device_remove_file(dev, &dev_attr_bam_mux_rx_fctrl_dis_thld);
+	device_remove_file(dev, &dev_attr_bam_mux_tx_q_size);
+	device_remove_file(dev, &dev_attr_bam_mux_rx_q_size);
+	device_remove_file(dev, &dev_attr_bam_mux_rx_req_size);
+	device_remove_file(dev, &dev_attr_dl_intr_threshold);
+
+}
+
 /* BAM data channel ready, allow attempt to open */
 static int gbam_data_ch_probe(struct platform_device *pdev)
 {
@@ -966,6 +1225,8 @@ static int gbam_data_ch_probe(struct platform_device *pdev)
 			break;
 		}
 	}
+
+	gbam_sys_init(&pdev->dev);
 
 	return 0;
 }
@@ -1016,6 +1277,7 @@ static int gbam_data_ch_remove(struct platform_device *pdev)
 			clear_bit(BAM_CH_OPENED, &d->flags);
 		}
 	}
+	gbam_sys_remove(&pdev->dev);
 
 	return 0;
 }
@@ -1249,7 +1511,7 @@ void gbam_disconnect(struct data_port *gr, enum bam_dmux_func_type func)
 	port = bam_ports[func].port;
 
 	if (!port) {
-		pr_err("%s: NULL port", __func__);
+		pr_err("%s: NULL port\n", __func__);
 		return;
 	}
 
@@ -1315,7 +1577,7 @@ int gbam_connect(struct data_port *gr, enum bam_dmux_func_type func)
 	port = bam_ports[func].port;
 
 	if (!port) {
-		pr_err("%s: NULL port", __func__);
+		pr_err("%s: NULL port\n", __func__);
 		return -ENODEV;
 	}
 
@@ -1346,7 +1608,7 @@ int gbam_connect(struct data_port *gr, enum bam_dmux_func_type func)
 
 	ret = usb_ep_enable(gr->in);
 	if (ret) {
-		pr_err("%s: usb_ep_enable failed eptype:IN ep:%pK",
+		pr_err("%s: usb_ep_enable failed eptype:IN ep:%pK\n",
 			__func__, gr->in);
 		goto exit;
 	}
@@ -1360,7 +1622,7 @@ int gbam_connect(struct data_port *gr, enum bam_dmux_func_type func)
 	if (gr->out) {
 		ret = usb_ep_enable(gr->out);
 		if (ret) {
-			pr_err("%s: usb_ep_enable failed eptype:OUT ep:%pK",
+			pr_err("%s: usb_ep_enable failed eptype:OUT ep:%pK\n",
 					__func__, gr->out);
 			gr->in->driver_data = NULL;
 			usb_ep_disable(gr->in);

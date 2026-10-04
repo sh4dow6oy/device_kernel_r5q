@@ -1,4 +1,5 @@
-/* Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+// SPDX-License-Identifier: GPL-2.0-only
+/* Copyright (c) 2012-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -85,7 +86,7 @@ static void msm_vb2_buf_queue(struct vb2_buffer *vb)
 
 	msm_vb2 = container_of(vbuf, struct msm_vb2_buffer, vb2_v4l2_buf);
 	if (!msm_vb2) {
-		pr_err("%s:%d] vb2_buf NULL", __func__, __LINE__);
+		pr_err("%s:%d] vb2_buf NULL\n", __func__, __LINE__);
 		return;
 	}
 
@@ -97,7 +98,7 @@ static void msm_vb2_buf_queue(struct vb2_buffer *vb)
 
 	stream = msm_get_stream_from_vb2q(vb->vb2_queue);
 	if (!stream) {
-		pr_err("%s:%d] NULL stream", __func__, __LINE__);
+		pr_err("%s:%d] NULL stream\n", __func__, __LINE__);
 		read_unlock_irqrestore(&session->stream_rwlock, rl_flags);
 		return;
 	}
@@ -119,7 +120,7 @@ static void msm_vb2_buf_finish(struct vb2_buffer *vb)
 
 	msm_vb2 = container_of(vbuf, struct msm_vb2_buffer, vb2_v4l2_buf);
 	if (!msm_vb2) {
-		pr_err("%s:%d] vb2_buf NULL", __func__, __LINE__);
+		pr_err("%s:%d] vb2_buf NULL\n", __func__, __LINE__);
 		return;
 	}
 
@@ -131,7 +132,7 @@ static void msm_vb2_buf_finish(struct vb2_buffer *vb)
 
 	stream = msm_get_stream_from_vb2q(vb->vb2_queue);
 	if (!stream) {
-		pr_err("%s:%d] NULL stream", __func__, __LINE__);
+		pr_err("%s:%d] NULL stream\n", __func__, __LINE__);
 		read_unlock_irqrestore(&session->stream_rwlock, rl_flags);
 		return;
 	}
@@ -164,7 +165,7 @@ static void msm_vb2_stop_stream(struct vb2_queue *q)
 
 	stream = msm_get_stream_from_vb2q(q);
 	if (!stream) {
-		pr_err_ratelimited("%s:%d] NULL stream", __func__, __LINE__);
+		pr_err_ratelimited("%s:%d] NULL stream\n", __func__, __LINE__);
 		read_unlock_irqrestore(&session->stream_rwlock, rl_flags);
 		return;
 	}

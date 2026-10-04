@@ -47,7 +47,7 @@
 
 /* These are for everybody (although not all archs will actually
    discard it in modules) */
-#define __init		__section(.init.text) __cold __inittrace __latent_entropy __noinitretpoline __nocfi
+#define __init		__section(.init.text) __cold  __latent_entropy __noinitretpoline __nocfi
 #define __initdata	__section(.init.data)
 #define __initconst	__section(.init.rodata)
 #define __exitdata	__section(.exit.data)
@@ -76,10 +76,8 @@
 
 #ifdef MODULE
 #define __exitused
-#define __inittrace notrace
 #else
 #define __exitused  __used
-#define __inittrace
 #endif
 
 #define __exit          __section(.exit.text) __exitused __cold notrace
@@ -139,22 +137,20 @@ extern initcall_entry_t __con_initcall_start[], __con_initcall_end[];
 /* Used for contructor calls. */
 typedef void (*ctor_fn_t)(void);
 
+struct file_system_type;
+
 /* Defined in init/main.c */
 extern int do_one_initcall(initcall_t fn);
 extern char __initdata boot_command_line[];
 extern char *saved_command_line;
-extern char *erased_command_line;
 extern unsigned int reset_devices;
 
 /* used by init/main.c */
 void setup_arch(char **);
 void prepare_namespace(void);
-void launch_early_services(void);
-#ifdef CONFIG_EARLY_SERVICES
-int get_early_services_status(void);
-#endif
 void __init load_default_modules(void);
 int __init init_rootfs(void);
+extern struct file_system_type rootfs_fs_type;
 
 #if defined(CONFIG_STRICT_KERNEL_RWX) || defined(CONFIG_STRICT_MODULE_RWX)
 extern bool rodata_enabled;
@@ -188,6 +184,7 @@ extern bool initcall_debug;
  * and remove that completely, so the initcall sections have to be marked
  * as KEEP() in the linker script.
  */
+
 #ifdef CONFIG_HAVE_ARCH_PREL32_RELOCATIONS
 #define ___define_initcall(fn, id, __sec)			\
 	__ADDRESSABLE(fn)					\
@@ -264,12 +261,6 @@ extern bool initcall_debug;
 
 #define console_initcall(fn)	___define_initcall(fn, con, .con_initcall)
 
-#ifdef CONFIG_DEFERRED_INITCALLS
-#define deferred_initcall(fn, id)				\
-	static initcall_t __initcall_##fn##id __used		\
-	__attribute__((__section__(".deferred_initcall" #id ".init"))) = fn
-#endif
-
 struct obs_kernel_param {
 	const char *str;
 	int (*setup_func)(char *);
@@ -323,15 +314,7 @@ void __init parse_early_param(void);
 void __init parse_early_options(char *cmdline);
 #endif /* __ASSEMBLY__ */
 
-#ifdef CONFIG_DEFERRED_INITCALLS
-#define deferred_module_init(fn) deferred_initcall(fn, 0)
-#define deferred_module_init_sync(fn) deferred_initcall(fn, 0s)
-#endif
-
 #else /* MODULE */
-#ifdef CONFIG_DEFERRED_INITCALLS
-#define deferred_module_init(fn) module_init(fn)
-#endif
 
 #define __setup_param(str, unique_id, fn)	/* nothing */
 #define __setup(str, func) 			/* nothing */

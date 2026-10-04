@@ -27,7 +27,7 @@ static int ice_check_fuse_setting(struct crypto_vops_qti_entry *ice_entry)
 	minor = (ice_entry->ice_hw_version & ICE_CORE_MINOR_REV_MASK) >>
 			ICE_CORE_MINOR_REV;
 
-	/* Check fuse setting is not supported on ICE 3.2 onwards */
+	//Check fuse setting is not supported on ICE 3.2 onwards
 	if ((major == 0x03) && (minor >= 0x02))
 		return 0;
 	regval = ice_readl(ice_entry, ICE_REGS_FUSE_SETTING);
@@ -398,7 +398,7 @@ int crypto_qti_keyslot_program(void *priv_data,
 			       unsigned int slot,
 			       u8 data_unit_mask, int capid)
 {
-	int err = 0;
+	int err1 = 0, err2 = 0;
 	struct crypto_vops_qti_entry *ice_entry;
 
 	ice_entry = (struct crypto_vops_qti_entry *) priv_data;
@@ -407,19 +407,19 @@ int crypto_qti_keyslot_program(void *priv_data,
 		return -EINVAL;
 	}
 
-	err = crypto_qti_program_key(ice_entry, key, slot,
+	err1 = crypto_qti_program_key(ice_entry, key, slot,
 				data_unit_mask, capid);
-	if (err) {
-		pr_err("%s: program key failed with error %d\n", __func__, err);
-		err = crypto_qti_invalidate_key(ice_entry, slot);
-		if (err) {
+	if (err1) {
+		pr_err("%s: program key failed with error %d\n",
+			__func__, err1);
+		err2 = crypto_qti_invalidate_key(ice_entry, slot);
+		if (err2) {
 			pr_err("%s: invalidate key failed with error %d\n",
-				__func__, err);
-			return err;
+				__func__, err2);
 		}
 	}
 
-	return err;
+	return err1;
 }
 
 int crypto_qti_keyslot_evict(void *priv_data, unsigned int slot)
@@ -463,7 +463,7 @@ int crypto_qti_derive_raw_secret(const u8 *wrapped_key,
 
 	if (wrapped_key_size > 64)
 		err = crypto_qti_tz_raw_secret(wrapped_key, wrapped_key_size,
-				secret, secret_size);
+					       secret, secret_size);
 	else
 		memcpy(secret, wrapped_key, secret_size);
 

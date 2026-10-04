@@ -1,16 +1,7 @@
-/* Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2018-2021, The Linux Foundation. All rights reserved.
  */
-
-#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 /* -------------------------------------------------------------------------
  * Includes
@@ -40,15 +31,16 @@
 struct npu_queue_tuple {
 	uint32_t size;
 	uint32_t hdr;
+	uint32_t start_offset;
 };
 
-static const struct npu_queue_tuple npu_q_setup[6] = {
-	{ 1024, IPC_QUEUE_CMD_HIGH_PRIORITY | TX_HDR_TYPE | RX_HDR_TYPE },
-	{ 4096, IPC_QUEUE_APPS_EXEC         | TX_HDR_TYPE | RX_HDR_TYPE },
-	{ 4096, IPC_QUEUE_DSP_EXEC          | TX_HDR_TYPE | RX_HDR_TYPE },
-	{ 4096, IPC_QUEUE_APPS_RSP          | TX_HDR_TYPE | RX_HDR_TYPE },
-	{ 4096, IPC_QUEUE_DSP_RSP           | TX_HDR_TYPE | RX_HDR_TYPE },
-	{ 1024, IPC_QUEUE_LOG               | TX_HDR_TYPE | RX_HDR_TYPE },
+static struct npu_queue_tuple npu_q_setup[6] = {
+	{ 1024, IPC_QUEUE_CMD_HIGH_PRIORITY | TX_HDR_TYPE | RX_HDR_TYPE, 0},
+	{ 4096, IPC_QUEUE_APPS_EXEC         | TX_HDR_TYPE | RX_HDR_TYPE, 0},
+	{ 4096, IPC_QUEUE_DSP_EXEC          | TX_HDR_TYPE | RX_HDR_TYPE, 0},
+	{ 4096, IPC_QUEUE_APPS_RSP          | TX_HDR_TYPE | RX_HDR_TYPE, 0},
+	{ 4096, IPC_QUEUE_DSP_RSP           | TX_HDR_TYPE | RX_HDR_TYPE, 0},
+	{ 1024, IPC_QUEUE_LOG               | TX_HDR_TYPE | RX_HDR_TYPE, 0},
 };
 
 /* -------------------------------------------------------------------------
@@ -82,6 +74,8 @@ static int npu_host_ipc_init_hfi(struct npu_device *npu_dev)
 		(NPU_HFI_NUMBER_OF_QS * sizeof(struct hfi_queue_header));
 	uint32_t q_size = 0;
 	uint32_t cur_start_offset = 0;
+
+	spin_lock_init(&npu_dev->ipc_lock);
 
 	reg_val = REGR(npu_dev, REG_NPU_FW_CTRL_STATUS);
 
@@ -118,6 +112,7 @@ static int npu_host_ipc_init_hfi(struct npu_device *npu_dev)
 		/* queue is active */
 		q_hdr->qhdr_status = 0x01;
 		q_hdr->qhdr_start_offset = cur_start_offset;
+		npu_q_setup[q_idx].start_offset = cur_start_offset;
 		q_size = npu_q_setup[q_idx].size;
 		q_hdr->qhdr_type = npu_q_setup[q_idx].hdr;
 		/* in bytes */
@@ -143,11 +138,13 @@ static int npu_host_ipc_init_hfi(struct npu_device *npu_dev)
 	kfree(q_tbl_addr);
 	/* Write in the NPU's address for where IPC starts */
 	REGW(npu_dev, (uint32_t)REG_NPU_HOST_CTRL_VALUE,
-		(uint32_t)IPC_MEM_OFFSET_FROM_SSTCM);
+		(uint32_t)(npu_dev->tcm_io.phy_addr +
+		IPC_MEM_OFFSET_FROM_SSTCM));
 	/* Set value bit */
 	reg_val = REGR(npu_dev, (uint32_t)REG_NPU_HOST_CTRL_STATUS);
 	REGW(npu_dev, (uint32_t)REG_NPU_HOST_CTRL_STATUS, reg_val |
 		HOST_CTRL_STATUS_IPC_ADDRESS_READY_VAL);
+
 	return status;
 }
 
@@ -157,13 +154,17 @@ static int npu_host_ipc_send_cmd_hfi(struct npu_device *npu_dev,
 	int status = 0;
 	uint8_t is_rx_req_set = 0;
 	uint32_t retry_cnt = 5;
+	unsigned long flags;
 
+	spin_lock_irqsave(&npu_dev->ipc_lock, flags);
 	status = ipc_queue_write(npu_dev, q_idx, (uint8_t *)cmd_ptr,
 		&is_rx_req_set);
 
 	if (status == -ENOSPC) {
 		do {
+			spin_unlock_irqrestore(&npu_dev->ipc_lock, flags);
 			msleep(20);
+			spin_lock_irqsave(&npu_dev->ipc_lock, flags);
 			status = ipc_queue_write(npu_dev, q_idx,
 				(uint8_t *)cmd_ptr, &is_rx_req_set);
 		} while ((status == -ENOSPC) && (--retry_cnt > 0));
@@ -173,11 +174,10 @@ static int npu_host_ipc_send_cmd_hfi(struct npu_device *npu_dev,
 		if (is_rx_req_set == 1)
 			status = INTERRUPT_RAISE_NPU(npu_dev);
 	}
+	spin_unlock_irqrestore(&npu_dev->ipc_lock, flags);
 
-	if (status == 0)
-		pr_debug("Cmd Msg put on Command Queue - SUCCESSS\n");
-	else
-		pr_err("Cmd Msg put on Command Queue - FAILURE\n");
+	if (status)
+		NPU_ERR("Cmd Msg put on Command Queue - FAILURE\n");
 
 	return status;
 }
@@ -219,6 +219,18 @@ static int ipc_queue_read(struct npu_device *npu_dev,
 	/* Read the queue */
 	MEMR(npu_dev, (void *)((size_t)offset), (uint8_t *)&queue,
 		HFI_QUEUE_HEADER_SIZE);
+
+	if (queue.qhdr_type != npu_q_setup[target_que].hdr ||
+		queue.qhdr_q_size != npu_q_setup[target_que].size ||
+		queue.qhdr_read_idx >= queue.qhdr_q_size ||
+		queue.qhdr_write_idx >= queue.qhdr_q_size ||
+		queue.qhdr_start_offset !=
+			npu_q_setup[target_que].start_offset) {
+		NPU_ERR("Invalid Queue header\n");
+		status = -EIO;
+		goto exit;
+	}
+
 	/* check if queue is empty */
 	if (queue.qhdr_read_idx == queue.qhdr_write_idx) {
 		/*
@@ -227,7 +239,7 @@ static int ipc_queue_read(struct npu_device *npu_dev,
 		 */
 		queue.qhdr_rx_req = 1;
 		*is_tx_req_set = 0;
-		status = -EPERM;
+		status = -EIO;
 		goto exit;
 	}
 
@@ -238,14 +250,17 @@ static int ipc_queue_read(struct npu_device *npu_dev,
 	MEMR(npu_dev, (void *)((size_t)read_ptr), packet, 4);
 	packet_size = *((uint32_t *)packet);
 
-	pr_debug("target_que: %d, packet_size: %d\n",
+	NPU_DBG("target_que: %d, packet_size: %d\n",
 			target_que,
 			packet_size);
 
-	if (packet_size == 0) {
-		status = -EPERM;
+	if ((packet_size == 0) ||
+		(packet_size > NPU_IPC_BUF_LENGTH)) {
+		NPU_ERR("Invalid packet size %d\n", packet_size);
+		status = -EINVAL;
 		goto exit;
 	}
+
 	new_read_idx = queue.qhdr_read_idx + packet_size;
 
 	if (new_read_idx < (queue.qhdr_q_size)) {
@@ -302,7 +317,7 @@ static int ipc_queue_write(struct npu_device *npu_dev,
 	uint32_t packet_size, new_write_idx;
 	uint32_t empty_space;
 	void *write_ptr;
-	uint32_t read_idx;
+	uint32_t read_idx, write_idx;
 
 	size_t offset = (size_t)IPC_ADDR +
 		sizeof(struct hfi_queue_tbl_header) +
@@ -313,10 +328,22 @@ static int ipc_queue_write(struct npu_device *npu_dev,
 
 	MEMR(npu_dev, (void *)((size_t)offset), (uint8_t *)&queue,
 		HFI_QUEUE_HEADER_SIZE);
+
+	if (queue.qhdr_type != npu_q_setup[target_que].hdr ||
+		queue.qhdr_q_size != npu_q_setup[target_que].size ||
+		queue.qhdr_read_idx >= queue.qhdr_q_size ||
+		queue.qhdr_write_idx >= queue.qhdr_q_size ||
+		queue.qhdr_start_offset !=
+			npu_q_setup[target_que].start_offset) {
+		NPU_ERR("Invalid Queue header\n");
+		status = -EIO;
+		goto exit;
+	}
+
 	packet_size = (*(uint32_t *)packet);
 	if (packet_size == 0) {
 		/* assign failed status and return */
-		status = -EPERM;
+		status = -EINVAL;
 		goto exit;
 	}
 
@@ -374,8 +401,6 @@ static int ipc_queue_write(struct npu_device *npu_dev,
 	/* Update qhdr_write_idx */
 	queue.qhdr_write_idx = new_write_idx;
 
-	*is_rx_req_set = (queue.qhdr_rx_req == 1) ? 1 : 0;
-
 	/* Update Write pointer -- queue.qhdr_write_idx */
 exit:
 	/* Update TX request -- queue.qhdr_tx_req */
@@ -385,6 +410,30 @@ exit:
 	MEMW(npu_dev, (void *)((size_t)(offset + (uint32_t)(
 		(size_t)&(queue.qhdr_write_idx) - (size_t)&queue))),
 		&queue.qhdr_write_idx, sizeof(queue.qhdr_write_idx));
+
+	/* check if irq is required after write_idx is updated */
+	MEMR(npu_dev, (void *)((size_t)(offset + (uint32_t)(
+		(size_t)&(queue.qhdr_rx_req) - (size_t)&queue))),
+		(uint8_t *)&queue.qhdr_rx_req,
+		sizeof(queue.qhdr_rx_req));
+	*is_rx_req_set = (queue.qhdr_rx_req == 1) ? 1 : 0;
+
+	/* check if queue is empty (consumed by fw) */
+	if (*is_rx_req_set) {
+		MEMR(npu_dev, (void *)((size_t)(offset + (uint32_t)(
+			(size_t)&(queue.qhdr_write_idx) - (size_t)&queue))),
+			(uint8_t *)&write_idx,
+			sizeof(queue.qhdr_write_idx));
+
+		MEMR(npu_dev, (void *)((size_t)(offset + (uint32_t)(
+			(size_t)&(queue.qhdr_read_idx) - (size_t)&queue))),
+			(uint8_t *)&read_idx,
+			sizeof(queue.qhdr_read_idx));
+
+		/* cmd has been consumed by fw, no need to trigger irq */
+		if (read_idx == write_idx)
+			*is_rx_req_set = 0;
+	}
 
 	return status;
 }
@@ -413,4 +462,14 @@ int npu_host_ipc_pre_init(struct npu_device *npu_dev)
 int npu_host_ipc_post_init(struct npu_device *npu_dev)
 {
 	return 0;
+}
+
+int npu_host_get_ipc_queue_size(struct npu_device *npu_dev, uint32_t q_idx)
+{
+	if (q_idx >= ARRAY_SIZE(npu_q_setup)) {
+		NPU_ERR("Invalid ipc queue index %d\n", q_idx);
+		return -EINVAL;
+	}
+
+	return npu_q_setup[q_idx].size;
 }

@@ -1,16 +1,12 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * Device tree based initialization code for reserved memory.
  *
- * Copyright (c) 2013, 2015, 2017 The Linux Foundation. All Rights Reserved.
+ * Copyright (c) 2013, 2015 The Linux Foundation. All Rights Reserved.
  * Copyright (c) 2013,2014 Samsung Electronics Co., Ltd.
  *		http://www.samsung.com
  * Author: Marek Szyprowski <m.szyprowski@samsung.com>
  * Author: Josh Cartwright <joshc@codeaurora.org>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License as
- * published by the Free Software Foundation; either version 2 of the
- * License or (at your optional) any later version of the license.
  */
 
 #define pr_fmt(fmt)	"OF: reserved mem: " fmt
@@ -72,14 +68,6 @@ int __init __weak early_init_dt_alloc_reserved_memory_arch(phys_addr_t size,
 }
 #endif
 
-static bool rmem_overflow;
-static bool __init need_memsize_skip(unsigned long node, const char *uname)
-{
-	if (!strncmp(uname, "disp_rdump_region", 17))
-		return true;
-	return false;
-}
-
 /**
  * res_mem_save_node() - save fdt node for second pass initialization
  */
@@ -88,11 +76,8 @@ void __init fdt_reserved_mem_save_node(unsigned long node, const char *uname,
 {
 	struct reserved_mem *rmem = &reserved_mem[reserved_mem_count];
 
-	if (need_memsize_skip(node, uname))
-		return;
 	if (reserved_mem_count == ARRAY_SIZE(reserved_mem)) {
 		pr_err("not enough space all defined regions.\n");
-		rmem_overflow = true;
 		return;
 	}
 
@@ -249,7 +234,6 @@ static int __init __rmem_cmp(const void *a, const void *b)
 	return 0;
 }
 
-static bool rmem_overlap;
 static void __init __rmem_check_for_overlap(void)
 {
 	int i;
@@ -273,7 +257,6 @@ static void __init __rmem_check_for_overlap(void)
 			pr_err("OVERLAP DETECTED!\n%s (%pa--%pa) overlaps with %s (%pa--%pa)\n",
 			       this->name, &this->base, &this_end,
 			       next->name, &next->base, &next_end);
-			rmem_overlap = true;
 		}
 	}
 }
@@ -294,7 +277,6 @@ void __init fdt_init_reserved_mem(void)
 		int len;
 		const __be32 *prop;
 		int err = 0;
-		bool nomap;
 
 		prop = of_get_flat_dt_prop(node, "phandle", &len);
 		if (!prop)
@@ -305,17 +287,8 @@ void __init fdt_init_reserved_mem(void)
 		if (rmem->size == 0)
 			err = __reserved_mem_alloc_size(node, rmem->name,
 						 &rmem->base, &rmem->size);
-		if (err == 0) {
+		if (err == 0)
 			__reserved_mem_init_node(rmem);
-			nomap = of_get_flat_dt_prop(node, "no-map", NULL) != NULL;
-#ifdef CONFIG_ION_RBIN_HEAP
-			if (of_get_flat_dt_prop(node, "ion,recyclable", NULL))
-				rmem->reusable = true;
-#endif
-			record_memsize_reserved(rmem->name, rmem->base,
-						rmem->size, nomap,
-						rmem->reusable);
-		}
 	}
 }
 
@@ -392,7 +365,7 @@ int of_reserved_mem_device_init_by_idx(struct device *dev,
 		/* ensure that dma_ops is set for virtual devices
 		 * using reserved memory
 		 */
-		of_dma_configure(dev, np);
+		of_dma_configure(dev, np, true);
 
 		dev_info(dev, "assigned reserved memory node %s\n", rmem->name);
 	} else {
@@ -433,12 +406,28 @@ void of_reserved_mem_device_release(struct device *dev)
 }
 EXPORT_SYMBOL_GPL(of_reserved_mem_device_release);
 
-static int check_reserved_mem(void)
+/**
+ * of_reserved_mem_lookup() - acquire reserved_mem from a device node
+ * @np:		node pointer of the desired reserved-memory region
+ *
+ * This function allows drivers to acquire a reference to the reserved_mem
+ * struct based on a device node handle.
+ *
+ * Returns a reserved_mem reference, or NULL on error.
+ */
+struct reserved_mem *of_reserved_mem_lookup(struct device_node *np)
 {
-	if (rmem_overflow)
-		panic("overflow on reserved memory, check the latest change");
-	if (rmem_overlap)
-		panic("overlap on reserved memory, check the latest change");
-	return 0;
+	const char *name;
+	int i;
+
+	if (!np->full_name)
+		return NULL;
+
+	name = kbasename(np->full_name);
+	for (i = 0; i < reserved_mem_count; i++)
+		if (!strcmp(reserved_mem[i].name, name))
+			return &reserved_mem[i];
+
+	return NULL;
 }
-late_initcall(check_reserved_mem);
+EXPORT_SYMBOL_GPL(of_reserved_mem_lookup);

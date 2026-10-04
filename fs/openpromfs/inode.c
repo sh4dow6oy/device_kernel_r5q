@@ -8,6 +8,7 @@
 #include <linux/types.h>
 #include <linux/string.h>
 #include <linux/fs.h>
+#include <linux/fs_context.h>
 #include <linux/init.h>
 #include <linux/slab.h>
 #include <linux/seq_file.h>
@@ -256,8 +257,7 @@ found:
 		break;
 	}
 
-	d_add(dentry, inode);
-	return NULL;
+	return d_splice_alias(inode, dentry);
 }
 
 static int openpromfs_readdir(struct file *file, struct dir_context *ctx)
@@ -369,7 +369,7 @@ static struct inode *openprom_iget(struct super_block *sb, ino_t ino)
 static int openprom_remount(struct super_block *sb, int *flags, char *data)
 {
 	sync_filesystem(sb);
-	*flags |= MS_NOATIME;
+	*flags |= SB_NOATIME;
 	return 0;
 }
 
@@ -380,13 +380,13 @@ static const struct super_operations openprom_sops = {
 	.remount_fs	= openprom_remount,
 };
 
-static int openprom_fill_super(struct super_block *s, void *data, int silent)
+static int openprom_fill_super(struct super_block *s, struct fs_context *fc)
 {
 	struct inode *root_inode;
 	struct op_inode_info *oi;
 	int ret;
 
-	s->s_flags |= MS_NOATIME;
+	s->s_flags |= SB_NOATIME;
 	s->s_blocksize = 1024;
 	s->s_blocksize_bits = 10;
 	s->s_magic = OPENPROM_SUPER_MAGIC;
@@ -414,16 +414,25 @@ out_no_root:
 	return ret;
 }
 
-static struct dentry *openprom_mount(struct file_system_type *fs_type,
-	int flags, const char *dev_name, void *data)
+static int openpromfs_get_tree(struct fs_context *fc)
 {
-	return mount_single(fs_type, flags, data, openprom_fill_super);
+	return get_tree_single(fc, openprom_fill_super);
+}
+
+static const struct fs_context_operations openpromfs_context_ops = {
+	.get_tree	= openpromfs_get_tree,
+};
+
+static int openpromfs_init_fs_context(struct fs_context *fc)
+{
+	fc->ops = &openpromfs_context_ops;
+	return 0;
 }
 
 static struct file_system_type openprom_fs_type = {
 	.owner		= THIS_MODULE,
 	.name		= "openpromfs",
-	.mount		= openprom_mount,
+	.init_fs_context = openpromfs_init_fs_context,
 	.kill_sb	= kill_anon_super,
 };
 MODULE_ALIAS_FS("openpromfs");

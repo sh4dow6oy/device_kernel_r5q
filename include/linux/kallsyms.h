@@ -18,12 +18,6 @@
 #define KSYM_SYMBOL_LEN (sizeof("%s+%#lx/%#lx [%s]") + (KSYM_NAME_LEN - 1) + \
 			 2*(BITS_PER_LONG*3/10) + (MODULE_NAME_LEN - 1) + 1)
 
-#ifndef CONFIG_64BIT
-# define KALLSYM_FMT "%08lx"
-#else
-# define KALLSYM_FMT "%016lx"
-#endif
-
 struct cred;
 struct module;
 
@@ -69,10 +63,10 @@ static inline void *dereference_symbol_descriptor(void *ptr)
 
 	preempt_disable();
 	mod = __module_address((unsigned long)ptr);
-	preempt_enable();
 
 	if (mod)
 		ptr = dereference_module_function_descriptor(mod, ptr);
+	preempt_enable();
 #endif
 	return ptr;
 }
@@ -100,9 +94,6 @@ const char *kallsyms_lookup(unsigned long addr,
 extern int sprint_symbol(char *buffer, unsigned long address);
 extern int sprint_symbol_no_offset(char *buffer, unsigned long address);
 extern int sprint_backtrace(char *buffer, unsigned long address);
-
-/* Look up a kernel symbol and print it to the kernel messages. */
-extern void __print_symbol(const char *fmt, unsigned long address);
 
 int lookup_symbol_name(unsigned long addr, char *symname);
 int lookup_symbol_attrs(unsigned long addr, unsigned long *size, unsigned long *offset, char *modname, char *name);
@@ -173,26 +164,11 @@ static inline bool kallsyms_show_value(const struct cred *cred)
 	return false;
 }
 
-/* Stupid that this does nothing, but I didn't create this mess. */
-#define __print_symbol(fmt, addr)
 #endif /*CONFIG_KALLSYMS*/
-
-/* This macro allows us to keep printk typechecking */
-static __printf(1, 2)
-void __check_printsym_format(const char *fmt, ...)
-{
-}
-
-static inline void print_symbol(const char *fmt, unsigned long addr)
-{
-	__check_printsym_format(fmt, "");
-	__print_symbol(fmt, (unsigned long)
-		       __builtin_extract_return_addr((void *)addr));
-}
 
 static inline void print_ip_sym(unsigned long ip)
 {
-	printk("[<%p>] %pS\n", (void *) ip, (void *) ip);
+	printk("[<%px>] %pS\n", (void *) ip, (void *) ip);
 }
 
 #endif /*_LINUX_KALLSYMS_H*/

@@ -25,6 +25,7 @@ nfsd4_block_proc_layoutget(struct inode *inode, const struct svc_fh *fhp,
 {
 	struct nfsd4_layout_seg *seg = &args->lg_seg;
 	struct super_block *sb = inode->i_sb;
+	u64 length;
 	u32 block_size = i_blocksize(inode);
 	struct pnfs_block_extent *bex;
 	struct iomap iomap;
@@ -55,7 +56,8 @@ nfsd4_block_proc_layoutget(struct inode *inode, const struct svc_fh *fhp,
 		goto out_error;
 	}
 
-	if (iomap.length < args->lg_minlength) {
+	length = iomap.offset + iomap.length - seg->offset;
+	if (length < args->lg_minlength) {
 		dprintk("pnfsd: extent smaller than minlength\n");
 		goto out_layoutunavailable;
 	}
@@ -66,7 +68,7 @@ nfsd4_block_proc_layoutget(struct inode *inode, const struct svc_fh *fhp,
 			bex->es = PNFS_BLOCK_READ_DATA;
 		else
 			bex->es = PNFS_BLOCK_READWRITE_DATA;
-		bex->soff = (iomap.blkno << 9);
+		bex->soff = iomap.addr;
 		break;
 	case IOMAP_UNWRITTEN:
 		if (seg->iomode & IOMODE_RW) {
@@ -79,7 +81,7 @@ nfsd4_block_proc_layoutget(struct inode *inode, const struct svc_fh *fhp,
 			}
 
 			bex->es = PNFS_BLOCK_INVALID_DATA;
-			bex->soff = (iomap.blkno << 9);
+			bex->soff = iomap.addr;
 			break;
 		}
 		/*FALLTHRU*/
@@ -119,7 +121,6 @@ static __be32
 nfsd4_block_commit_blocks(struct inode *inode, struct nfsd4_layoutcommit *lcp,
 		struct iomap *iomaps, int nr_iomaps)
 {
-	loff_t new_size = lcp->lc_last_wr + 1;
 	struct iattr iattr = { .ia_valid = 0 };
 	struct timespec ts;
 	int error;
@@ -131,9 +132,9 @@ nfsd4_block_commit_blocks(struct inode *inode, struct nfsd4_layoutcommit *lcp,
 	iattr.ia_valid |= ATTR_ATIME | ATTR_CTIME | ATTR_MTIME;
 	iattr.ia_atime = iattr.ia_ctime = iattr.ia_mtime = timespec_to_timespec64(lcp->lc_mtime);
 
-	if (new_size > i_size_read(inode)) {
+	if (lcp->lc_size_chg) {
 		iattr.ia_valid |= ATTR_SIZE;
-		iattr.ia_size = new_size;
+		iattr.ia_size = lcp->lc_newsize;
 	}
 
 	error = inode->i_sb->s_export_op->commit_blocks(inode, iomaps,
@@ -218,18 +219,26 @@ static int nfsd4_scsi_identify_device(struct block_device *bdev,
 	struct request_queue *q = bdev->bd_disk->queue;
 	struct request *rq;
 	struct scsi_request *req;
-	size_t bufflen = 252, len, id_len;
+	/*
+	 * The allocation length (passed in bytes 3 and 4 of the INQUIRY
+	 * command descriptor block) specifies the number of bytes that have
+	 * been allocated for the data-in buffer.
+	 * 252 is the highest one-byte value that is a multiple of 4.
+	 * 65532 is the highest two-byte value that is a multiple of 4.
+	 */
+	size_t bufflen = 252, maxlen = 65532, len, id_len;
 	u8 *buf, *d, type, assoc;
-	int error;
+	int retries = 1, error;
 
 	if (WARN_ON_ONCE(!blk_queue_scsi_passthrough(q)))
 		return -EINVAL;
 
+again:
 	buf = kzalloc(bufflen, GFP_KERNEL);
 	if (!buf)
 		return -ENOMEM;
 
-	rq = blk_get_request(q, REQ_OP_SCSI_IN, GFP_KERNEL);
+	rq = blk_get_request(q, REQ_OP_SCSI_IN, 0);
 	if (IS_ERR(rq)) {
 		error = -ENOMEM;
 		goto out_free_buf;
@@ -257,6 +266,12 @@ static int nfsd4_scsi_identify_device(struct block_device *bdev,
 
 	len = (buf[2] << 8) + buf[3] + 4;
 	if (len > bufflen) {
+		if (len <= maxlen && retries--) {
+			blk_put_request(rq);
+			kfree(buf);
+			bufflen = len;
+			goto again;
+		}
 		pr_err("pNFS: INQUIRY 0x83 response invalid (len = %zd)\n",
 			len);
 		goto out_put_request;
@@ -395,7 +410,8 @@ nfsd4_scsi_fence_client(struct nfs4_layout_stateid *ls)
 	struct block_device *bdev = ls->ls_file->f_path.mnt->mnt_sb->s_bdev;
 
 	bdev->bd_disk->fops->pr_ops->pr_preempt(bdev, NFSD_MDS_PR_KEY,
-			nfsd4_scsi_pr_key(clp), 0, true);
+			nfsd4_scsi_pr_key(clp),
+			PR_EXCLUSIVE_ACCESS_REG_ONLY, true);
 }
 
 const struct nfsd4_layout_ops scsi_layout_ops = {

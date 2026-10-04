@@ -1,14 +1,7 @@
-/* Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
+// SPDX-License-Identifier: GPL-2.0-only
+
+/*
+ * Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
  */
 
 #define pr_fmt(fmt) "%s: " fmt, KBUILD_MODNAME
@@ -33,12 +26,6 @@
 #define REG_DATA_HI 0x8
 
 #define GET_ADDR(REG, UNIT_NO) (REG + (UNIT_DIST * UNIT_NO))
-
-#ifdef CONFIG_SEC_PM
-#define MSM_ARCH_TIMER_FREQ	19200000
-#define GET_SEC(A)		((A) / (MSM_ARCH_TIMER_FREQ))
-#define GET_MSEC(A)		(((A) / (MSM_ARCH_TIMER_FREQ / 1000)) % 1000)
-#endif
 
 enum master_smem_id {
 	MPSS = 605,
@@ -108,55 +95,6 @@ static void __iomem *rpmh_unit_base;
 
 static DEFINE_MUTEX(rpmh_stats_mutex);
 
-#ifdef CONFIG_SEC_PM
-void debug_masterstats_show(char *annotation)
-{
-	int i = 0;
-	size_t size = 0;
-	struct msm_rpmh_master_stats *record = NULL;
-	uint64_t accumulated_duration;
-	unsigned int duration_sec, duration_msec;
-	char buf[256];
-	char *buf_ptr = buf;
-
-	mutex_lock(&rpmh_stats_mutex);
-
-	buf_ptr += sprintf(buf_ptr, "PM: %s: ", annotation);
-	/* Read SMEM data written by other masters */
-	for (i = 0; i < ARRAY_SIZE(rpmh_masters); i++) {
-		record = (struct msm_rpmh_master_stats *) qcom_smem_get(
-					rpmh_masters[i].pid,
-					rpmh_masters[i].smem_id, &size);
-
-		if (!IS_ERR_OR_NULL(record)) {
-			accumulated_duration = record->accumulated_duration;
-			if (record->last_entered > record->last_exited)
-				accumulated_duration +=
-					(arch_counter_get_cntvct() -
-						record->last_entered);
-
-			duration_sec = GET_SEC(accumulated_duration);
-			duration_msec = GET_MSEC(accumulated_duration);
-
-			buf_ptr += sprintf(buf_ptr, "%s(%d, %u.%u), ",
-					rpmh_masters[i].master_name,
-					record->counts,
-					duration_sec, duration_msec);
-		} else {
-			continue;
-		}
-	}
-
-	buf_ptr--;
-	buf_ptr--;
-	buf_ptr += sprintf(buf_ptr, "\n");
-	mutex_unlock(&rpmh_stats_mutex);
-
-	printk(KERN_INFO "%s", buf);
-}
-EXPORT_SYMBOL(debug_masterstats_show);
-#endif
-
 static ssize_t msm_rpmh_master_stats_print_data(char *prvbuf, ssize_t length,
 				struct msm_rpmh_master_stats *record,
 				const char *name)
@@ -173,7 +111,7 @@ static ssize_t msm_rpmh_master_stats_print_data(char *prvbuf, ssize_t length,
 				(arch_counter_get_cntvct()
 				- record->last_entered);
 
-	return snprintf(prvbuf, length, "%s\n\tVersion:0x%x\n"
+	return scnprintf(prvbuf, length, "%s\n\tVersion:0x%x\n"
 			"\tSleep Count:0x%x\n"
 			"\tSleep Last Entered At:0x%llx\n"
 			"\tSleep Last Exited At:0x%llx\n"
@@ -263,9 +201,6 @@ static int msm_rpmh_master_stats_probe(struct platform_device *pdev)
 	struct kobject *rpmh_master_stats_kobj = NULL;
 	int ret = -ENOMEM;
 
-	if (!pdev)
-		return -EINVAL;
-
 	prvdata = devm_kzalloc(&pdev->dev, sizeof(*prvdata), GFP_KERNEL);
 	if (!prvdata)
 		return ret;
@@ -311,9 +246,6 @@ fail_sysfs:
 static int msm_rpmh_master_stats_remove(struct platform_device *pdev)
 {
 	struct rpmh_master_stats_prv_data *prvdata;
-
-	if (!pdev)
-		return -EINVAL;
 
 	prvdata = (struct rpmh_master_stats_prv_data *)
 				platform_get_drvdata(pdev);

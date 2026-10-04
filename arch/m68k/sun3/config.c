@@ -22,7 +22,7 @@
 #include <asm/setup.h>
 #include <asm/contregs.h>
 #include <asm/movs.h>
-#include <asm/pgtable.h>
+#include <linux/pgtable.h>
 #include <asm/pgalloc.h>
 #include <asm/sun3-head.h>
 #include <asm/sun3mmu.h>
@@ -123,10 +123,6 @@ static void __init sun3_bootmem_alloc(unsigned long memory_start,
 	availmem = memory_start;
 
 	m68k_setup_node(0);
-	availmem += init_bootmem(start_page, num_pages);
-	availmem = (availmem + (PAGE_SIZE-1)) & PAGE_MASK;
-
-	free_bootmem(__pa(availmem), memory_end - (availmem));
 }
 
 

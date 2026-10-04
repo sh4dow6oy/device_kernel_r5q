@@ -1,13 +1,6 @@
-/* Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
  */
 
 #define pr_fmt(fmt) "%s: " fmt, __func__
@@ -26,6 +19,7 @@
 #include <linux/pwm.h>
 #include <linux/qpnp/qpnp-pbs.h>
 #include <linux/regmap.h>
+#include <linux/seq_file.h>
 #include <linux/slab.h>
 #include <linux/types.h>
 
@@ -507,7 +501,7 @@ static int qpnp_lpg_set_sdam_lut_pattern(struct qpnp_lpg_channel *lpg,
 
 	rc = qpnp_lut_sdam_write(lut, addr, val, length);
 	if (rc < 0) {
-		dev_err(lpg->chip->dev, "Write pattern in SDAM failed, rc=%d",
+		dev_err(lpg->chip->dev, "Write pattern in SDAM failed, rc=%d\n",
 				rc);
 		goto unlock;
 	}
@@ -618,7 +612,7 @@ static int qpnp_lpg_set_lut_pattern(struct qpnp_lpg_channel *lpg,
 		msb = pwm_values[i] >> 8;
 		rc = qpnp_lut_write(lut, addr++, lsb);
 		if (rc < 0) {
-			dev_err(lpg->chip->dev, "Write NO.%d LUT pattern LSB (%d) failed, rc=%d",
+			dev_err(lpg->chip->dev, "Write NO.%d LUT pattern LSB (%d) failed, rc=%d\n",
 					i, lsb, rc);
 			goto unlock;
 		}
@@ -626,7 +620,7 @@ static int qpnp_lpg_set_lut_pattern(struct qpnp_lpg_channel *lpg,
 		rc = qpnp_lut_masked_write(lut, addr++,
 				LPG_LUT_VALUE_MSB_MASK, msb);
 		if (rc < 0) {
-			dev_err(lpg->chip->dev, "Write NO.%d LUT pattern MSB (%d) failed, rc=%d",
+			dev_err(lpg->chip->dev, "Write NO.%d LUT pattern MSB (%d) failed, rc=%d\n",
 					i, msb, rc);
 			goto unlock;
 		}
@@ -1339,13 +1333,9 @@ static const struct pwm_ops qpnp_lpg_pwm_ops = {
 	.owner = THIS_MODULE,
 };
 
-static int qpnp_lpg_parse_dt(struct qpnp_lpg_chip *chip)
+static int qpnp_get_lpg_channels(struct qpnp_lpg_chip *chip, u32 *base)
 {
-	struct device_node *child;
-	struct qpnp_lpg_channel *lpg;
-	struct lpg_ramp_config *ramp;
-	int rc = 0, i;
-	u32 base, length, lpg_chan_id, tmp, max_count;
+	int rc;
 	const __be32 *addr;
 
 	addr = of_get_address(chip->dev->of_node, 0, NULL, NULL);
@@ -1354,7 +1344,7 @@ static int qpnp_lpg_parse_dt(struct qpnp_lpg_chip *chip)
 		return -EINVAL;
 	}
 
-	base = be32_to_cpu(addr[0]);
+	*base = be32_to_cpu(addr[0]);
 	rc = of_property_read_u32(chip->dev->of_node, "qcom,num-lpg-channels",
 						&chip->num_lpgs);
 	if (rc < 0) {
@@ -1367,6 +1357,22 @@ static int qpnp_lpg_parse_dt(struct qpnp_lpg_chip *chip)
 		dev_err(chip->dev, "No LPG channels specified\n");
 		return -EINVAL;
 	}
+
+	return 0;
+}
+
+static int qpnp_lpg_parse_dt(struct qpnp_lpg_chip *chip)
+{
+	struct device_node *child;
+	struct qpnp_lpg_channel *lpg;
+	struct lpg_ramp_config *ramp;
+	int rc = 0, i;
+	u32 base, length, lpg_chan_id, tmp, max_count;
+	const __be32 *addr;
+
+	rc = qpnp_get_lpg_channels(chip, &base);
+	if (rc < 0)
+		return rc;
 
 	chip->lpgs = devm_kcalloc(chip->dev, chip->num_lpgs,
 			sizeof(*chip->lpgs), GFP_KERNEL);

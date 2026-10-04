@@ -39,7 +39,7 @@
 #include <linux/notifier.h>
 #include <linux/mtd/mtd.h>
 #include <linux/mtd/ubi.h>
-#include <asm/pgtable.h>
+#include <linux/pgtable.h>
 
 #include "ubi-media.h"
 
@@ -183,8 +183,6 @@ struct ubi_vid_io_buf {
  * @u.list: link in the protection queue
  * @ec: erase counter
  * @pnum: physical eraseblock number
- * @tagged_scrub_all: if the entry is tagged for scrub all
- * @sqnum: The sequence number of the vol header.
  *
  * This data structure is used in the WL sub-system. Each physical eraseblock
  * has a corresponding &struct wl_entry object which may be kept in different
@@ -197,8 +195,6 @@ struct ubi_wl_entry {
 	} u;
 	int ec;
 	int pnum;
-	unsigned int tagged_scrub_all:1;
-	unsigned long long sqnum;
 };
 
 /**
@@ -331,6 +327,9 @@ struct ubi_eba_leb_desc {
  *           atomic LEB change
  *
  * @eba_tbl: EBA table of this volume (LEB->PEB mapping)
+ * @skip_check: %1 if CRC check of this static volume should be skipped.
+ *		Directly reflects the presence of the
+ *		%UBI_VTBL_SKIP_CRC_CHECK_FLG flag in the vtbl entry
  * @checked: %1 if this static volume was checked
  * @corrupted: %1 if the volume is corrupted (static volumes only)
  * @upd_marker: %1 if the update marker is set for this volume
@@ -378,6 +377,7 @@ struct ubi_volume {
 	void *upd_buf;
 
 	struct ubi_eba_table *eba_tbl;
+	unsigned int skip_check:1;
 	unsigned int checked:1;
 	unsigned int corrupted:1;
 	unsigned int upd_marker:1;
@@ -504,6 +504,8 @@ struct ubi_debug_info {
  * @fm_work: fastmap work queue
  * @fm_work_scheduled: non-zero if fastmap work was scheduled
  * @fast_attach: non-zero if UBI was attached by fastmap
+ * @fm_anchor: The next anchor PEB to use for fastmap
+ * @fm_do_produce_anchor: If true produce an anchor PEB in wl
  *
  * @used: RB-tree of used physical eraseblocks
  * @erroneous: RB-tree of erroneous used physical eraseblocks
@@ -612,6 +614,8 @@ struct ubi_device {
 	struct work_struct fm_work;
 	int fm_work_scheduled;
 	int fast_attach;
+	struct ubi_wl_entry *fm_anchor;
+	int fm_do_produce_anchor;
 
 	/* Wear-leveling sub-system's stuff */
 	struct rb_root used;
@@ -634,9 +638,6 @@ struct ubi_device {
 	struct task_struct *bgt_thread;
 	int thread_enabled;
 	char bgt_name[sizeof(UBI_BGT_NAME_PATTERN)+2];
-	bool scrub_in_progress;
-	atomic_t scrub_work_count;
-	int wl_is_inited;
 
 	/* I/O sub-system's stuff */
 	long long flash_size;
@@ -805,7 +806,6 @@ struct ubi_attach_info {
  * @vol_id: the volume ID on which this erasure is being performed
  * @lnum: the logical eraseblock number
  * @torture: if the physical eraseblock has to be tortured
- * @anchor: produce a anchor PEB to by used by fastmap
  *
  * The @func pointer points to the worker function. If the @shutdown argument is
  * not zero, the worker has to free the resources and exit immediately as the
@@ -821,7 +821,6 @@ struct ubi_work {
 	int vol_id;
 	int lnum;
 	int torture;
-	int anchor;
 };
 
 #include "debug.h"
@@ -932,12 +931,6 @@ int ubi_wl_put_fm_peb(struct ubi_device *ubi, struct ubi_wl_entry *used_e,
 int ubi_is_erase_work(struct ubi_work *wrk);
 void ubi_refill_pools(struct ubi_device *ubi);
 int ubi_ensure_anchor_pebs(struct ubi_device *ubi);
-ssize_t ubi_wl_scrub_all(struct ubi_device *ubi,
-			 unsigned long long scrub_sqnum);
-void ubi_wl_update_peb_sqnum(struct ubi_device *ubi, int pnum,
-				struct ubi_vid_hdr *vid_hdr);
-unsigned long long ubi_wl_scrub_get_min_sqnum(struct ubi_device *ubi);
-int ubi_wl_re_erase_peb(struct ubi_device *ubi, int pnum);
 
 /* io.c */
 int ubi_io_read(const struct ubi_device *ubi, void *buf, int pnum, int offset,

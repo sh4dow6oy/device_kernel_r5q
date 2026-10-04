@@ -43,6 +43,7 @@
 #include "flow.h"
 #include "conntrack.h"
 #include "vport.h"
+#include "flow_netlink.h"
 
 struct deferred_action {
 	struct sk_buff *skb;
@@ -378,6 +379,38 @@ static int push_eth(struct sk_buff *skb, struct sw_flow_key *key,
 	return 0;
 }
 
+static int push_nsh(struct sk_buff *skb, struct sw_flow_key *key,
+		    const struct nshhdr *nh)
+{
+	int err;
+
+	err = nsh_push(skb, nh);
+	if (err)
+		return err;
+
+	/* safe right before invalidate_flow_key */
+	key->mac_proto = MAC_PROTO_NONE;
+	invalidate_flow_key(key);
+	return 0;
+}
+
+static int pop_nsh(struct sk_buff *skb, struct sw_flow_key *key)
+{
+	int err;
+
+	err = nsh_pop(skb);
+	if (err)
+		return err;
+
+	/* safe right before invalidate_flow_key */
+	if (skb->protocol == htons(ETH_P_TEB))
+		key->mac_proto = MAC_PROTO_ETHERNET;
+	else
+		key->mac_proto = MAC_PROTO_NONE;
+	invalidate_flow_key(key);
+	return 0;
+}
+
 static void update_ip_l4_checksum(struct sk_buff *skb, struct iphdr *nh,
 				  __be32 addr, __be32 new_addr)
 {
@@ -410,6 +443,7 @@ static void set_ip_addr(struct sk_buff *skb, struct iphdr *nh,
 	update_ip_l4_checksum(skb, nh, *addr, new_addr);
 	csum_replace4(&nh->check, *addr, new_addr);
 	skb_clear_hash(skb);
+	ovs_ct_clear(skb, NULL);
 	*addr = new_addr;
 }
 
@@ -457,6 +491,7 @@ static void set_ipv6_addr(struct sk_buff *skb, u8 l4_proto,
 		update_ipv6_checksum(skb, l4_proto, addr, new_addr);
 
 	skb_clear_hash(skb);
+	ovs_ct_clear(skb, NULL);
 	memcpy(addr, new_addr, sizeof(__be32[4]));
 }
 
@@ -634,6 +669,7 @@ static int set_ipv6(struct sk_buff *skb, struct sw_flow_key *flow_key,
 static void set_tp_port(struct sk_buff *skb, __be16 *port,
 			__be16 new_port, __sum16 *check)
 {
+	ovs_ct_clear(skb, NULL);
 	inet_proto_csum_replace2(check, skb, *port, new_port, false);
 	*port = new_port;
 }
@@ -673,6 +709,7 @@ static int set_udp(struct sk_buff *skb, struct sw_flow_key *flow_key,
 		uh->dest = dst;
 		flow_key->tp.src = src;
 		flow_key->tp.dst = dst;
+		ovs_ct_clear(skb, NULL);
 	}
 
 	skb_clear_hash(skb);
@@ -735,6 +772,8 @@ static int set_sctp(struct sk_buff *skb, struct sw_flow_key *flow_key,
 	sh->checksum = old_csum ^ old_correct_csum ^ new_csum;
 
 	skb_clear_hash(skb);
+	ovs_ct_clear(skb, NULL);
+
 	flow_key->tp.src = sh->source;
 	flow_key->tp.dst = sh->dest;
 
@@ -879,16 +918,14 @@ static void do_output(struct datapath *dp, struct sk_buff *skb, int out_port,
 {
 	struct vport *vport = ovs_vport_rcu(dp, out_port);
 
-	if (likely(vport)) {
+	if (likely(vport &&
+		   netif_running(vport->dev) &&
+		   netif_carrier_ok(vport->dev))) {
 		u16 mru = OVS_CB(skb)->mru;
 		u32 cutlen = OVS_CB(skb)->cutlen;
 
-		if (unlikely(cutlen > 0)) {
-			if (skb->len - cutlen > ovs_mac_header_len(key))
-				pskb_trim(skb, skb->len - cutlen);
-			else
-				pskb_trim(skb, ovs_mac_header_len(key));
-		}
+		if (unlikely(cutlen < skb->len))
+			pskb_trim(skb, max(cutlen, ovs_mac_header_len(key)));
 
 		/* Need to set the pkt_type to involve the routing layer.  The
 		 * packet movement through the OVS datapath doesn't generally
@@ -924,8 +961,7 @@ static int output_userspace(struct datapath *dp, struct sk_buff *skb,
 	upcall.cmd = OVS_PACKET_CMD_ACTION;
 	upcall.mru = OVS_CB(skb)->mru;
 
-	for (a = nla_data(attr), rem = nla_len(attr); rem > 0;
-		 a = nla_next(a, &rem)) {
+	nla_for_each_nested(a, attr, rem) {
 		switch (nla_type(a)) {
 		case OVS_USERSPACE_ATTR_USERDATA:
 			upcall.userdata = a;
@@ -993,6 +1029,28 @@ static int sample(struct datapath *dp, struct sk_buff *skb,
 	clone_flow_key = !arg->exec;
 	return clone_execute(dp, skb, key, 0, actions, rem, last,
 			     clone_flow_key);
+}
+
+/* When 'last' is true, clone() should always consume the 'skb'.
+ * Otherwise, clone() should keep 'skb' intact regardless what
+ * actions are executed within clone().
+ */
+static int clone(struct datapath *dp, struct sk_buff *skb,
+		 struct sw_flow_key *key, const struct nlattr *attr,
+		 bool last)
+{
+	struct nlattr *actions;
+	struct nlattr *clone_arg;
+	int rem = nla_len(attr);
+	bool dont_clone_flow_key;
+
+	/* The first action is always 'OVS_CLONE_ATTR_EXEC'. */
+	clone_arg = nla_data(attr);
+	dont_clone_flow_key = nla_get_u32(clone_arg);
+	actions = nla_next(clone_arg, &rem);
+
+	return clone_execute(dp, skb, key, 0, actions, rem, last,
+			     !dont_clone_flow_key);
 }
 
 static void execute_hash(struct sk_buff *skb, struct sw_flow_key *key,
@@ -1094,6 +1152,7 @@ static int execute_masked_set_action(struct sk_buff *skb,
 	case OVS_KEY_ATTR_CT_LABELS:
 	case OVS_KEY_ATTR_CT_ORIG_TUPLE_IPV4:
 	case OVS_KEY_ATTR_CT_ORIG_TUPLE_IPV6:
+	case OVS_KEY_ATTR_NSH:
 		err = -EINVAL;
 		break;
 	}
@@ -1101,6 +1160,10 @@ static int execute_masked_set_action(struct sk_buff *skb,
 	return err;
 }
 
+/* When 'last' is true, recirc() should always consume the 'skb'.
+ * Otherwise, recirc() should keep 'skb' intact regardless what
+ * actions are executed on recirculation.
+ */
 static int execute_recirc(struct datapath *dp, struct sk_buff *skb,
 			  struct sw_flow_key *key,
 			  const struct nlattr *a, bool last)
@@ -1111,8 +1174,11 @@ static int execute_recirc(struct datapath *dp, struct sk_buff *skb,
 		int err;
 
 		err = ovs_flow_key_update(skb, key);
-		if (err)
+		if (err) {
+			if (last)
+				kfree_skb(skb);
 			return err;
+		}
 	}
 	BUG_ON(!is_flow_key_valid(key));
 
@@ -1151,22 +1217,21 @@ static int do_execute_actions(struct datapath *dp, struct sk_buff *skb,
 			clone = skb_clone(skb, GFP_ATOMIC);
 			if (clone)
 				do_output(dp, clone, port, key);
-			OVS_CB(skb)->cutlen = 0;
+			OVS_CB(skb)->cutlen = U32_MAX;
 			break;
 		}
 
 		case OVS_ACTION_ATTR_TRUNC: {
 			struct ovs_action_trunc *trunc = nla_data(a);
 
-			if (skb->len > trunc->max_len)
-				OVS_CB(skb)->cutlen = skb->len - trunc->max_len;
+			OVS_CB(skb)->cutlen = trunc->max_len;
 			break;
 		}
 
 		case OVS_ACTION_ATTR_USERSPACE:
 			output_userspace(dp, skb, key, a, attr,
 						     len, OVS_CB(skb)->cutlen);
-			OVS_CB(skb)->cutlen = 0;
+			OVS_CB(skb)->cutlen = U32_MAX;
 			break;
 
 		case OVS_ACTION_ATTR_HASH:
@@ -1226,7 +1291,7 @@ static int do_execute_actions(struct datapath *dp, struct sk_buff *skb,
 			if (!is_flow_key_valid(key)) {
 				err = ovs_flow_key_update(skb, key);
 				if (err)
-					return err;
+					break;
 			}
 
 			err = ovs_ct_execute(ovs_dp_get_net(dp), skb, key,
@@ -1237,6 +1302,10 @@ static int do_execute_actions(struct datapath *dp, struct sk_buff *skb,
 				return err == -EINPROGRESS ? 0 : err;
 			break;
 
+		case OVS_ACTION_ATTR_CT_CLEAR:
+			err = ovs_ct_clear(skb, key);
+			break;
+
 		case OVS_ACTION_ATTR_PUSH_ETH:
 			err = push_eth(skb, key, nla_data(a));
 			break;
@@ -1244,6 +1313,39 @@ static int do_execute_actions(struct datapath *dp, struct sk_buff *skb,
 		case OVS_ACTION_ATTR_POP_ETH:
 			err = pop_eth(skb, key);
 			break;
+
+		case OVS_ACTION_ATTR_PUSH_NSH: {
+			u8 buffer[NSH_HDR_MAX_LEN];
+			struct nshhdr *nh = (struct nshhdr *)buffer;
+
+			err = nsh_hdr_from_nlattr(nla_data(a), nh,
+						  NSH_HDR_MAX_LEN);
+			if (unlikely(err))
+				break;
+			err = push_nsh(skb, key, nh);
+			break;
+		}
+
+		case OVS_ACTION_ATTR_POP_NSH:
+			err = pop_nsh(skb, key);
+			break;
+
+		case OVS_ACTION_ATTR_METER:
+			if (ovs_meter_execute(dp, skb, key, nla_get_u32(a))) {
+				consume_skb(skb);
+				return 0;
+			}
+			break;
+
+		case OVS_ACTION_ATTR_CLONE: {
+			bool last = nla_is_last(a, rem);
+
+			err = clone(dp, skb, key, a, last);
+			if (last)
+				return err;
+
+			break;
+		}
 		}
 
 		if (unlikely(err)) {

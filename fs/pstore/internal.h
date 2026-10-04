@@ -25,12 +25,6 @@ static inline void pstore_register_pmsg(void) {}
 static inline void pstore_unregister_pmsg(void) {}
 #endif
 
-#ifdef CONFIG_PSTORE_PMSG_SSPLOG
-extern int ss_hook_pmsg(char *buffer, size_t count);
-#else
-static inline int ss_hook_pmsg(char *buffer, size_t count) { return 0; }
-#endif
-
 extern struct pstore_info *psinfo;
 
 extern void	pstore_set_kmsg_bytes(int);
@@ -42,5 +36,9 @@ extern int	pstore_mkfile(struct dentry *root,
 extern bool	pstore_is_mounted(void);
 extern void	pstore_record_init(struct pstore_record *record,
 				   struct pstore_info *psi);
+
+/* Called during pstore init/exit. */
+int __init	pstore_init_fs(void);
+void __exit	pstore_exit_fs(void);
 
 #endif

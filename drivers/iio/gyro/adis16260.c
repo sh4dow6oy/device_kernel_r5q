@@ -294,6 +294,9 @@ static int adis16260_write_raw(struct iio_dev *indio_dev,
 		addr = adis16260_addresses[chan->scan_index][1];
 		return adis_write_reg_16(adis, addr, val);
 	case IIO_CHAN_INFO_SAMP_FREQ:
+		if (val <= 0)
+			return -EINVAL;
+
 		mutex_lock(&indio_dev->mlock);
 		if (spi_get_device_id(adis->spi)->driver_data)
 			t = 256 / val;
@@ -321,7 +324,6 @@ static const struct iio_info adis16260_info = {
 	.read_raw = &adis16260_read_raw,
 	.write_raw = &adis16260_write_raw,
 	.update_scan_mode = adis_update_scan_mode,
-	.driver_module = THIS_MODULE,
 };
 
 static const char * const adis1620_status_error_msgs[] = {

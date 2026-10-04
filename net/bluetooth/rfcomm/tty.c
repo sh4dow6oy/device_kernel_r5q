@@ -210,8 +210,8 @@ static ssize_t show_channel(struct device *tty_dev, struct device_attribute *att
 	return sprintf(buf, "%d\n", dev->channel);
 }
 
-static DEVICE_ATTR(address, S_IRUGO, show_address, NULL);
-static DEVICE_ATTR(channel, S_IRUGO, show_channel, NULL);
+static DEVICE_ATTR(address, 0444, show_address, NULL);
+static DEVICE_ATTR(channel, 0444, show_channel, NULL);
 
 static struct rfcomm_dev *__rfcomm_dev_add(struct rfcomm_dev_req *req,
 					   struct rfcomm_dlc *dlc)
@@ -878,7 +878,7 @@ static void rfcomm_tty_set_termios(struct tty_struct *tty, struct ktermios *old)
 
 	BT_DBG("tty %p termios %p", tty, old);
 
-	if (!dev || !dev->dlc || !dev->dlc->session)
+	if (!dev || !dev->dlc)
 		return;
 
 	/* Handle turning off CRTSCTS */
@@ -999,9 +999,8 @@ static void rfcomm_tty_set_termios(struct tty_struct *tty, struct ktermios *old)
 	}
 
 	if (changes)
-		rfcomm_send_rpn(dev->dlc->session, 1, dev->dlc->dlci, baud,
-				data_bits, stop_bits, parity,
-				RFCOMM_RPN_FLOW_NONE, x_on, x_off, changes);
+		rfcomm_dlc_send_rpn(dev->dlc, baud, data_bits, stop_bits, parity,
+				    RFCOMM_RPN_FLOW_NONE, x_on, x_off, changes);
 }
 
 static void rfcomm_tty_throttle(struct tty_struct *tty)

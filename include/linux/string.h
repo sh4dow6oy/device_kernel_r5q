@@ -11,6 +11,7 @@
 
 extern char *strndup_user(const char __user *, long);
 extern void *memdup_user(const void __user *, size_t);
+extern void *vmemdup_user(const void __user *, size_t);
 extern void *memdup_user_nul(const void __user *, size_t);
 
 /*
@@ -153,8 +154,8 @@ extern int bcmp(const void *,const void *,__kernel_size_t);
 extern void * memchr(const void *,int,__kernel_size_t);
 #endif
 #ifndef __HAVE_ARCH_MEMCPY_MCSAFE
-static inline __must_check int memcpy_mcsafe(void *dst, const void *src,
-		size_t cnt)
+static inline __must_check unsigned long memcpy_mcsafe(void *dst,
+		const void *src, size_t cnt)
 {
 	memcpy(dst, src, cnt);
 	return 0;
@@ -168,6 +169,18 @@ static inline void memcpy_flushcache(void *dst, const void *src, size_t cnt)
 #endif
 void *memchr_inv(const void *s, int c, size_t n);
 char *strreplace(char *s, char old, char new);
+
+/**
+ * mem_is_zero - Check if an area of memory is all 0's.
+ * @s: The memory area
+ * @n: The size of the area
+ *
+ * Return: True if the area of memory is all 0's.
+ */
+static inline bool mem_is_zero(const void *s, size_t n)
+{
+	return !memchr_inv(s, 0, n);
+}
 
 extern void kfree_const(const void *x);
 
@@ -207,6 +220,8 @@ int bprintf(u32 *bin_buf, size_t size, const char *fmt, ...) __printf(3, 4);
 
 extern ssize_t memory_read_from_buffer(void *to, size_t count, loff_t *ppos,
 				       const void *from, size_t available);
+
+int ptr_to_hashval(const void *ptr, unsigned long *hashval_out);
 
 /**
  * strstarts - does @str start with @prefix?

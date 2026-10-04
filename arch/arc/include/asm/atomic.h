@@ -187,7 +187,8 @@ static inline int atomic_fetch_##op(int i, atomic_t *v)			\
 ATOMIC_OPS(add, +=, add)
 ATOMIC_OPS(sub, -=, sub)
 
-#define atomic_andnot atomic_andnot
+#define atomic_andnot		atomic_andnot
+#define atomic_fetch_andnot	atomic_fetch_andnot
 
 #undef ATOMIC_OPS
 #define ATOMIC_OPS(op, c_op, asm_op)					\
@@ -296,8 +297,6 @@ ATOMIC_OPS(add, +=, CTOP_INST_AADD_DI_R2_R2_R3)
 	ATOMIC_FETCH_OP(op, c_op, asm_op)
 
 ATOMIC_OPS(and, &=, CTOP_INST_AAND_DI_R2_R2_R3)
-#define atomic_andnot(mask, v) atomic_and(~(mask), (v))
-#define atomic_fetch_andnot(mask, v) atomic_fetch_and(~(mask), (v))
 ATOMIC_OPS(or, |=, CTOP_INST_AOR_DI_R2_R2_R3)
 ATOMIC_OPS(xor, ^=, CTOP_INST_AXOR_DI_R2_R2_R3)
 
@@ -307,18 +306,6 @@ ATOMIC_OPS(xor, ^=, CTOP_INST_AXOR_DI_R2_R2_R3)
 #undef ATOMIC_FETCH_OP
 #undef ATOMIC_OP_RETURN
 #undef ATOMIC_OP
-
-#define atomic_inc(v)			atomic_add(1, v)
-#define atomic_dec(v)			atomic_sub(1, v)
-
-#define atomic_inc_and_test(v)		(atomic_add_return(1, v) == 0)
-#define atomic_dec_and_test(v)		(atomic_sub_return(1, v) == 0)
-#define atomic_inc_return(v)		atomic_add_return(1, (v))
-#define atomic_dec_return(v)		atomic_sub_return(1, (v))
-#define atomic_sub_and_test(i, v)	(atomic_sub_return(i, v) == 0)
-
-#define atomic_add_negative(i, v)	(atomic_add_return(i, v) < 0)
-
 
 #ifdef CONFIG_GENERIC_ATOMIC64
 
@@ -442,7 +429,8 @@ static inline long long atomic64_fetch_##op(long long a, atomic64_t *v)	\
 	ATOMIC64_OP_RETURN(op, op1, op2)				\
 	ATOMIC64_FETCH_OP(op, op1, op2)
 
-#define atomic64_andnot atomic64_andnot
+#define atomic64_andnot		atomic64_andnot
+#define atomic64_fetch_andnot	atomic64_fetch_andnot
 
 ATOMIC64_OPS(add, add.f, adc)
 ATOMIC64_OPS(sub, sub.f, sbc)
@@ -529,6 +517,7 @@ static inline long long atomic64_dec_if_positive(atomic64_t *v)
 
 	return val;
 }
+#define atomic64_dec_if_positive atomic64_dec_if_positive
 
 /**
  * atomic64_fetch_add_unless - add unless the number is a given value
@@ -565,15 +554,6 @@ static inline long long atomic64_fetch_add_unless(atomic64_t *v, long long a,
 	return old;
 }
 #define atomic64_fetch_add_unless atomic64_fetch_add_unless
-
-#define atomic64_add_negative(a, v)	(atomic64_add_return((a), (v)) < 0)
-#define atomic64_inc(v)			atomic64_add(1LL, (v))
-#define atomic64_inc_return(v)		atomic64_add_return(1LL, (v))
-#define atomic64_inc_and_test(v)	(atomic64_inc_return(v) == 0)
-#define atomic64_sub_and_test(a, v)	(atomic64_sub_return((a), (v)) == 0)
-#define atomic64_dec(v)			atomic64_sub(1LL, (v))
-#define atomic64_dec_return(v)		atomic64_sub_return(1LL, (v))
-#define atomic64_dec_and_test(v)	(atomic64_dec_return((v)) == 0)
 
 #endif	/* !CONFIG_GENERIC_ATOMIC64 */
 

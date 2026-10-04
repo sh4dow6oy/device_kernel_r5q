@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0+
 /**
  * Generic USB driver for report based interrupt in/out devices
  * like LD Didactic's USB devices. LD Didactic's USB devices are
@@ -11,11 +12,6 @@
  * such a compatibility to the Windows HID driver.
  *
  * Copyright (C) 2005 Michael Hund <mhund@ld-didactic.de>
- *
- *	This program is free software; you can redistribute it and/or
- *	modify it under the terms of the GNU General Public License as
- *	published by the Free Software Foundation; either version 2 of
- *	the License, or (at your option) any later version.
  *
  * Derived from Lego USB Tower driver
  * Copyright (C) 2003 David Glance <advidgsf@sourceforge.net>
@@ -155,6 +151,7 @@ MODULE_PARM_DESC(min_interrupt_out_interval, "Minimum interrupt out interval in 
 
 /* Structure to hold all of our device specific stuff */
 struct ld_usb {
+	struct kref		kref;
 	struct mutex		mutex;		/* locks this structure */
 	struct usb_interface	*intf;		/* save off the usb interface pointer */
 	unsigned long		disconnected:1;
@@ -206,8 +203,10 @@ static void ld_usb_abort_transfers(struct ld_usb *dev)
 /**
  *	ld_usb_delete
  */
-static void ld_usb_delete(struct ld_usb *dev)
+static void ld_usb_delete(struct kref *kref)
 {
+	struct ld_usb *dev = container_of(kref, struct ld_usb, kref);
+
 	/* free data structures */
 	usb_free_urb(dev->interrupt_in_urb);
 	usb_free_urb(dev->interrupt_out_urb);
@@ -226,6 +225,7 @@ static void ld_usb_interrupt_in_callback(struct urb *urb)
 	size_t *actual_buffer;
 	unsigned int next_ring_head;
 	int status = urb->status;
+	unsigned long flags;
 	int retval;
 
 	if (status) {
@@ -237,12 +237,12 @@ static void ld_usb_interrupt_in_callback(struct urb *urb)
 			dev_dbg(&dev->intf->dev,
 				"%s: nonzero status received: %d\n", __func__,
 				status);
-			spin_lock(&dev->rbsl);
+			spin_lock_irqsave(&dev->rbsl, flags);
 			goto resubmit; /* maybe we can recover */
 		}
 	}
 
-	spin_lock(&dev->rbsl);
+	spin_lock_irqsave(&dev->rbsl, flags);
 	if (urb->actual_length > 0) {
 		next_ring_head = (dev->ring_head+1) % ring_buffer_size;
 		if (next_ring_head != dev->ring_tail) {
@@ -271,7 +271,7 @@ resubmit:
 			dev->buffer_overflow = 1;
 		}
 	}
-	spin_unlock(&dev->rbsl);
+	spin_unlock_irqrestore(&dev->rbsl, flags);
 exit:
 	dev->interrupt_in_done = 1;
 	wake_up_interruptible(&dev->read_wait);
@@ -359,6 +359,8 @@ static int ld_usb_open(struct inode *inode, struct file *file)
 		goto unlock_exit;
 	}
 
+	kref_get(&dev->kref);
+
 	/* save device in the file's private structure */
 	file->private_data = dev;
 
@@ -385,17 +387,8 @@ static int ld_usb_release(struct inode *inode, struct file *file)
 
 	mutex_lock(&dev->mutex);
 
-	if (dev->open_count != 1) {
-		retval = -ENODEV;
+	if (dev->disconnected)
 		goto unlock_exit;
-	}
-	if (dev->disconnected) {
-		/* the device was unplugged before the file was released */
-		mutex_unlock(&dev->mutex);
-		/* unlock here as ld_usb_delete frees dev */
-		ld_usb_delete(dev);
-		goto exit;
-	}
 
 	/* wait until write transfer is finished */
 	if (dev->interrupt_out_busy)
@@ -405,7 +398,7 @@ static int ld_usb_release(struct inode *inode, struct file *file)
 
 unlock_exit:
 	mutex_unlock(&dev->mutex);
-
+	kref_put(&dev->kref, ld_usb_delete);
 exit:
 	return retval;
 }
@@ -413,23 +406,23 @@ exit:
 /**
  *	ld_usb_poll
  */
-static unsigned int ld_usb_poll(struct file *file, poll_table *wait)
+static __poll_t ld_usb_poll(struct file *file, poll_table *wait)
 {
 	struct ld_usb *dev;
-	unsigned int mask = 0;
+	__poll_t mask = 0;
 
 	dev = file->private_data;
 
 	if (dev->disconnected)
-		return POLLERR | POLLHUP;
+		return EPOLLERR | EPOLLHUP;
 
 	poll_wait(file, &dev->read_wait, wait);
 	poll_wait(file, &dev->write_wait, wait);
 
 	if (dev->ring_head != dev->ring_tail)
-		mask |= POLLIN | POLLRDNORM;
+		mask |= EPOLLIN | EPOLLRDNORM;
 	if (!dev->interrupt_out_busy)
-		mask |= POLLOUT | POLLWRNORM;
+		mask |= EPOLLOUT | EPOLLWRNORM;
 
 	return mask;
 }
@@ -664,6 +657,8 @@ static int ld_usb_probe(struct usb_interface *intf, const struct usb_device_id *
 	dev = kzalloc(sizeof(*dev), GFP_KERNEL);
 	if (!dev)
 		goto exit;
+
+	kref_init(&dev->kref);
 	mutex_init(&dev->mutex);
 	spin_lock_init(&dev->rbsl);
 	dev->intf = intf;
@@ -712,7 +707,9 @@ static int ld_usb_probe(struct usb_interface *intf, const struct usb_device_id *
 		goto error;
 	dev->interrupt_out_endpoint_size = dev->interrupt_out_endpoint ? usb_endpoint_maxp(dev->interrupt_out_endpoint) :
 									 udev->descriptor.bMaxPacketSize0;
-	dev->interrupt_out_buffer = kmalloc(write_buffer_size*dev->interrupt_out_endpoint_size, GFP_KERNEL);
+	dev->interrupt_out_buffer =
+		kmalloc_array(write_buffer_size,
+			      dev->interrupt_out_endpoint_size, GFP_KERNEL);
 	if (!dev->interrupt_out_buffer)
 		goto error;
 	dev->interrupt_out_urb = usb_alloc_urb(0, GFP_KERNEL);
@@ -741,7 +738,7 @@ exit:
 	return retval;
 
 error:
-	ld_usb_delete(dev);
+	kref_put(&dev->kref, ld_usb_delete);
 
 	return retval;
 }
@@ -769,17 +766,17 @@ static void ld_usb_disconnect(struct usb_interface *intf)
 
 	mutex_lock(&dev->mutex);
 
-	/* if the device is not opened, then we clean up right now */
-	if (!dev->open_count) {
-		mutex_unlock(&dev->mutex);
-		ld_usb_delete(dev);
-	} else {
-		dev->disconnected = 1;
+	dev->disconnected = 1;
+
+	if (dev->open_count) {
 		/* wake up pollers */
 		wake_up_interruptible_all(&dev->read_wait);
 		wake_up_interruptible_all(&dev->write_wait);
-		mutex_unlock(&dev->mutex);
 	}
+
+	mutex_unlock(&dev->mutex);
+
+	kref_put(&dev->kref, ld_usb_delete);
 
 	dev_info(&intf->dev, "LD USB Device #%d now disconnected\n",
 		 (minor - USB_LD_MINOR_BASE));

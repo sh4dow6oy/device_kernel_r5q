@@ -367,7 +367,8 @@ static unsigned long via_mode_filter(struct ata_device *dev, unsigned long mask)
 	}
 
 	if (dev->class == ATA_DEV_ATAPI &&
-	    dmi_check_system(no_atapi_dma_dmi_table)) {
+	    (dmi_check_system(no_atapi_dma_dmi_table) ||
+	     config->id == PCI_DEVICE_ID_VIA_6415)) {
 		ata_dev_warn(dev, "controller locks up on ATAPI DMA, forcing PIO\n");
 		mask &= ATA_MASK_PIO;
 	}
@@ -471,7 +472,7 @@ static struct ata_port_operations via_port_ops = {
 
 static struct ata_port_operations via_port_ops_noirq = {
 	.inherits	= &via_port_ops,
-	.sff_data_xfer	= ata_sff_data_xfer_noirq,
+	.sff_data_xfer	= ata_sff_data_xfer32,
 };
 
 /**

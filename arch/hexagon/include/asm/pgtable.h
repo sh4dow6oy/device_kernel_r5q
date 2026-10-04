@@ -30,7 +30,6 @@
 
 /* A handy thing to have if one has the RAM. Declared in head.S */
 extern unsigned long empty_zero_page;
-extern unsigned long zero_page_mask;
 
 /*
  * The PTE model described here is that of the Hexagon Virtual Machine,
@@ -479,8 +478,5 @@ static inline int pte_exec(pte_t pte)
 	((swp_entry_t)	{ \
 		((type << 1) | \
 		 ((offset & 0x7ffff0) << 9) | ((offset & 0xf) << 6)) })
-
-/*  Oh boy.  There are a lot of possible arch overrides found in this file.  */
-#include <asm-generic/pgtable.h>
 
 #endif

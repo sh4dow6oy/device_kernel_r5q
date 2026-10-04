@@ -1,13 +1,6 @@
-/* Copyright (c) 2012-2018, 2020, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2012-2018, 2020, The Linux Foundation. All rights reserved.
  */
 
 #include <linux/device.h>
@@ -42,7 +35,7 @@ enum nat_table_type {
 #define IPA_TABLE_MAX_ENTRIES 1000
 #define MAX_ALLOC_NAT_SIZE (IPA_TABLE_MAX_ENTRIES * NAT_TABLE_ENTRY_SIZE_BYTE)
 
-static int ipa_nat_vma_fault_remap(struct vm_fault *vmf)
+static vm_fault_t ipa_nat_vma_fault_remap(struct vm_fault *vmf)
 {
 	IPADBG("\n");
 	vmf->page = NULL;
@@ -264,13 +257,13 @@ int ipa2_allocate_nat_device(struct ipa_ioc_nat_alloc_mem *mem)
 		goto bail;
 	}
 
-	if (nat_ctx->is_dev != true) {
+	if (!nat_ctx->is_dev) {
 		IPAERR("Nat device not created successfully during boot up\n");
 		result = -EPERM;
 		goto bail;
 	}
 
-	if (nat_ctx->is_dev_init == true) {
+	if (nat_ctx->is_dev_init) {
 		IPAERR("Device already init\n");
 		result = 0;
 		goto bail;
@@ -284,7 +277,7 @@ int ipa2_allocate_nat_device(struct ipa_ioc_nat_alloc_mem *mem)
 	}
 
 	if (mem->size <= 0 ||
-			nat_ctx->is_dev_init == true) {
+			nat_ctx->is_dev_init) {
 		IPAERR_RL("Invalid Parameters or device is already init\n");
 		result = -EPERM;
 		goto bail;
@@ -740,14 +733,11 @@ int ipa2_nat_dma_cmd(struct ipa_ioc_nat_dma_cmd *dma)
 	}
 
 bail:
-	if (cmd != NULL)
-		kfree(cmd);
+	kfree(cmd);
 
-	if (desc != NULL)
-		kfree(desc);
+	kfree(desc);
 
-	if (reg_write_nop != NULL)
-		kfree(reg_write_nop);
+	kfree(reg_write_nop);
 
 	return ret;
 }

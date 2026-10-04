@@ -57,11 +57,11 @@ source "drivers/char/Kconfig"
 
 source "drivers/i2c/Kconfig"
 
+source "drivers/i3c/Kconfig"
+
 source "drivers/spi/Kconfig"
 
 source "drivers/spmi/Kconfig"
-
-source "drivers/slimbus/Kconfig"
 
 source "drivers/hsi/Kconfig"
 
@@ -72,8 +72,6 @@ source "drivers/ptp/Kconfig"
 source "drivers/pinctrl/Kconfig"
 
 source "drivers/gpio/Kconfig"
-
-source "drivers/gnsssirf/Kconfig"
 
 source "drivers/w1/Kconfig"
 
@@ -110,8 +108,6 @@ source "drivers/mmc/Kconfig"
 source "drivers/memstick/Kconfig"
 
 source "drivers/leds/Kconfig"
-
-source "drivers/switch/Kconfig"
 
 source "drivers/accessibility/Kconfig"
 
@@ -163,6 +159,8 @@ source "drivers/remoteproc/Kconfig"
 
 source "drivers/rpmsg/Kconfig"
 
+source "drivers/soundwire/Kconfig"
+
 source "drivers/soc/Kconfig"
 
 source "drivers/devfreq/Kconfig"
@@ -178,8 +176,6 @@ source "drivers/ntb/Kconfig"
 source "drivers/vme/Kconfig"
 
 source "drivers/pwm/Kconfig"
-
-source "drivers/gpu/msm/Kconfig"
 
 source "drivers/irqchip/Kconfig"
 
@@ -211,9 +207,7 @@ source "drivers/dax/Kconfig"
 
 source "drivers/nvmem/Kconfig"
 
-source "drivers/hwtracing/stm/Kconfig"
-
-source "drivers/hwtracing/intel_th/Kconfig"
+source "drivers/hwtracing/Kconfig"
 
 source "drivers/fpga/Kconfig"
 
@@ -223,38 +217,19 @@ source "drivers/tee/Kconfig"
 
 source "drivers/mux/Kconfig"
 
-source "drivers/sensors/Kconfig"
+source "drivers/opp/Kconfig"
 
-source "drivers/optics/Kconfig"
+source "drivers/visorbus/Kconfig"
+
+source "drivers/siox/Kconfig"
+
+source "drivers/slimbus/Kconfig"
 
 source "drivers/esoc/Kconfig"
 
-source "drivers/samsung/Kconfig"
+source "drivers/sensors/Kconfig"
 
-source "drivers/battery_v2/Kconfig"
+source "drivers/gpu/msm/Kconfig"
 
-source "drivers/staging/samsung/sec_notifier/Kconfig"
-
-source "drivers/muic/Kconfig"
-
-source "drivers/muic/universal/Kconfig"
-
-source "drivers/ccic/Kconfig"
-
-source "drivers/redriver/Kconfig"
-
-source "drivers/adsp_factory/Kconfig"
-
-source "drivers/motor/Kconfig"
-
-source "drivers/gud/Kconfig"
-
-source "drivers/fingerprint/Kconfig"
-
-source "drivers/gator/Kconfig"
-
-source "drivers/security/samsung/tzic/Kconfig"
-
-source "drivers/spu_verify/Kconfig"
-
+source "drivers/energy_model/Kconfig"
 endmenu

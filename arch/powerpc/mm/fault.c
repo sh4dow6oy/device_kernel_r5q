@@ -39,10 +39,9 @@
 
 #include <asm/firmware.h>
 #include <asm/page.h>
-#include <asm/pgtable.h>
+#include <linux/pgtable.h>
 #include <asm/mmu.h>
 #include <asm/mmu_context.h>
-#include <asm/tlbflush.h>
 #include <asm/siginfo.h>
 #include <asm/debug.h>
 
@@ -77,23 +76,23 @@ static bool store_updates_sp(unsigned int inst)
 		return false;
 	/* check major opcode */
 	switch (inst >> 26) {
-	case 37:	/* stwu */
-	case 39:	/* stbu */
-	case 45:	/* sthu */
-	case 53:	/* stfsu */
-	case 55:	/* stfdu */
+	case OP_STWU:
+	case OP_STBU:
+	case OP_STHU:
+	case OP_STFSU:
+	case OP_STFDU:
 		return true;
-	case 62:	/* std or stdu */
+	case OP_STD:	/* std or stdu */
 		return (inst & 3) == 1;
-	case 31:
+	case OP_31:
 		/* check minor opcode */
 		switch ((inst >> 1) & 0x3ff) {
-		case 181:	/* stdux */
-		case 183:	/* stwux */
-		case 247:	/* stbux */
-		case 439:	/* sthux */
-		case 695:	/* stfsux */
-		case 759:	/* stfdux */
+		case OP_31_XOP_STDUX:
+		case OP_31_XOP_STWUX:
+		case OP_31_XOP_STBUX:
+		case OP_31_XOP_STHUX:
+		case OP_31_XOP_STFSUX:
+		case OP_31_XOP_STFDUX:
 			return true;
 		}
 	}
@@ -104,7 +103,8 @@ static bool store_updates_sp(unsigned int inst)
  */
 
 static int
-__bad_area_nosemaphore(struct pt_regs *regs, unsigned long address, int si_code)
+__bad_area_nosemaphore(struct pt_regs *regs, unsigned long address, int si_code,
+		int pkey)
 {
 	/*
 	 * If we are in kernel mode, bail out with a SEGV, this will
@@ -114,17 +114,18 @@ __bad_area_nosemaphore(struct pt_regs *regs, unsigned long address, int si_code)
 	if (!user_mode(regs))
 		return SIGSEGV;
 
-	_exception(SIGSEGV, regs, si_code, address);
+	_exception_pkey(SIGSEGV, regs, si_code, address, pkey);
 
 	return 0;
 }
 
 static noinline int bad_area_nosemaphore(struct pt_regs *regs, unsigned long address)
 {
-	return __bad_area_nosemaphore(regs, address, SEGV_MAPERR);
+	return __bad_area_nosemaphore(regs, address, SEGV_MAPERR, 0);
 }
 
-static int __bad_area(struct pt_regs *regs, unsigned long address, int si_code)
+static int __bad_area(struct pt_regs *regs, unsigned long address, int si_code,
+			int pkey)
 {
 	struct mm_struct *mm = current->mm;
 
@@ -132,23 +133,29 @@ static int __bad_area(struct pt_regs *regs, unsigned long address, int si_code)
 	 * Something tried to access memory that isn't in our memory map..
 	 * Fix it, but check if it's kernel or user first..
 	 */
-	up_read(&mm->mmap_sem);
+	mmap_read_unlock(mm);
 
-	return __bad_area_nosemaphore(regs, address, si_code);
+	return __bad_area_nosemaphore(regs, address, si_code, pkey);
 }
 
 static noinline int bad_area(struct pt_regs *regs, unsigned long address)
 {
-	return __bad_area(regs, address, SEGV_MAPERR);
+	return __bad_area(regs, address, SEGV_MAPERR, 0);
+}
+
+static int bad_key_fault_exception(struct pt_regs *regs, unsigned long address,
+				    int pkey)
+{
+	return __bad_area_nosemaphore(regs, address, SEGV_PKUERR, pkey);
 }
 
 static noinline int bad_access(struct pt_regs *regs, unsigned long address)
 {
-	return __bad_area(regs, address, SEGV_ACCERR);
+	return __bad_area(regs, address, SEGV_ACCERR, 0);
 }
 
 static int do_sigbus(struct pt_regs *regs, unsigned long address,
-		     unsigned int fault)
+		     vm_fault_t fault)
 {
 	siginfo_t info;
 	unsigned int lsb = 0;
@@ -157,6 +164,7 @@ static int do_sigbus(struct pt_regs *regs, unsigned long address,
 		return SIGBUS;
 
 	current->thread.trap_nr = BUS_ADRERR;
+	clear_siginfo(&info);
 	info.si_signo = SIGBUS;
 	info.si_errno = 0;
 	info.si_code = BUS_ADRERR;
@@ -178,7 +186,8 @@ static int do_sigbus(struct pt_regs *regs, unsigned long address,
 	return 0;
 }
 
-static int mm_fault_error(struct pt_regs *regs, unsigned long addr, int fault)
+static int mm_fault_error(struct pt_regs *regs, unsigned long addr,
+				vm_fault_t fault)
 {
 	/*
 	 * Kernel page fault interrupted by SIGKILL. We have no reason to
@@ -306,7 +315,12 @@ static bool access_error(bool is_write, bool is_exec,
 
 	if (unlikely(!(vma->vm_flags & (VM_READ | VM_EXEC | VM_WRITE))))
 		return true;
-
+	/*
+	 * We should ideally do the vma pkey access check here. But in the
+	 * fault path, handle_mm_fault() also does the same check. To avoid
+	 * these multiple checks, we skip it here and handle access error due
+	 * to pkeys later.
+	 */
 	return false;
 }
 
@@ -402,11 +416,11 @@ static int __do_page_fault(struct pt_regs *regs, unsigned long address,
 {
 	struct vm_area_struct * vma;
 	struct mm_struct *mm = current->mm;
-	unsigned int flags = FAULT_FLAG_DEFAULT;
+	unsigned int flags = FAULT_FLAG_ALLOW_RETRY | FAULT_FLAG_KILLABLE;
  	int is_exec = TRAP(regs) == 0x400;
 	int is_user = user_mode(regs);
 	int is_write = page_fault_is_write(error_code);
-	int fault, major = 0;
+	vm_fault_t fault, major = 0;
 	bool must_retry = false;
 
 	if (notify_page_fault(regs))
@@ -449,6 +463,10 @@ static int __do_page_fault(struct pt_regs *regs, unsigned long address,
 
 	perf_sw_event(PERF_COUNT_SW_PAGE_FAULTS, 1, regs, address);
 
+	if (error_code & DSISR_KEYFAULT)
+		return bad_key_fault_exception(regs, address,
+					       get_mm_addr_key(mm, address));
+
 	/*
 	 * We want to do this outside mmap_sem, because reading code around nip
 	 * can result in fault, which will cause a deadlock when called with
@@ -476,12 +494,12 @@ static int __do_page_fault(struct pt_regs *regs, unsigned long address,
 	 * source.  If this is invalid we can skip the address space check,
 	 * thus avoiding the deadlock.
 	 */
-	if (unlikely(!down_read_trylock(&mm->mmap_sem))) {
+	if (unlikely(!mmap_read_trylock(mm))) {
 		if (!is_user && !search_exception_tables(regs->nip))
 			return bad_area_nosemaphore(regs, address);
 
 retry:
-		down_read(&mm->mmap_sem);
+		mmap_read_lock(mm);
 	} else {
 		/*
 		 * The above down_read_trylock() might have succeeded in
@@ -505,7 +523,7 @@ retry:
 		if (!must_retry)
 			return bad_area(regs, address);
 
-		up_read(&mm->mmap_sem);
+		mmap_read_unlock(mm);
 		if (fault_in_pages_readable((const char __user *)regs->nip,
 					    sizeof(unsigned int)))
 			return bad_area_nosemaphore(regs, address);
@@ -526,23 +544,49 @@ good_area:
 	 * the fault.
 	 */
 	fault = handle_mm_fault(vma, address, flags);
-	major |= fault & VM_FAULT_MAJOR;
 
-	if (fault_signal_pending(fault, regs))
-		return user_mode(regs) ? 0 : SIGBUS;
+#ifdef CONFIG_PPC_MEM_KEYS
+	/*
+	 * we skipped checking for access error due to key earlier.
+	 * Check that using handle_mm_fault error return.
+	 */
+	if (unlikely(fault & VM_FAULT_SIGSEGV) &&
+		!arch_vma_access_permitted(vma, is_write, is_exec, 0)) {
+
+		int pkey = vma_pkey(vma);
+
+		mmap_read_unlock(mm);
+		return bad_key_fault_exception(regs, address, pkey);
+	}
+#endif /* CONFIG_PPC_MEM_KEYS */
+
+	major |= fault & VM_FAULT_MAJOR;
 
 	/*
 	 * Handle the retry right now, the mmap_sem has been released in that
 	 * case.
 	 */
 	if (unlikely(fault & VM_FAULT_RETRY)) {
+		/* We retry only once */
 		if (flags & FAULT_FLAG_ALLOW_RETRY) {
+			/*
+			 * Clear FAULT_FLAG_ALLOW_RETRY to avoid any risk
+			 * of starvation.
+			 */
+			flags &= ~FAULT_FLAG_ALLOW_RETRY;
 			flags |= FAULT_FLAG_TRIED;
-			goto retry;
+			if (!fatal_signal_pending(current))
+				goto retry;
 		}
+
+		/*
+		 * User mode? Just return to handle the fatal exception otherwise
+		 * return to bad_page_fault
+		 */
+		return is_user ? 0 : SIGBUS;
 	}
 
-	up_read(&current->mm->mmap_sem);
+	mmap_read_unlock(current->mm);
 
 	if (unlikely(fault & VM_FAULT_ERROR))
 		return mm_fault_error(regs, address, fault);
@@ -589,7 +633,7 @@ void bad_page_fault(struct pt_regs *regs, unsigned long address, int sig)
 
 	/* kernel has accessed a bad area */
 
-	switch (regs->trap) {
+	switch (TRAP(regs)) {
 	case 0x300:
 	case 0x380:
 		pr_alert("BUG: %s at 0x%08lx\n",

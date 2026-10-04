@@ -1,15 +1,5 @@
-/*
- * Copyright (c) 2013, 2017, The Linux Foundation. All rights reserved.
- *
- * This software is licensed under the terms of the GNU General Public
- * License version 2, as published by the Free Software Foundation, and
- * may be copied, distributed, and modified under those terms.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- */
+/* SPDX-License-Identifier: GPL-2.0 */
+/* Copyright (c) 2013, 2017, The Linux Foundation. All rights reserved. */
 
 #ifndef __QCOM_CLK_BRANCH_H__
 #define __QCOM_CLK_BRANCH_H__
@@ -53,7 +43,7 @@ struct clk_branch {
 
 /**
  * struct clk_gate2 - gating clock with status bit and dynamic hardware gating
- * @udelay: halt delay in microseconds on clock branch enable/disable
+ * @udelay: halt delay in microseconds on clock branch Enable/Disable
  * @clkr: handle between common and hardware-specific interfaces
  *
  * Clock which can gate its output.

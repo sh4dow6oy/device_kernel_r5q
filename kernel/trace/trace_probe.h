@@ -1,18 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Common header file for probe-based Dynamic events.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  *
  * This code was copied from kernel/trace/trace_kprobe.h written by
  * Masami Hiramatsu <masami.hiramatsu.pt@hitachi.com>
@@ -42,7 +30,6 @@
 
 #define MAX_TRACE_ARGS		128
 #define MAX_ARGSTR_LEN		63
-#define MAX_EVENT_NAME_LEN	64
 #define MAX_STRING_SIZE		PATH_MAX
 
 /* Reserved field names */
@@ -253,8 +240,8 @@ struct symbol_cache;
 unsigned long update_symbol_cache(struct symbol_cache *sc);
 void free_symbol_cache(struct symbol_cache *sc);
 struct symbol_cache *alloc_symbol_cache(const char *sym, long offset);
-int trace_kprobe_ftrace(struct trace_event_call *call);
-int trace_kprobe_error_injectable(struct trace_event_call *call);
+bool trace_kprobe_on_func_entry(struct trace_event_call *call);
+bool trace_kprobe_error_injectable(struct trace_event_call *call);
 #else
 /* uprobes do not support symbol fetch methods */
 #define fetch_symbol_u8			NULL
@@ -281,14 +268,14 @@ alloc_symbol_cache(const char *sym, long offset)
 	return NULL;
 }
 
-static inline int trace_kprobe_ftrace(struct trace_event_call *call)
+static inline bool trace_kprobe_on_func_entry(struct trace_event_call *call)
 {
-	return 0;
+	return false;
 }
 
-static inline int trace_kprobe_error_injectable(struct trace_event_call *call)
+static inline bool trace_kprobe_error_injectable(struct trace_event_call *call)
 {
-	return 0;
+	return false;
 }
 #endif /* CONFIG_KPROBE_EVENTS */
 
@@ -315,6 +302,29 @@ struct event_file_link {
 	struct trace_event_file		*file;
 	struct list_head		list;
 };
+
+static inline unsigned int trace_probe_load_flag(struct trace_probe *tp)
+{
+	return smp_load_acquire(&tp->flags);
+}
+
+static inline bool trace_probe_test_flag(struct trace_probe *tp,
+					 unsigned int flag)
+{
+	return !!(trace_probe_load_flag(tp) & flag);
+}
+
+static inline void trace_probe_set_flag(struct trace_probe *tp,
+					unsigned int flag)
+{
+	smp_store_release(&tp->flags, tp->flags | flag);
+}
+
+static inline void trace_probe_clear_flag(struct trace_probe *tp,
+					  unsigned int flag)
+{
+	tp->flags &= ~flag;
+}
 
 static inline bool trace_probe_is_enabled(struct trace_probe *tp)
 {
@@ -367,12 +377,6 @@ extern void traceprobe_update_arg(struct probe_arg *arg);
 extern void traceprobe_free_probe_arg(struct probe_arg *arg);
 
 extern int traceprobe_split_symbol_offset(char *symbol, long *offset);
-
-extern ssize_t traceprobe_probes_write(struct file *file,
-		const char __user *buffer, size_t count, loff_t *ppos,
-		int (*createfn)(int, char**));
-
-extern int traceprobe_command(const char *buf, int (*createfn)(int, char**));
 
 /* Sum up total data length for dynamic arraies (strings) */
 static nokprobe_inline int

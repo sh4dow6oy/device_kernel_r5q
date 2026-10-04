@@ -30,6 +30,7 @@
 #include "file.h"
 #include "lib.h"
 #include "label.h"
+#include "net.h"
 #include "perms.h"
 #include "resource.h"
 
@@ -138,7 +139,7 @@ struct aa_profile {
 
 	const char *attach;
 	struct aa_dfa *xmatch;
-	int xmatch_len;
+	unsigned int xmatch_len;
 	enum audit_mode audit;
 	long mode;
 	u32 path_flags;
@@ -148,7 +149,14 @@ struct aa_profile {
 	struct aa_policydb policy;
 	struct aa_file_rules file;
 	struct aa_caps caps;
+
+	int xattr_count;
+	char **xattrs;
+
 	struct aa_rlimit rlimits;
+
+	int secmark_count;
+	struct aa_secmark *secmark;
 
 	struct aa_loaddata *rawdata;
 	unsigned char *hash;
@@ -209,15 +217,24 @@ static inline struct aa_profile *aa_get_newest_profile(struct aa_profile *p)
 	return labels_profile(aa_get_newest_label(&p->label));
 }
 
-#define PROFILE_MEDIATES(P, T)  ((P)->policy.start[(T)])
-/* safe version of POLICY_MEDIATES for full range input */
-static inline unsigned int PROFILE_MEDIATES_SAFE(struct aa_profile *profile,
-						 unsigned char class)
+static inline unsigned int PROFILE_MEDIATES(struct aa_profile *profile,
+					    unsigned char class)
 {
-	if (profile->policy.dfa)
+	if (class <= AA_CLASS_LAST)
+		return profile->policy.start[class];
+	else
 		return aa_dfa_match_len(profile->policy.dfa,
 					profile->policy.start[0], &class, 1);
-	return 0;
+}
+
+static inline unsigned int PROFILE_MEDIATES_AF(struct aa_profile *profile,
+					       u16 AF) {
+	unsigned int state = PROFILE_MEDIATES(profile, AA_CLASS_NET);
+	__be16 be_af = cpu_to_be16(AF);
+
+	if (!state)
+		return 0;
+	return aa_dfa_match_len(profile->policy.dfa, state, (char *) &be_af, 2);
 }
 
 /**
@@ -290,7 +307,8 @@ static inline int AUDIT_MODE(struct aa_profile *profile)
 
 bool policy_view_capable(struct aa_ns *ns);
 bool policy_admin_capable(struct aa_ns *ns);
-int aa_may_manage_policy(struct aa_label *label, struct aa_ns *ns,
-			 u32 mask);
+int aa_may_manage_policy(const struct cred *subj_cred,
+			 struct aa_label *label, struct aa_ns *ns,
+			 const struct cred *ocred, u32 mask);
 
 #endif /* __AA_POLICY_H */

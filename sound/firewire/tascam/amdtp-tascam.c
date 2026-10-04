@@ -124,7 +124,7 @@ static unsigned int process_tx_data_blocks(struct amdtp_stream *s,
 {
 	struct snd_pcm_substream *pcm;
 
-	pcm = ACCESS_ONCE(s->pcm);
+	pcm = READ_ONCE(s->pcm);
 	if (data_blocks > 0 && pcm)
 		read_pcm_s32(s, pcm, buffer, data_blocks);
 
@@ -143,7 +143,7 @@ static unsigned int process_rx_data_blocks(struct amdtp_stream *s,
 	/* This field is not used. */
 	*syt = 0x0000;
 
-	pcm = ACCESS_ONCE(s->pcm);
+	pcm = READ_ONCE(s->pcm);
 	if (pcm)
 		write_pcm_s32(s, pcm, buffer, data_blocks);
 	else
@@ -172,7 +172,7 @@ int amdtp_tscm_init(struct amdtp_stream *s, struct fw_unit *unit,
 				CIP_NONBLOCKING | CIP_SKIP_DBC_ZERO_CHECK, fmt,
 				process_data_blocks, sizeof(struct amdtp_tscm));
 	if (err < 0)
-		return 0;
+		return err;
 
 	/* Use fixed value for FDF field. */
 	s->fdf = 0x00;

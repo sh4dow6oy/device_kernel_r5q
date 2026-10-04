@@ -68,8 +68,6 @@
  * @pd: Protection Domain pointer
  * @qp: Queue Pair pointer
  * @cq: Completion Queue pointer
- * @dm_mr: DMA Memory Region pointer
- * @lkey: The local access only memory region key
  * @timeout: Number of uSecs to wait for connection management events
  * @privport: Whether a privileged port may be used
  * @port: The port to use
@@ -124,7 +122,7 @@ struct p9_rdma_context {
 	dma_addr_t busa;
 	union {
 		struct p9_req_t *req;
-		struct p9_fcall *rc;
+		struct p9_fcall rc;
 	};
 };
 
@@ -257,25 +255,36 @@ p9_cm_event_handler(struct rdma_cm_id *id, struct rdma_cm_event *event)
 {
 	struct p9_client *c = id->context;
 	struct p9_trans_rdma *rdma = c->trans;
+	unsigned long flags;
+
 	switch (event->event) {
 	case RDMA_CM_EVENT_ADDR_RESOLVED:
+		spin_lock_irqsave(&rdma->req_lock, flags);
 		BUG_ON(rdma->state != P9_RDMA_INIT);
 		rdma->state = P9_RDMA_ADDR_RESOLVED;
+		spin_unlock_irqrestore(&rdma->req_lock, flags);
 		break;
 
 	case RDMA_CM_EVENT_ROUTE_RESOLVED:
+		spin_lock_irqsave(&rdma->req_lock, flags);
 		BUG_ON(rdma->state != P9_RDMA_ADDR_RESOLVED);
 		rdma->state = P9_RDMA_ROUTE_RESOLVED;
+		spin_unlock_irqrestore(&rdma->req_lock, flags);
 		break;
 
 	case RDMA_CM_EVENT_ESTABLISHED:
+		spin_lock_irqsave(&rdma->req_lock, flags);
 		BUG_ON(rdma->state != P9_RDMA_ROUTE_RESOLVED);
 		rdma->state = P9_RDMA_CONNECTED;
+		spin_unlock_irqrestore(&rdma->req_lock, flags);
 		break;
 
 	case RDMA_CM_EVENT_DISCONNECTED:
-		if (rdma)
+		if (rdma) {
+			spin_lock_irqsave(&rdma->req_lock, flags);
 			rdma->state = P9_RDMA_CLOSED;
+			spin_unlock_irqrestore(&rdma->req_lock, flags);
+		}
 		c->status = Disconnected;
 		break;
 
@@ -313,6 +322,7 @@ recv_done(struct ib_cq *cq, struct ib_wc *wc)
 	struct p9_req_t *req;
 	int err = 0;
 	int16_t tag;
+	unsigned long flags;
 
 	req = NULL;
 	ib_dma_unmap_single(rdma->cm_id->device, c->busa, client->msize,
@@ -321,7 +331,8 @@ recv_done(struct ib_cq *cq, struct ib_wc *wc)
 	if (wc->status != IB_WC_SUCCESS)
 		goto err_out;
 
-	err = p9_parse_header(c->rc, NULL, NULL, &tag, 1);
+	c->rc.size = wc->byte_len;
+	err = p9_parse_header(&c->rc, NULL, NULL, &tag, 1);
 	if (err)
 		goto err_out;
 
@@ -331,12 +342,13 @@ recv_done(struct ib_cq *cq, struct ib_wc *wc)
 
 	/* Check that we have not yet received a reply for this request.
 	 */
-	if (unlikely(req->rc)) {
+	if (unlikely(req->rc.sdata)) {
 		pr_err("Duplicate reply for request %d", tag);
 		goto err_out;
 	}
 
-	req->rc = c->rc;
+	req->rc.size = c->rc.size;
+	req->rc.sdata = c->rc.sdata;
 	p9_client_cb(client, req, REQ_STATUS_RCVD);
 
  out:
@@ -347,7 +359,10 @@ recv_done(struct ib_cq *cq, struct ib_wc *wc)
  err_out:
 	p9_debug(P9_DEBUG_ERROR, "req %p err %d status %d\n",
 			req, err, wc->status);
-	rdma->state = P9_RDMA_FLUSHING;
+	spin_lock_irqsave(&rdma->req_lock, flags);
+	if (rdma->state < P9_RDMA_FLUSHING)
+		rdma->state = P9_RDMA_FLUSHING;
+	spin_unlock_irqrestore(&rdma->req_lock, flags);
 	client->status = Disconnected;
 	goto out;
 }
@@ -361,9 +376,10 @@ send_done(struct ib_cq *cq, struct ib_wc *wc)
 		container_of(wc->wr_cqe, struct p9_rdma_context, cqe);
 
 	ib_dma_unmap_single(rdma->cm_id->device,
-			    c->busa, c->req->tc->size,
+			    c->busa, c->req->tc.size,
 			    DMA_TO_DEVICE);
 	up(&rdma->sq_sem);
+	p9_req_put(c->req);
 	kfree(c);
 }
 
@@ -397,11 +413,12 @@ static int
 post_recv(struct p9_client *client, struct p9_rdma_context *c)
 {
 	struct p9_trans_rdma *rdma = client->trans;
-	struct ib_recv_wr wr, *bad_wr;
+	struct ib_recv_wr wr;
 	struct ib_sge sge;
+	int ret;
 
 	c->busa = ib_dma_map_single(rdma->cm_id->device,
-				    c->rc->sdata, client->msize,
+				    c->rc.sdata, client->msize,
 				    DMA_FROM_DEVICE);
 	if (ib_dma_mapping_error(rdma->cm_id->device, c->busa))
 		goto error;
@@ -416,7 +433,12 @@ post_recv(struct p9_client *client, struct p9_rdma_context *c)
 	wr.wr_cqe = &c->cqe;
 	wr.sg_list = &sge;
 	wr.num_sge = 1;
-	return ib_post_recv(rdma->qp, &wr, &bad_wr);
+
+	ret = ib_post_recv(rdma->qp, &wr, NULL);
+	if (ret)
+		ib_dma_unmap_single(rdma->cm_id->device, c->busa,
+				    client->msize, DMA_FROM_DEVICE);
+	return ret;
 
  error:
 	p9_debug(P9_DEBUG_ERROR, "EIO\n");
@@ -426,7 +448,7 @@ post_recv(struct p9_client *client, struct p9_rdma_context *c)
 static int rdma_request(struct p9_client *client, struct p9_req_t *req)
 {
 	struct p9_trans_rdma *rdma = client->trans;
-	struct ib_send_wr wr, *bad_wr;
+	struct ib_send_wr wr;
 	struct ib_sge sge;
 	int err = 0;
 	unsigned long flags;
@@ -443,9 +465,9 @@ static int rdma_request(struct p9_client *client, struct p9_req_t *req)
 	 **/
 	if (unlikely(atomic_read(&rdma->excess_rc) > 0)) {
 		if ((atomic_sub_return(1, &rdma->excess_rc) >= 0)) {
-			/* Got one ! */
-			kfree(req->rc);
-			req->rc = NULL;
+			/* Got one! */
+			p9_fcall_fini(&req->rc);
+			req->rc.sdata = NULL;
 			goto dont_need_post_recv;
 		} else {
 			/* We raced and lost. */
@@ -459,7 +481,7 @@ static int rdma_request(struct p9_client *client, struct p9_req_t *req)
 		err = -ENOMEM;
 		goto recv_error;
 	}
-	rpl_context->rc = req->rc;
+	rpl_context->rc.sdata = req->rc.sdata;
 
 	/*
 	 * Post a receive buffer for this request. We need to ensure
@@ -479,7 +501,7 @@ static int rdma_request(struct p9_client *client, struct p9_req_t *req)
 		goto recv_error;
 	}
 	/* remove posted receive buffer from request structure */
-	req->rc = NULL;
+	req->rc.sdata = NULL;
 
 dont_need_post_recv:
 	/* Post the request */
@@ -491,7 +513,7 @@ dont_need_post_recv:
 	c->req = req;
 
 	c->busa = ib_dma_map_single(rdma->cm_id->device,
-				    c->req->tc->sdata, c->req->tc->size,
+				    c->req->tc.sdata, c->req->tc.size,
 				    DMA_TO_DEVICE);
 	if (ib_dma_mapping_error(rdma->cm_id->device, c->busa)) {
 		err = -EIO;
@@ -501,7 +523,7 @@ dont_need_post_recv:
 	c->cqe.done = send_done;
 
 	sge.addr = c->busa;
-	sge.length = c->req->tc->size;
+	sge.length = c->req->tc.size;
 	sge.lkey = rdma->pd->local_dma_lkey;
 
 	wr.next = NULL;
@@ -513,7 +535,7 @@ dont_need_post_recv:
 
 	if (down_interruptible(&rdma->sq_sem)) {
 		err = -EINTR;
-		goto send_error;
+		goto dma_unmap;
 	}
 
 	/* Mark request as `sent' *before* we actually send it,
@@ -521,13 +543,16 @@ dont_need_post_recv:
 	 * status in case of a very fast reply.
 	 */
 	req->status = REQ_STATUS_SENT;
-	err = ib_post_send(rdma->qp, &wr, &bad_wr);
+	err = ib_post_send(rdma->qp, &wr, NULL);
 	if (err)
-		goto send_error;
+		goto dma_unmap;
 
 	/* Success */
 	return 0;
 
+dma_unmap:
+	ib_dma_unmap_single(rdma->cm_id->device, c->busa,
+			    c->req->tc.size, DMA_TO_DEVICE);
  /* Handle errors that happened during or while preparing the send: */
  send_error:
 	req->status = REQ_STATUS_ERROR;
@@ -631,7 +656,7 @@ static int p9_rdma_bind_privport(struct p9_trans_rdma *rdma)
 }
 
 /**
- * trans_create_rdma - Transport method for creating atransport instance
+ * rdma_create_trans - Transport method for creating a transport instance
  * @client: client instance
  * @addr: IP address string
  * @args: Mount options string

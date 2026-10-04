@@ -48,6 +48,7 @@
 #define OPENPROM_SUPER_MAGIC	0x9fa1
 #define QNX4_SUPER_MAGIC	0x002f		/* qnx4 fs detection */
 #define QNX6_SUPER_MAGIC	0x68191122	/* qnx6 fs detection */
+#define AFS_FS_MAGIC		0x6B414653
 
 #define REISERFS_SUPER_MAGIC	0x52654973	/* used by gcc */
 					/* used by file system utilities that
@@ -93,6 +94,6 @@
 #define BALLOON_KVM_MAGIC	0x13661366
 #define ZSMALLOC_MAGIC		0x58295829
 #define DMA_BUF_MAGIC		0x444d4142	/* "DMAB" */
-#define KZEROD_MAGIC		0x58296829
+#define Z3FOLD_MAGIC		0x33
 
 #endif /* __LINUX_MAGIC_H__ */

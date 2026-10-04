@@ -4,6 +4,7 @@
 
 #include <uapi/linux/ipv6.h>
 #include <uapi/linux/icmpv6.h>
+#include <linux/android_kabi.h>
 
 #define ipv6_optlen(p)  (((p)->hdrlen+1) << 3)
 #define ipv6_authlen(p) (((p)->hdrlen+2) << 2)
@@ -32,6 +33,7 @@ struct ipv6_devconf {
 	__s32		max_desync_factor;
 	__s32		max_addresses;
 	__s32		accept_ra_defrtr;
+	__u32		ra_defrtr_metric;
 	__s32		accept_ra_min_hop_limit;
 	__s32		accept_ra_pinfo;
 	__s32		ignore_routes_with_linkdown;
@@ -75,8 +77,15 @@ struct ipv6_devconf {
 	__u32		enhanced_dad;
 	__u32		addr_gen_mode;
 	__s32		disable_policy;
-	__s32		accept_ra_prefix_route;
+	__s32           ndisc_tclass;
+	__s32		rpl_seg_enabled;
+
 	struct ctl_table_header *sysctl_header;
+
+	ANDROID_KABI_RESERVE(1);
+	ANDROID_KABI_RESERVE(2);
+	ANDROID_KABI_RESERVE(3);
+	ANDROID_KABI_RESERVE(4);
 };
 
 struct ipv6_params {

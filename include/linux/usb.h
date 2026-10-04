@@ -22,6 +22,7 @@
 #include <linux/sched.h>	/* for current && schedule_timeout */
 #include <linux/mutex.h>	/* for struct mutex */
 #include <linux/pm_runtime.h>	/* for runtime PM */
+#include <linux/android_kabi.h>
 
 struct usb_device;
 struct usb_driver;
@@ -257,6 +258,11 @@ struct usb_interface {
 	struct device dev;		/* interface specific device info */
 	struct device *usb_dev;
 	struct work_struct reset_ws;	/* for resets in atomic context */
+
+	ANDROID_KABI_RESERVE(1);
+	ANDROID_KABI_RESERVE(2);
+	ANDROID_KABI_RESERVE(3);
+	ANDROID_KABI_RESERVE(4);
 };
 #define	to_usb_interface(d) container_of(d, struct usb_interface, dev)
 
@@ -504,6 +510,16 @@ enum usb_port_connect_type {
 };
 
 /*
+ * USB port quirks.
+ */
+
+/* For the given port, prefer the old (faster) enumeration scheme. */
+#define USB_PORT_QUIRK_OLD_SCHEME	BIT(0)
+
+/* Decrease TRSTRCY to 10ms during device enumeration. */
+#define USB_PORT_QUIRK_FAST_ENUM	BIT(1)
+
+/*
  * USB 2.0 Link Power Management (LPM) parameters.
  */
 struct usb2_lpm_parameters {
@@ -565,6 +581,8 @@ struct usb3_lpm_parameters {
  * @route: tree topology hex string for use with xHCI
  * @state: device state: configured, not attached, etc.
  * @speed: device speed: high/full/low (or error)
+ * @rx_lanes: number of rx lanes in use, USB 3.2 adds dual-lane support
+ * @tx_lanes: number of tx lanes in use, USB 3.2 adds dual-lane support
  * @tt: Transaction Translator info; used with low/full speed dev, highspeed hub
  * @ttport: device port on that tt hub
  * @toggle: one bit for each endpoint, with ([0] = IN, [1] = OUT) endpoints
@@ -584,7 +602,6 @@ struct usb3_lpm_parameters {
  * @level: number of USB hub ancestors
  * @can_submit: URBs may be submitted
  * @persist_enabled:  USB_PERSIST enabled for this device
- * @reset_in_progress: the device is being reset
  * @have_langid: whether string_langid is valid
  * @authorized: policy has said we can use it;
  *	(user space) policy determines if we authorize this device to be
@@ -624,6 +641,10 @@ struct usb3_lpm_parameters {
  *	to keep track of the number of functions that require USB 3.0 Link Power
  *	Management to be disabled for this usb_device.  This count should only
  *	be manipulated by those functions, with the bandwidth_mutex is held.
+ * @hub_delay: cached value consisting of:
+ *		parent->hub_delay + wHubDelay + tTPTransmissionDelay (40ns)
+ *
+ *	Will be used as wValue for SetIsochDelay requests.
  *
  * Notes:
  * Usbcore drivers should not set usbdev->state directly.  Instead use
@@ -635,6 +656,8 @@ struct usb_device {
 	u32		route;
 	enum usb_device_state	state;
 	enum usb_device_speed	speed;
+	unsigned int		rx_lanes;
+	unsigned int		tx_lanes;
 
 	struct usb_tt	*tt;
 	int		ttport;
@@ -663,7 +686,6 @@ struct usb_device {
 
 	unsigned can_submit:1;
 	unsigned persist_enabled:1;
-	unsigned reset_in_progress:1;
 	unsigned have_langid:1;
 	unsigned authorized:1;
 	unsigned authenticated:1;
@@ -691,13 +713,12 @@ struct usb_device {
 
 	unsigned long active_duration;
 
-#ifdef CONFIG_PM
 	unsigned long connect_time;
 
 	unsigned do_remote_wakeup:1;
 	unsigned reset_resume:1;
 	unsigned port_is_suspended:1;
-#endif
+
 	struct wusb_dev *wusb_dev;
 	int slot_id;
 	enum usb_device_removable removable;
@@ -705,6 +726,13 @@ struct usb_device {
 	struct usb3_lpm_parameters u1_params;
 	struct usb3_lpm_parameters u2_params;
 	unsigned lpm_disable_count;
+
+	u16 hub_delay;
+
+	ANDROID_KABI_RESERVE(1);
+	ANDROID_KABI_RESERVE(2);
+	ANDROID_KABI_RESERVE(3);
+	ANDROID_KABI_RESERVE(4);
 };
 #define	to_usb_device(d) container_of(d, struct usb_device, dev)
 
@@ -1214,6 +1242,11 @@ struct usb_driver {
 	unsigned int supports_autosuspend:1;
 	unsigned int disable_hub_initiated_lpm:1;
 	unsigned int soft_unbind:1;
+
+	ANDROID_KABI_RESERVE(1);
+	ANDROID_KABI_RESERVE(2);
+	ANDROID_KABI_RESERVE(3);
+	ANDROID_KABI_RESERVE(4);
 };
 #define	to_usb_driver(d) container_of(d, struct usb_driver, drvwrap.driver)
 
@@ -1322,7 +1355,6 @@ extern int usb_disabled(void);
 #define URB_ISO_ASAP		0x0002	/* iso-only; use the first unexpired
 					 * slot in the schedule */
 #define URB_NO_TRANSFER_DMA_MAP	0x0004	/* urb->transfer_dma valid on submit */
-#define URB_NO_FSBR		0x0020	/* UHCI-specific */
 #define URB_ZERO_PACKET		0x0040	/* Finish bulk OUT with short packet */
 #define URB_NO_INTERRUPT	0x0080	/* HINT: no non-error interrupt
 					 * needed */
@@ -1587,8 +1619,12 @@ struct urb {
 	int error_count;		/* (return) number of ISO errors */
 	void *context;			/* (in) context for completion */
 	usb_complete_t complete;	/* (in) completion routine */
-	void *priv_data;                /* (in) additional private data */
-	struct usb_iso_packet_descriptor iso_frame_desc[]; /* (in) ISO ONLY */
+	struct usb_iso_packet_descriptor iso_frame_desc[0];
+					/* (in) ISO ONLY */
+	ANDROID_KABI_RESERVE(1);
+	ANDROID_KABI_RESERVE(2);
+	ANDROID_KABI_RESERVE(3);
+	ANDROID_KABI_RESERVE(4);
 };
 
 /* ----------------------------------------------------------------------- */
@@ -1791,14 +1827,29 @@ extern int usb_control_msg(struct usb_device *dev, unsigned int pipe,
 extern int usb_interrupt_msg(struct usb_device *usb_dev, unsigned int pipe,
 	void *data, int len, int *actual_length, int timeout);
 extern int usb_bulk_msg(struct usb_device *usb_dev, unsigned int pipe,
-	void *data, int len, int *actual_length,
-	int timeout);
+	void *data, int len, int *actual_length, int timeout);
+extern int usb_bulk_msg_killable(struct usb_device *usb_dev, unsigned int pipe,
+	void *data, int len, int *actual_length, int timeout);
 
 /* wrappers around usb_control_msg() for the most common standard requests */
 extern int usb_get_descriptor(struct usb_device *dev, unsigned char desctype,
 	unsigned char descindex, void *buf, int size);
 extern int usb_get_status(struct usb_device *dev,
-	int type, int target, void *data);
+	int recip, int type, int target, void *data);
+
+static inline int usb_get_std_status(struct usb_device *dev,
+	int recip, int target, void *data)
+{
+	return usb_get_status(dev, recip, USB_STATUS_TYPE_STANDARD, target,
+		data);
+}
+
+static inline int usb_get_ptm_status(struct usb_device *dev, void *data)
+{
+	return usb_get_status(dev, USB_RECIP_DEVICE, USB_STATUS_TYPE_PTM,
+		0, data);
+}
+
 extern int usb_string(struct usb_device *dev, int index,
 	char *buf, size_t size);
 
@@ -1806,6 +1857,8 @@ extern int usb_string(struct usb_device *dev, int index,
 extern int usb_clear_halt(struct usb_device *dev, int pipe);
 extern int usb_reset_configuration(struct usb_device *dev);
 extern int usb_set_interface(struct usb_device *dev, int ifnum, int alternate);
+extern int usb_set_interface_timeout(struct usb_device *dev, int ifnum,
+		int alternate, unsigned long timeout);
 extern void usb_reset_endpoint(struct usb_device *dev, unsigned int epaddr);
 
 /* this request isn't really synchronous, but it belongs with the others */
@@ -1945,29 +1998,23 @@ usb_pipe_endpoint(struct usb_device *dev, unsigned int pipe)
 	return eps[usb_pipeendpoint(pipe)];
 }
 
-/*-------------------------------------------------------------------------*/
-
-static inline __u16
-usb_maxpacket(struct usb_device *udev, int pipe, int is_out)
+static inline u16 usb_maxpacket(struct usb_device *udev, int pipe,
+				/* int is_out deprecated */ ...)
 {
 	struct usb_host_endpoint	*ep;
 	unsigned			epnum = usb_pipeendpoint(pipe);
 
-	if (is_out) {
-		WARN_ON(usb_pipein(pipe));
+	if (usb_pipeout(pipe))
 		ep = udev->ep_out[epnum];
-	} else {
-		WARN_ON(usb_pipeout(pipe));
+	else
 		ep = udev->ep_in[epnum];
-	}
+
 	if (!ep)
 		return 0;
 
 	/* NOTE:  only 0x07ff bits are for packet size... */
 	return usb_endpoint_maxp(&ep->desc);
 }
-
-/* ----------------------------------------------------------------------- */
 
 /* translate USB error codes to codes user space understands */
 static inline int usb_translate_errors(int error_code)

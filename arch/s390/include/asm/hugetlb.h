@@ -10,7 +10,7 @@
 #define _ASM_S390_HUGETLB_H
 
 #include <asm/page.h>
-#include <asm/pgtable.h>
+#include <linux/pgtable.h>
 
 
 #define is_hugepage_only_range(mm, addr, len)	0
@@ -39,7 +39,10 @@ static inline int prepare_hugepage_range(struct file *file,
 	return 0;
 }
 
-#define arch_clear_hugepage_flags(page)		do { } while (0)
+static inline void arch_clear_hugepage_flags(struct page *page)
+{
+	clear_bit(PG_arch_1, &page->flags);
+}
 
 static inline void huge_pte_clear(struct mm_struct *mm, unsigned long addr,
 				  pte_t *ptep, unsigned long sz)

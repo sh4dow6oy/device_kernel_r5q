@@ -74,6 +74,9 @@ static inline depot_stack_handle_t save_stack(gfp_t flags)
 
 	save_stack_trace(&trace);
 	filter_irq_stacks(&trace);
+	if (trace.nr_entries != 0 &&
+	    trace.entries[trace.nr_entries-1] == ULONG_MAX)
+		trace.nr_entries--;
 
 	return depot_save_stack(&trace, flags);
 }
@@ -260,7 +263,7 @@ static inline unsigned int optimal_redzone(unsigned int object_size)
 }
 
 void kasan_cache_create(struct kmem_cache *cache, unsigned int *size,
-			unsigned long *flags)
+			slab_flags_t *flags)
 {
 	unsigned int orig_size = *size;
 	unsigned int redzone_size;
@@ -328,8 +331,7 @@ void kasan_poison_slab(struct page *page)
 
 	for (i = 0; i < (1 << compound_order(page)); i++)
 		page_kasan_tag_reset(page + i);
-	kasan_poison_shadow(page_address(page),
-			PAGE_SIZE << compound_order(page),
+	kasan_poison_shadow(page_address(page), page_size(page),
 			KASAN_KMALLOC_REDZONE);
 }
 
@@ -381,7 +383,7 @@ static u8 assign_tag(struct kmem_cache *cache, const void *object,
 	/* For caches that either have a constructor or SLAB_TYPESAFE_BY_RCU: */
 #ifdef CONFIG_SLAB
 	/* For SLAB assign tags based on the object index in the freelist. */
-	return (u8)obj_to_index(cache, virt_to_page(object), (void *)object);
+	return (u8)obj_to_index(cache, virt_to_head_page(object), (void *)object);
 #else
 	/*
 	 * For SLUB assign a random tag during slab creation, otherwise reuse
@@ -537,7 +539,7 @@ void * __must_check kasan_kmalloc_large(const void *ptr, size_t size,
 	page = virt_to_page(ptr);
 	redzone_start = round_up((unsigned long)(ptr + size),
 				KASAN_SHADOW_SCALE_SIZE);
-	redzone_end = (unsigned long)ptr + (PAGE_SIZE << compound_order(page));
+	redzone_end = (unsigned long)ptr + page_size(page);
 
 	kasan_unpoison_shadow(ptr, size);
 	kasan_poison_shadow((void *)redzone_start, redzone_end - redzone_start,
@@ -573,8 +575,7 @@ void kasan_poison_kfree(void *ptr, unsigned long ip)
 			kasan_report_invalid_free(ptr, ip);
 			return;
 		}
-		kasan_poison_shadow(ptr, PAGE_SIZE << compound_order(page),
-				KASAN_FREE_PAGE);
+		kasan_poison_shadow(ptr, page_size(page), KASAN_FREE_PAGE);
 	} else {
 		__kasan_slab_free(page->slab_cache, ptr, ip, false);
 	}
@@ -697,7 +698,7 @@ static int __meminit kasan_mem_notifier(struct notifier_block *nb,
 			return NOTIFY_OK;
 
 		ret = __vmalloc_node_range(shadow_size, PAGE_SIZE, shadow_start,
-					shadow_end, GFP_KERNEL,
+					shadow_end, GFP_KERNEL | __GFP_ZERO,
 					PAGE_KERNEL, VM_NO_GUARD,
 					pfn_to_nid(mem_data->start_pfn),
 					__builtin_return_address(0));

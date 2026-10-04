@@ -1,14 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2016-2018, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
  */
 #include <linux/module.h>
 #include <linux/platform_device.h>
@@ -636,7 +628,6 @@ static int wdsp_get_devops_for_cmpnt(struct device *wdsp_dev,
 	return ret;
 }
 
-#ifdef CONFIG_DEBUG_FS
 static void wdsp_collect_ramdumps(struct wdsp_mgr_priv *wdsp)
 {
 	struct wdsp_img_section img_section;
@@ -708,7 +699,6 @@ err_read_dumps:
 done:
 	return;
 }
-#endif
 
 static void wdsp_ssr_work_fn(struct work_struct *work)
 {
@@ -725,8 +715,7 @@ static void wdsp_ssr_work_fn(struct work_struct *work)
 
 	/* Issue ramdumps and shutdown only if DSP is currently booted */
 	if (WDSP_STATUS_IS_SET(wdsp, WDSP_STATUS_BOOTED)) {
-		/* block ramdump function to support wdsp ssr */
-		/* wdsp_collect_ramdumps(wdsp); */
+		wdsp_collect_ramdumps(wdsp);
 		ret = wdsp_unicast_event(wdsp, WDSP_CMPNT_CONTROL,
 					 WDSP_EVENT_DO_SHUTDOWN, NULL);
 		if (ret < 0)
@@ -1068,8 +1057,6 @@ static void wdsp_mgr_debugfs_init(struct wdsp_mgr_priv *wdsp)
 
 	debugfs_create_bool("panic_on_error", 0644,
 			    wdsp->entry, &wdsp->panic_on_error);
-
-	wdsp->panic_on_error = 1;
 }
 
 static void wdsp_mgr_debugfs_remove(struct wdsp_mgr_priv *wdsp)
@@ -1319,6 +1306,7 @@ static struct platform_driver wdsp_mgr_driver = {
 		.name = "wcd-dsp-mgr",
 		.owner = THIS_MODULE,
 		.of_match_table = of_match_ptr(wdsp_mgr_dt_match),
+		.suppress_bind_attrs = true,
 	},
 	.probe = wdsp_mgr_probe,
 	.remove = wdsp_mgr_remove,

@@ -225,11 +225,12 @@ static struct platform_device rb532_wdt = {
 static struct plat_serial8250_port rb532_uart_res[] = {
 	{
 		.type           = PORT_16550A,
-		.membase	= (char *)KSEG1ADDR(REGBASE + UART0BASE),
+		.mapbase        = REGBASE + UART0BASE,
+		.mapsize        = 0x1000,
 		.irq		= UART0_IRQ,
 		.regshift	= 2,
 		.iotype		= UPIO_MEM,
-		.flags		= UPF_BOOT_AUTOCONF,
+		.flags		= UPF_BOOT_AUTOCONF | UPF_IOREMAP,
 	},
 	{
 		.flags		= 0,
@@ -310,6 +311,8 @@ static int __init plat_setup_devices(void)
 	return platform_add_devices(rb532_devs, ARRAY_SIZE(rb532_devs));
 }
 
+#ifdef CONFIG_NET
+
 static int __init setup_kmac(char *s)
 {
 	printk(KERN_INFO "korina mac = %s\n", s);
@@ -319,5 +322,7 @@ static int __init setup_kmac(char *s)
 }
 
 __setup("kmac=", setup_kmac);
+
+#endif /* CONFIG_NET */
 
 arch_initcall(plat_setup_devices);

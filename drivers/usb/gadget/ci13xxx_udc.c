@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * ci13xxx_udc.c - MIPS USB IP core family device controller
  *
@@ -355,8 +356,8 @@ static int hw_device_reset(struct ci13xxx *udc)
 		hw_cwrite(CAP_USBCMD, USBCMD_ITC_MASK, USBCMD_ITC(0));
 
 	if (hw_cread(CAP_USBMODE, USBMODE_CM) != USBMODE_CM_DEVICE) {
-		pr_err("cannot enter in device mode");
-		pr_err("lpm = %i", hw_bank.lpm);
+		pr_err("cannot enter in device mode\n");
+		pr_err("lpm = %i\n", hw_bank.lpm);
 		return -ENODEV;
 	}
 
@@ -400,9 +401,9 @@ static int hw_device_state(u32 dma)
 		hw_cwrite(CAP_USBINTR, ~0,
 			     USBi_UI|USBi_UEI|USBi_PCI|USBi_URI|USBi_SLI);
 		hw_cwrite(CAP_USBCMD, USBCMD_RS, USBCMD_RS);
-		udc->transceiver->flags |= PHY_SOFT_CONNECT;
+		udc->transceiver->flags |= EUD_SPOOF_CONNECT;
 	} else {
-		udc->transceiver->flags &= ~PHY_SOFT_CONNECT;
+		udc->transceiver->flags &= ~EUD_SPOOF_CONNECT;
 		hw_cwrite(CAP_USBCMD, USBCMD_RS, 0);
 		hw_cwrite(CAP_USBINTR, ~0, 0);
 		/* Clear BIT(31) to disable AHB2AHB Bypass functionality */
@@ -848,6 +849,12 @@ static int hw_usb_reset(void)
 	return 0;
 }
 
+static ssize_t device_store(struct device *dev, struct device_attribute *attr,
+			const char *buf, size_t count)
+{
+	return 0;
+}
+
 /******************************************************************************
  * DBG block
  *****************************************************************************/
@@ -856,7 +863,7 @@ static int hw_usb_reset(void)
  *
  * Check "device.h" for details
  */
-static ssize_t show_device(struct device *dev, struct device_attribute *attr,
+static ssize_t device_show(struct device *dev, struct device_attribute *attr,
 			   char *buf)
 {
 	struct ci13xxx *udc = container_of(dev, struct ci13xxx, gadget.dev);
@@ -891,14 +898,20 @@ static ssize_t show_device(struct device *dev, struct device_attribute *attr,
 
 	return n;
 }
-static DEVICE_ATTR(device, 0400, show_device, NULL);
+static DEVICE_ATTR_RW(device);
+
+static ssize_t driver_store(struct device *dev, struct device_attribute *attr,
+			const char *buf, size_t count)
+{
+	return 0;
+}
 
 /**
  * show_driver: prints information about attached gadget (if any)
  *
  * Check "device.h" for details
  */
-static ssize_t show_driver(struct device *dev, struct device_attribute *attr,
+static ssize_t driver_show(struct device *dev, struct device_attribute *attr,
 			   char *buf)
 {
 	struct ci13xxx *udc = container_of(dev, struct ci13xxx, gadget.dev);
@@ -922,7 +935,7 @@ static ssize_t show_driver(struct device *dev, struct device_attribute *attr,
 
 	return n;
 }
-static DEVICE_ATTR(driver, 0400, show_driver, NULL);
+static DEVICE_ATTR_RW(driver);
 
 /* Maximum event message length */
 #define DBG_DATA_MSG   64UL
@@ -962,9 +975,44 @@ static void dbg_inc(unsigned int *idx)
 
 
 static unsigned int ep_addr_txdbg_mask;
-module_param(ep_addr_txdbg_mask, uint, 0644);
+static ssize_t ep_addr_txdbg_mask_enable_show(struct device *dev,
+	struct device_attribute *attr, char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "%u\n", ep_addr_txdbg_mask);
+}
+
+static ssize_t ep_addr_txdbg_mask_enable_store(struct device *dev,
+	struct device_attribute *attr, const char *buf, size_t count)
+{
+	unsigned int val;
+
+	if (kstrtos32(buf, 0, &val))
+		return -EINVAL;
+	ep_addr_txdbg_mask = val;
+
+	return count;
+}
+static DEVICE_ATTR_RW(ep_addr_txdbg_mask_enable);
+
 static unsigned int ep_addr_rxdbg_mask;
-module_param(ep_addr_rxdbg_mask, uint, 0644);
+static ssize_t ep_addr_rxdbg_mask_enable_show(struct device *dev,
+	struct device_attribute *attr, char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "%u\n", ep_addr_rxdbg_mask);
+}
+
+static ssize_t ep_addr_rxdbg_mask_enable_store(struct device *dev,
+	struct device_attribute *attr, const char *buf, size_t count)
+{
+	unsigned int val;
+
+	if (kstrtos32(buf, 0, &val))
+		return -EINVAL;
+	ep_addr_rxdbg_mask = val;
+
+	return count;
+}
+static DEVICE_ATTR_RW(ep_addr_rxdbg_mask_enable);
 
 static int allow_dbg_print(u8 addr)
 {
@@ -1137,7 +1185,7 @@ static void dbg_usb_op_fail(u8 addr, const char *name,
  *
  * Check "device.h" for details
  */
-static ssize_t show_events(struct device *dev, struct device_attribute *attr,
+static ssize_t events_show(struct device *dev, struct device_attribute *attr,
 			   char *buf)
 {
 	unsigned long flags;
@@ -1173,7 +1221,7 @@ static ssize_t show_events(struct device *dev, struct device_attribute *attr,
  *
  * Check "device.h" for details
  */
-static ssize_t store_events(struct device *dev, struct device_attribute *attr,
+static ssize_t events_store(struct device *dev, struct device_attribute *attr,
 			    const char *buf, size_t count)
 {
 	unsigned int tty;
@@ -1190,19 +1238,19 @@ static ssize_t store_events(struct device *dev, struct device_attribute *attr,
 	}
 
 	dbg_data.tty = tty;
-	dev_info(dev, "tty = %u", dbg_data.tty);
+	dev_info(dev, "tty = %u\n", dbg_data.tty);
 
  done:
 	return count;
 }
-static DEVICE_ATTR(events, 0600, show_events, store_events);
+static DEVICE_ATTR_RW(events);
 
 /**
  * show_inters: interrupt status, enable status and historic
  *
  * Check "device.h" for details
  */
-static ssize_t show_inters(struct device *dev, struct device_attribute *attr,
+static ssize_t inters_show(struct device *dev, struct device_attribute *attr,
 			   char *buf)
 {
 	struct ci13xxx *udc = container_of(dev, struct ci13xxx, gadget.dev);
@@ -1276,7 +1324,7 @@ static ssize_t show_inters(struct device *dev, struct device_attribute *attr,
  *
  * Check "device.h" for details
  */
-static ssize_t store_inters(struct device *dev, struct device_attribute *attr,
+static ssize_t inters_store(struct device *dev, struct device_attribute *attr,
 			    const char *buf, size_t count)
 {
 	struct ci13xxx *udc = container_of(dev, struct ci13xxx, gadget.dev);
@@ -1290,7 +1338,7 @@ static ssize_t store_inters(struct device *dev, struct device_attribute *attr,
 	}
 
 	if (sscanf(buf, "%u %u", &en, &bit) != 2 || en > 1) {
-		dev_err(dev, "<1|0> <bit>: enable|disable interrupt");
+		dev_err(dev, "<1|0> <bit>: enable|disable interrupt\n");
 		goto done;
 	}
 
@@ -1309,14 +1357,14 @@ static ssize_t store_inters(struct device *dev, struct device_attribute *attr,
  done:
 	return count;
 }
-static DEVICE_ATTR(inters, 0600, show_inters, store_inters);
+static DEVICE_ATTR_RW(inters);
 
 /**
  * show_port_test: reads port test mode
  *
  * Check "device.h" for details
  */
-static ssize_t show_port_test(struct device *dev,
+static ssize_t port_test_show(struct device *dev,
 			      struct device_attribute *attr, char *buf)
 {
 	struct ci13xxx *udc = container_of(dev, struct ci13xxx, gadget.dev);
@@ -1341,7 +1389,7 @@ static ssize_t show_port_test(struct device *dev,
  *
  * Check "device.h" for details
  */
-static ssize_t store_port_test(struct device *dev,
+static ssize_t port_test_store(struct device *dev,
 			       struct device_attribute *attr,
 			       const char *buf, size_t count)
 {
@@ -1356,7 +1404,7 @@ static ssize_t store_port_test(struct device *dev,
 	}
 
 	if (kstrtouint(buf, 10, &mode)) {
-		dev_err(dev, "<mode>: set port test mode");
+		dev_err(dev, "<mode>: set port test mode\n");
 		goto done;
 	}
 
@@ -1368,14 +1416,20 @@ static ssize_t store_port_test(struct device *dev,
  done:
 	return count;
 }
-static DEVICE_ATTR(port_test, 0600, show_port_test, store_port_test);
+static DEVICE_ATTR_RW(port_test);
+
+static ssize_t qheads_store(struct device *dev, struct device_attribute *attr,
+			const char *buf, size_t count)
+{
+	return 0;
+}
 
 /**
  * show_qheads: DMA contents of all queue heads
  *
  * Check "device.h" for details
  */
-static ssize_t show_qheads(struct device *dev, struct device_attribute *attr,
+static ssize_t qheads_show(struct device *dev, struct device_attribute *attr,
 			   char *buf)
 {
 	struct ci13xxx *udc = container_of(dev, struct ci13xxx, gadget.dev);
@@ -1407,7 +1461,7 @@ static ssize_t show_qheads(struct device *dev, struct device_attribute *attr,
 
 	return n;
 }
-static DEVICE_ATTR(qheads, 0400, show_qheads, NULL);
+static DEVICE_ATTR_RW(qheads);
 
 /**
  * show_registers: dumps all registers
@@ -1415,7 +1469,7 @@ static DEVICE_ATTR(qheads, 0400, show_qheads, NULL);
  * Check "device.h" for details
  */
 #define DUMP_ENTRIES	512
-static ssize_t show_registers(struct device *dev,
+static ssize_t registers_show(struct device *dev,
 			      struct device_attribute *attr, char *buf)
 {
 	struct ci13xxx *udc = container_of(dev, struct ci13xxx, gadget.dev);
@@ -1452,7 +1506,7 @@ static ssize_t show_registers(struct device *dev,
  *
  * Check "device.h" for details
  */
-static ssize_t store_registers(struct device *dev,
+static ssize_t registers_store(struct device *dev,
 			       struct device_attribute *attr,
 			       const char *buf, size_t count)
 {
@@ -1466,7 +1520,7 @@ static ssize_t store_registers(struct device *dev,
 	}
 
 	if (sscanf(buf, "%li %li", &addr, &data) != 2) {
-		dev_err(dev, "<addr> <data>: write data to register address");
+		dev_err(dev, "<addr> <data>: write data to register address\n");
 		goto done;
 	}
 
@@ -1478,14 +1532,14 @@ static ssize_t store_registers(struct device *dev,
  done:
 	return count;
 }
-static DEVICE_ATTR(registers, 0600, show_registers, store_registers);
+static DEVICE_ATTR_RW(registers);
 
 /**
  * show_requests: DMA contents of all requests currently queued (all endpts)
  *
  * Check "device.h" for details
  */
-static ssize_t show_requests(struct device *dev, struct device_attribute *attr,
+static ssize_t requests_show(struct device *dev, struct device_attribute *attr,
 			     char *buf)
 {
 	struct ci13xxx *udc = container_of(dev, struct ci13xxx, gadget.dev);
@@ -1520,10 +1574,24 @@ static ssize_t show_requests(struct device *dev, struct device_attribute *attr,
 
 	return n;
 }
-static DEVICE_ATTR(requests, 0400, show_requests, NULL);
+
+static ssize_t requests_store(struct device *dev,
+				struct device_attribute *attr,
+				const char *buf, size_t count)
+{
+	return 0;
+}
+
+static DEVICE_ATTR_RW(requests);
+
+static ssize_t prime_show(struct device *dev, struct device_attribute *attr,
+			char *buf)
+{
+	return 0;
+}
 
 /* EP# and Direction */
-static ssize_t prime_ept(struct device *dev,
+static ssize_t prime_store(struct device *dev,
 			       struct device_attribute *attr,
 			       const char *buf, size_t count)
 {
@@ -1534,7 +1602,7 @@ static ssize_t prime_ept(struct device *dev,
 	struct ci13xxx_req *mReq = NULL;
 
 	if (sscanf(buf, "%u %u", &ep_num, &dir) != 2) {
-		dev_err(dev, "<ep_num> <dir>: prime the ep");
+		dev_err(dev, "<ep_num> <dir>: prime the ep\n");
 		goto done;
 	}
 
@@ -1563,10 +1631,17 @@ done:
 	return count;
 
 }
-static DEVICE_ATTR(prime, 0200, NULL, prime_ept);
+static DEVICE_ATTR_RW(prime);
+
+static ssize_t dtds_show(struct device *dev, struct device_attribute *attr,
+			char *buf)
+{
+	return 0;
+}
+
 
 /* EP# and Direction */
-static ssize_t print_dtds(struct device *dev,
+static ssize_t dtds_store(struct device *dev,
 			       struct device_attribute *attr,
 			       const char *buf, size_t count)
 {
@@ -1578,7 +1653,7 @@ static ssize_t print_dtds(struct device *dev,
 	struct ci13xxx_req *req = NULL;
 
 	if (sscanf(buf, "%u %u", &ep_num, &dir) != 2) {
-		dev_err(dev, "<ep_num> <dir>: to print dtds");
+		dev_err(dev, "<ep_num> <dir>: to print dtds\n");
 		goto done;
 	}
 
@@ -1613,7 +1688,7 @@ done:
 	return count;
 
 }
-static DEVICE_ATTR(dtds, 0200, NULL, print_dtds);
+static DEVICE_ATTR_RW(dtds);
 
 static int ci13xxx_wakeup(struct usb_gadget *_gadget)
 {
@@ -1626,7 +1701,7 @@ static int ci13xxx_wakeup(struct usb_gadget *_gadget)
 	spin_lock_irqsave(udc->lock, flags);
 	if (!udc->gadget.remote_wakeup) {
 		ret = -EOPNOTSUPP;
-		dbg_trace("remote wakeup feature is not enabled\n");
+		pr_info("remote wakeup feature is not enabled\n");
 		goto out;
 	}
 	spin_unlock_irqrestore(udc->lock, flags);
@@ -1642,7 +1717,7 @@ static int ci13xxx_wakeup(struct usb_gadget *_gadget)
 	spin_lock_irqsave(udc->lock, flags);
 	if (!hw_cread(CAP_PORTSC, PORTSC_SUSP)) {
 		ret = -EINVAL;
-		dbg_trace("port is not suspended\n");
+		pr_info("port is not suspended\n");
 		pm_runtime_put(&_gadget->dev);
 		goto out;
 	}
@@ -1673,7 +1748,13 @@ static void usb_do_remote_wakeup(struct work_struct *w)
 		ci13xxx_wakeup(&udc->gadget);
 }
 
-static ssize_t usb_remote_wakeup(struct device *dev,
+static ssize_t wakeup_show(struct device *dev, struct device_attribute *attr,
+			char *buf)
+{
+	return 0;
+}
+
+static ssize_t wakeup_store(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t count)
 {
 	struct ci13xxx *udc = container_of(dev, struct ci13xxx, gadget.dev);
@@ -1682,7 +1763,7 @@ static ssize_t usb_remote_wakeup(struct device *dev,
 
 	return count;
 }
-static DEVICE_ATTR(wakeup, 0200, 0, usb_remote_wakeup);
+static DEVICE_ATTR_RW(wakeup);
 
 /**
  * dbg_create_files: initializes the attribute interface
@@ -1729,6 +1810,12 @@ static int __maybe_unused dbg_create_files(struct device *dev)
 	retval = device_create_file(dev, &dev_attr_dtds);
 	if (retval)
 		goto rm_dtds;
+	retval = device_create_file(dev, &dev_attr_ep_addr_txdbg_mask_enable);
+	if (retval)
+		goto rm_txdbg;
+	retval = device_create_file(dev, &dev_attr_ep_addr_rxdbg_mask_enable);
+	if (retval)
+		goto rm_rxdbg;
 
 	return 0;
 
@@ -1752,6 +1839,10 @@ rm_remote_wakeup:
 	device_remove_file(dev, &dev_attr_driver);
  rm_device:
 	device_remove_file(dev, &dev_attr_device);
+ rm_txdbg:
+	device_remove_file(dev, &dev_attr_ep_addr_txdbg_mask_enable);
+ rm_rxdbg:
+	device_remove_file(dev, &dev_attr_ep_addr_rxdbg_mask_enable);
  done:
 	return retval;
 }
@@ -1775,6 +1866,8 @@ static int __maybe_unused dbg_remove_files(struct device *dev)
 	device_remove_file(dev, &dev_attr_driver);
 	device_remove_file(dev, &dev_attr_device);
 	device_remove_file(dev, &dev_attr_wakeup);
+	device_remove_file(dev, &dev_attr_ep_addr_txdbg_mask_enable);
+	device_remove_file(dev, &dev_attr_ep_addr_rxdbg_mask_enable);
 	return 0;
 }
 
@@ -1790,9 +1883,9 @@ static inline u8 _usb_addr(struct ci13xxx_ep *ep)
 	return ((ep->dir == TX) ? USB_ENDPOINT_DIR_MASK : 0) | ep->num;
 }
 
-static void ep_prime_timer_func(unsigned long data)
+static void ep_prime_timer_func(struct timer_list *t)
 {
-	struct ci13xxx_ep *mep = (struct ci13xxx_ep *)data;
+	struct ci13xxx_ep *mep = from_timer(mep, t, prime_timer);
 	struct ci13xxx_req *req;
 	struct list_head *ptr = NULL;
 	int n = hw_ep_bit(mep->num, mep->dir);
@@ -1882,7 +1975,7 @@ static int _hardware_enqueue(struct ci13xxx_ep *mEp, struct ci13xxx_req *mReq)
 	}
 
 	if (mReq->req.zero && length && (length % mEp->ep.maxpacket == 0)) {
-		mReq->zptr = dma_pool_alloc(mEp->td_pool, GFP_ATOMIC,
+		mReq->zptr = dma_pool_zalloc(mEp->td_pool, GFP_ATOMIC,
 					   &mReq->zdma);
 		if (mReq->zptr == NULL) {
 			if (mReq->map) {
@@ -2387,7 +2480,8 @@ __acquires(udc->lock)
 	trace("%pK", udc);
 
 	if (udc == NULL) {
-		err("EINVAL");
+		pr_err("EINVAL\n");
+
 		return;
 	}
 
@@ -2425,7 +2519,7 @@ __acquires(udc->lock)
 
  done:
 	if (retval)
-		err("error: %i", retval);
+		pr_err("error: %i\n", retval);
 }
 
 /**
@@ -2489,12 +2583,13 @@ static void isr_get_status_complete(struct usb_ep *ep, struct usb_request *req)
 	trace("%pK, %pK", ep, req);
 
 	if (ep == NULL || req == NULL) {
-		err("EINVAL");
+		pr_err("EINVAL\n");
+
 		return;
 	}
 
 	if (req->status)
-		err("GET_STATUS failed");
+		pr_err("GET_STATUS failed\n");
 }
 
 /**
@@ -2658,7 +2753,7 @@ dequeue:
 				list_del_init(&mReq->queue);
 				retval = _hardware_enqueue(mEp, mReq);
 				if (retval) {
-					err("Large req failed in middle");
+					pr_err("Large req failed in middle\n");
 					mReq->req.status = retval;
 					restore_original_req(mReq);
 					mEp->multi_req = false;
@@ -2709,7 +2804,8 @@ __acquires(udc->lock)
 	trace("%pK", udc);
 
 	if (udc == NULL) {
-		err("EINVAL");
+		pr_err("EINVAL\n");
+
 		return;
 	}
 
@@ -2731,7 +2827,7 @@ __acquires(udc->lock)
 						  "ERROR", err);
 					spin_unlock(udc->lock);
 					if (usb_ep_set_halt(&mEp->ep))
-						err("error: ep_set_halt");
+						pr_err("error: ep_set_halt\n");
 					spin_lock(udc->lock);
 				}
 			}
@@ -2742,7 +2838,7 @@ __acquires(udc->lock)
 			continue;
 
 		if (i != 0) {
-			warn("ctrl traffic received at endpoint");
+			pr_err("ctrl traffic received at endpoint\n");
 			continue;
 		}
 
@@ -2887,7 +2983,7 @@ delegate:
 
 			spin_unlock(udc->lock);
 			if (usb_ep_set_halt(&mEp->ep))
-				err("error: ep_set_halt");
+				pr_err("error: ep_set_halt\n");
 			spin_lock(udc->lock);
 		}
 	}
@@ -2921,7 +3017,7 @@ static int ep_enable(struct usb_ep *ep,
 	mEp->desc = desc;
 
 	if (!list_empty(&mEp->qh.queue))
-		warn("enabling a non-empty endpoint!");
+		pr_err("enabling a non-empty endpoint!\n");
 
 	mEp->dir  = usb_endpoint_dir_in(desc) ? TX : RX;
 	mEp->num  = usb_endpoint_num(desc);
@@ -3016,7 +3112,8 @@ static struct usb_request *ep_alloc_request(struct usb_ep *ep, gfp_t gfp_flags)
 	trace("%pK, %i", ep, gfp_flags);
 
 	if (ep == NULL) {
-		err("EINVAL");
+		pr_err("EINVAL\n");
+
 		return NULL;
 	}
 
@@ -3052,10 +3149,12 @@ static void ep_free_request(struct usb_ep *ep, struct usb_request *req)
 	trace("%pK, %pK", ep, req);
 
 	if (ep == NULL || req == NULL) {
-		err("EINVAL");
+		pr_err("EINVAL\n");
+
 		return;
 	} else if (!list_empty(&mReq->queue)) {
-		err("EBUSY");
+		pr_err("EBUSY\n");
+
 		return;
 	}
 
@@ -3115,12 +3214,12 @@ static int ep_queue(struct usb_ep *ep, struct usb_request *req,
 		if (!list_empty(&mEp->qh.queue)) {
 			_ep_nuke(mEp);
 			retval = -EOVERFLOW;
-			warn("endpoint ctrl %X nuked", _usb_addr(mEp));
+			pr_err("endpoint ctrl %X nuked\n", _usb_addr(mEp));
 		}
 	}
 
 	if (ep->endless && udc->gadget.speed == USB_SPEED_FULL) {
-		err("Queueing endless req is not supported for FS");
+		pr_err("Queueing endless req is not supported for FS\n");
 		retval = -EINVAL;
 		goto done;
 	}
@@ -3128,25 +3227,25 @@ static int ep_queue(struct usb_ep *ep, struct usb_request *req,
 	/* first nuke then test link, e.g. previous status has not sent */
 	if (!list_empty(&mReq->queue)) {
 		retval = -EBUSY;
-		err("request already in queue");
+		pr_err("request already in queue\n");
 		goto done;
 	}
 	if (mEp->multi_req) {
 		retval = -EAGAIN;
-		err("Large request is in progress. come again");
+		pr_err("Large request is in progress. come again\n");
 		goto done;
 	}
 
 	if (req->length > (4 * CI13XXX_PAGE_SIZE)) {
 		if (!list_empty(&mEp->qh.queue)) {
 			retval = -EAGAIN;
-			err("Queue is busy. Large req is not allowed");
+			pr_err("Queue is busy. Large req is not allowed\n");
 			goto done;
 		}
 		if ((mEp->type != USB_ENDPOINT_XFER_BULK) ||
 				(mEp->dir != RX)) {
 			retval = -EINVAL;
-			err("Larger req is supported only for Bulk OUT");
+			pr_err("Larger req is supported only for Bulk OUT\n");
 			goto done;
 		}
 		mEp->multi_req = true;
@@ -3171,7 +3270,7 @@ static int ep_queue(struct usb_ep *ep, struct usb_request *req,
 		/* Remote Wakeup */
 		if (!udc->gadget.remote_wakeup) {
 
-			dev_dbg(mEp->device, "%s: queue failed (suspend).",
+			dev_dbg(mEp->device, "%s: queue failed (suspend).\n",
 					__func__);
 			dev_dbg(mEp->device, "%s: Remote wakeup is not supported. ept #%d\n",
 					__func__, mEp->num);
@@ -3395,7 +3494,7 @@ static void ep_fifo_flush(struct usb_ep *ep)
 	trace("%pK", ep);
 
 	if (ep == NULL) {
-		err("%02X: -EINVAL", _usb_addr(mEp));
+		pr_err("%02X: -EINVAL\n", _usb_addr(mEp));
 		return;
 	}
 
@@ -3609,7 +3708,7 @@ static int ci13xxx_start(struct usb_gadget *gadget,
 
 	spin_lock_irqsave(udc->lock, flags);
 
-	info("hw_ep_max = %d", hw_ep_max);
+	pr_info("hw_ep_max = %d\n", hw_ep_max);
 
 	udc->gadget.dev.driver = NULL;
 
@@ -3720,7 +3819,8 @@ static irqreturn_t udc_irq(void)
 	trace();
 
 	if (udc == NULL) {
-		err("ENODEV");
+		pr_err("ENODEV\n");
+
 		return IRQ_HANDLED;
 	}
 
@@ -3854,8 +3954,7 @@ static int udc_probe(struct ci13xxx_udc_driver *driver, struct device *dev,
 
 		INIT_LIST_HEAD(&mEp->ep.ep_list);
 		INIT_LIST_HEAD(&mEp->rw_queue);
-		setup_timer(&mEp->prime_timer, ep_prime_timer_func,
-			(unsigned long) mEp);
+		timer_setup(&mEp->prime_timer, ep_prime_timer_func, 0);
 	}
 
 	arch_setup_dma_ops(&udc->gadget.dev, 0, DMA_BIT_MASK(32), NULL, false);
@@ -3967,7 +4066,7 @@ remove_trans:
 	if (udc->transceiver)
 		otg_set_peripheral(udc->transceiver->otg, NULL);
 
-	err("error = %i", retval);
+	pr_err("error = %i\n", retval);
 put_transceiver:
 	if (udc->transceiver)
 		usb_put_phy(udc->transceiver);
@@ -3993,7 +4092,8 @@ static void udc_remove(void)
 	struct ci13xxx *udc = _udc;
 
 	if (udc == NULL) {
-		err("EINVAL");
+		pr_err("EINVAL\n");
+
 		return;
 	}
 

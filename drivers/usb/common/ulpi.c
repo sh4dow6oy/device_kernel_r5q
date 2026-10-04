@@ -1,13 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0
 /**
  * ulpi.c - USB ULPI PHY bus
  *
  * Copyright (C) 2015 Intel Corporation
  *
  * Author: Heikki Krogerus <heikki.krogerus@linux.intel.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/ulpi/interface.h>
@@ -214,7 +211,7 @@ static int ulpi_read_id(struct ulpi *ulpi)
 
 	ret = ulpi_read(ulpi, ULPI_SCRATCH);
 	if (ret < 0)
-		goto err;
+		return ret;
 
 	if (ret != 0xaa)
 		goto err;
@@ -243,6 +240,9 @@ static int ulpi_register(struct device *dev, struct ulpi *ulpi)
 	ulpi->dev.parent = dev; /* needed early for ops */
 	ulpi->dev.bus = &ulpi_bus;
 	ulpi->dev.type = &ulpi_dev_type;
+
+	device_initialize(&ulpi->dev);
+
 	dev_set_name(&ulpi->dev, "%s.ulpi", dev_name(dev));
 
 	ACPI_COMPANION_SET(&ulpi->dev, ACPI_COMPANION(dev));
@@ -252,16 +252,12 @@ static int ulpi_register(struct device *dev, struct ulpi *ulpi)
 		return ret;
 
 	ret = ulpi_read_id(ulpi);
-	if (ret) {
-		of_node_put(ulpi->dev.of_node);
+	if (ret)
 		return ret;
-	}
 
-	ret = device_register(&ulpi->dev);
-	if (ret) {
-		put_device(&ulpi->dev);
+	ret = device_add(&ulpi->dev);
+	if (ret)
 		return ret;
-	}
 
 	dev_dbg(&ulpi->dev, "registered ULPI PHY: vendor %04x, product %04x\n",
 		ulpi->id.vendor, ulpi->id.product);
@@ -291,7 +287,7 @@ struct ulpi *ulpi_register_interface(struct device *dev,
 
 	ret = ulpi_register(dev, ulpi);
 	if (ret) {
-		kfree(ulpi);
+		put_device(&ulpi->dev);
 		return ERR_PTR(ret);
 	}
 

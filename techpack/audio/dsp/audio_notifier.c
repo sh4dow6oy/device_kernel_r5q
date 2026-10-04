@@ -1,13 +1,6 @@
-/* Copyright (c) 2016-2017, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2016-2017, 2021, The Linux Foundation. All rights reserved.
  */
 
 #include <linux/module.h>
@@ -104,8 +97,6 @@ static struct service_info service_data[AUDIO_NOTIFIER_MAX_SERVICES]
 		.nb = NULL
 	} }
 };
-
-static bool audio_notif_drv_registered;
 
 /* Master list of all audio notifier clients */
 struct list_head   client_list;
@@ -543,11 +534,6 @@ int audio_notifier_register(char *client_name, int domain,
 	int ret;
 	struct client_data *client_data;
 
-	if (!audio_notif_drv_registered) {
-		pr_err("%s: driver is not ready. Deferring...\n", __func__);
-		return -EPROBE_DEFER;
-	}
-
 	if (client_name == NULL) {
 		pr_err("%s: client_name is NULL\n", __func__);
 		ret = -EINVAL;
@@ -615,11 +601,12 @@ static int __init audio_notifier_late_init(void)
 	mutex_lock(&notifier_mutex);
 	if (!audio_notifer_is_service_enabled(AUDIO_NOTIFIER_PDR_SERVICE))
 		audio_notifer_reg_all_clients();
-	audio_notif_drv_registered = true;
+
 	mutex_unlock(&notifier_mutex);
 	return 0;
 }
 
+#ifdef CONFIG_MSM_QDSP6_PDR
 static int __init audio_notifier_init(void)
 {
 	int ret;
@@ -638,6 +625,17 @@ static int __init audio_notifier_init(void)
 
 	return 0;
 }
+#else
+static int __init audio_notifier_init(void)
+{
+	audio_notifier_subsys_init();
+	audio_notifer_disable_service(AUDIO_NOTIFIER_PDR_SERVICE);
+
+	audio_notifier_late_init();
+
+	return 0;
+}
+#endif
 module_init(audio_notifier_init);
 
 static void __exit audio_notifier_exit(void)

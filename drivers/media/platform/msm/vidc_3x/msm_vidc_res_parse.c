@@ -1,5 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2012-2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -20,17 +21,14 @@
 #include "msm_vidc_resources.h"
 #include "msm_vidc_res_parse.h"
 #include "venus_boot.h"
-#include <soc/qcom/scm.h>
 #include "soc/qcom/secure_buffer.h"
-#include <asm/cacheflush.h>
 #include <linux/io.h>
-
-#define VENUS_DEVICE_ID 0x0
-#define SECURE_SYSCALL_ID 0x18
 
 enum clock_properties {
 	CLOCK_PROP_HAS_SCALING = 1 << 0,
 };
+
+#define PERF_GOV "performance"
 
 static inline struct device *msm_iommu_get_ctx(const char *ctx_name)
 {
@@ -74,7 +72,23 @@ static inline enum imem_type read_imem_type(struct platform_device *pdev)
 						IMEM_NONE;
 
 }
+static inline void msm_vidc_free_bus_table(
+		struct msm_vidc_platform_resources *res)
+{
+	int i = 0;
+	struct msm_vidc_bus_table_gov *data = res->gov_data;
 
+	if (!data) {
+		dprintk(VIDC_ERR, "%s: invalid args %pK\n",
+			__func__, data);
+	}
+
+	for (i = 0; i < data->count; i++)
+		data->bus_prof_entries[i].bus_table = NULL;
+
+	data->bus_prof_entries = NULL;
+	data->count = 0;
+}
 static inline void msm_vidc_free_allowed_clocks_table(
 		struct msm_vidc_platform_resources *res)
 {
@@ -176,6 +190,7 @@ void msm_vidc_free_platform_resources(
 			struct msm_vidc_platform_resources *res)
 {
 	msm_vidc_free_clock_table(res);
+	msm_vidc_free_bus_table(res);
 	msm_vidc_free_regulator_table(res);
 	msm_vidc_free_freq_table(res);
 	msm_vidc_free_platform_version_table(res);
@@ -491,7 +506,7 @@ static void clock_override(struct platform_device *pdev,
 	}
 
 	config_efuse = readl_relaxed(base);
-	devm_iounmap(&pdev->dev, base);
+	//devm_iounmap(&pdev->dev, base);
 
 	bin = (config_efuse >> platform_res->pf_speedbin_tbl->version_shift) &
 		platform_res->pf_speedbin_tbl->version_mask;
@@ -818,14 +833,12 @@ static int msm_vidc_populate_bus(struct device *dev,
 		goto err_bus;
 	}
 
-	rc = of_property_read_string(dev->of_node, "qcom,bus-governor",
-			&bus->governor);
-	if (rc) {
-		rc = 0;
-		dprintk(VIDC_DBG,
-				"'qcom,bus-governor' not found, default to performance governor\n");
-		bus->governor = "performance";
-	}
+	rc = of_property_read_string(dev->of_node, "qcom,mode",
+			&bus->mode);
+	if (!rc && !strcmp(bus->mode, PERF_GOV))
+		bus->is_prfm_gov_used = true;
+	else
+		bus->is_prfm_gov_used = false;
 
 	rc = of_property_read_u32_array(dev->of_node, "qcom,bus-range-kbps",
 			range, ARRAY_SIZE(range));
@@ -842,8 +855,8 @@ static int msm_vidc_populate_bus(struct device *dev,
 
 	buses->count++;
 	bus->dev = dev;
-	dprintk(VIDC_DBG, "Found bus %s [%d->%d] with governor %s\n",
-			bus->name, bus->master, bus->slave, bus->governor);
+	dprintk(VIDC_DBG, "Found bus %s [%d->%d] with mode %s\n",
+			bus->name, bus->master, bus->slave, bus->mode);
 
 err_bus:
 	return rc;
@@ -1069,7 +1082,108 @@ err_load_clk_prop_fail:
 err_load_clk_table_fail:
 	return rc;
 }
+static int msm_vidc_load_bus_table(struct msm_vidc_platform_resources *res)
+{
+	int rc = 0, i = 0, j = 0;
+	struct bus_profile_entry *entry = NULL;
+	struct device_node *parent_node = NULL;
+	struct device_node *child_node = NULL;
+	struct msm_vidc_bus_table_gov *gov_data;
+	struct platform_device *pdev = res->pdev;
 
+	dprintk(VIDC_DBG, "%s\n", __func__);
+	if (!pdev) {
+		dprintk(VIDC_ERR, "%s: invalid args %pK\n",
+			__func__, pdev);
+		return -EINVAL;
+	}
+
+	res->gov_data = devm_kzalloc(&pdev->dev, sizeof(*gov_data), GFP_KERNEL);
+	if (!res->gov_data) {
+		dprintk(VIDC_ERR, "%s: allocation failed\n", __func__);
+		return -ENOMEM;
+	}
+
+	gov_data = res->gov_data;
+	parent_node = of_find_node_by_name(pdev->dev.of_node,
+			"qcom,bus-freq-table");
+	if (!parent_node) {
+		dprintk(VIDC_DBG, "Node qcom,bus-freq-table not found.\n");
+		return 0;
+	}
+
+	gov_data->count = of_get_child_count(parent_node);
+	if (!gov_data->count) {
+		dprintk(VIDC_DBG, "No child nodes in qcom,bus-freq-table\n");
+		return 0;
+	}
+
+	gov_data->bus_prof_entries = devm_kzalloc(&pdev->dev,
+			sizeof(*gov_data->bus_prof_entries) * gov_data->count,
+			GFP_KERNEL);
+	if (!gov_data->bus_prof_entries) {
+		dprintk(VIDC_DBG, "no memory to allocate bus_prof_entries\n");
+		return -ENOMEM;
+	}
+
+	for_each_child_of_node(parent_node, child_node) {
+
+		if (i >= gov_data->count) {
+			dprintk(VIDC_ERR,
+				"qcom,bus-freq-table: invalid child node %d, max is %d\n",
+				i, gov_data->count);
+			break;
+		}
+		entry = &gov_data->bus_prof_entries[i];
+
+		if (of_find_property(child_node, "qcom,codec-mask", NULL)) {
+			rc = of_property_read_u32(child_node,
+					"qcom,codec-mask", &entry->codec_mask);
+			if (rc) {
+				dprintk(VIDC_ERR,
+					"qcom,codec-mask not found\n");
+				break;
+			}
+		}
+
+		if (of_find_property(child_node, "qcom,low-power-mode", NULL))
+			entry->profile = VIDC_BUS_PROFILE_LOW;
+		else if (of_find_property(child_node, "qcom,ubwc-mode", NULL))
+			entry->profile = VIDC_BUS_PROFILE_UBWC;
+		else
+			entry->profile = VIDC_BUS_PROFILE_NORMAL;
+
+		if (of_find_property(child_node,
+					"qcom,load-busfreq-tbl", NULL)) {
+			rc = msm_vidc_load_u32_table(pdev, child_node,
+						"qcom,load-busfreq-tbl",
+						sizeof(*entry->bus_table),
+						(u32 **)&entry->bus_table,
+						&entry->bus_table_size);
+			if (rc) {
+				dprintk(VIDC_ERR,
+					"qcom,load-busfreq-tbl failed\n");
+				break;
+			}
+		} else {
+			entry->bus_table = NULL;
+			entry->bus_table_size = 0;
+		}
+
+		dprintk(VIDC_DBG,
+			"qcom,load-busfreq-tbl: size %d, codec_mask %#x, profile %#x\n",
+			entry->bus_table_size, entry->codec_mask,
+			entry->profile);
+		for (j = 0; j < entry->bus_table_size; j++)
+			dprintk(VIDC_DBG, "   load %8d freq %8d\n",
+				entry->bus_table[j].load,
+				entry->bus_table[j].freq);
+
+		i++;
+	}
+
+	return rc;
+}
 int read_platform_resources_from_dt(
 		struct msm_vidc_platform_resources *res)
 {
@@ -1189,6 +1303,13 @@ int read_platform_resources_from_dt(
 		goto err_load_allowed_clocks_table;
 	}
 
+	rc = msm_vidc_load_bus_table(res);
+	if (rc) {
+		dprintk(VIDC_ERR,
+			"Failed to load bus table: %d\n", rc);
+		goto err_load_bus_table;
+	}
+
 	rc = of_property_read_u32(pdev->dev.of_node, "qcom,max-hw-load",
 			&res->max_load);
 	if (rc) {
@@ -1220,9 +1341,6 @@ int read_platform_resources_from_dt(
 	dprintk(VIDC_DBG, "Power collapse supported = %s\n",
 		res->sw_power_collapsible ? "yes" : "no");
 
-	res->never_unload_fw = of_property_read_bool(pdev->dev.of_node,
-			"qcom,never-unload-fw");
-
 	of_property_read_u32(pdev->dev.of_node,
 			"qcom,pm-qos-latency-us", &res->pm_qos_latency_us);
 
@@ -1240,6 +1358,8 @@ int read_platform_resources_from_dt(
 err_setup_legacy_cb:
 err_load_max_hw_load:
 	msm_vidc_free_allowed_clocks_table(res);
+err_load_bus_table:
+	msm_vidc_free_bus_table(res);
 err_load_allowed_clocks_table:
 	msm_vidc_free_cycles_per_mb_table(res);
 err_load_cycles_per_mb_table:
@@ -1255,78 +1375,11 @@ err_load_reg_table:
 err_load_freq_table:
 	return rc;
 }
-
-static int get_secure_vmid(struct context_bank_info *cb)
-{
-	if (!strcasecmp(cb->name, "venus_sec_bitstream"))
-		return VMID_CP_BITSTREAM;
-	else if (!strcasecmp(cb->name, "venus_sec_pixel"))
-		return VMID_CP_PIXEL;
-	else if (!strcasecmp(cb->name, "venus_sec_non_pixel"))
-		return VMID_CP_NON_PIXEL;
-
-	WARN(1, "No matching secure vmid for cb name: %s\n",
-		cb->name);
-	return VMID_INVAL;
-}
-
-static int msm_vidc_switch_vmid(int vmid, struct context_bank_info *cb)
-{
-	struct scm_desc desc = {0};
-	uint32_t *sid_info = NULL;
-	int rc = 0;
-
-	if (!cb) {
-		dprintk(VIDC_ERR, "%s: invalid context bank device\n",
-			__func__);
-		return -EIO;
-	}
-
-	sid_info = kzalloc(sizeof(uint32_t) * cb->num_sids, GFP_KERNEL);
-	if (!sid_info) {
-		dprintk(VIDC_ERR, "%s: memory allocation failred\n",
-			__func__);
-		return -ENOMEM;
-	}
-
-	memcpy(sid_info, &cb->sids, sizeof(uint32_t) * cb->num_sids);
-	desc.arginfo = SCM_ARGS(4, SCM_VAL, SCM_RW, SCM_VAL, SCM_VAL);
-	desc.args[0] = VENUS_DEVICE_ID;
-	desc.args[1] = SCM_BUFFER_PHYS(sid_info);
-	desc.args[2] = sizeof(uint32_t) * cb->num_sids;
-	desc.args[3] = vmid;
-
-	dmac_flush_range(sid_info, sid_info + 1);
-	if (scm_call2(SCM_SIP_FNID(SCM_SVC_MP, SECURE_SYSCALL_ID), &desc)) {
-		dprintk(VIDC_ERR, "call to hypervisor failed\n");
-		rc = -EINVAL;
-	}
-	dprintk(VIDC_DBG, "%s switched to 0x%x vmid\n", cb->name, vmid);
-	kfree(sid_info);
-
-	return rc;
-}
-
-static void msm_vidc_detach_context_banks(
-		struct msm_vidc_platform_resources *res)
-{
-	struct context_bank_info *cb = NULL;
-
-	list_for_each_entry(cb, &res->context_banks, list) {
-		arm_iommu_detach_device(cb->dev);
-		if (cb->mapping)
-			arm_iommu_release_mapping(cb->mapping);
-	}
-}
-
 static int msm_vidc_setup_context_bank(struct context_bank_info *cb,
-		struct device *dev, int cma_enable)
+		struct device *dev)
 {
 	int rc = 0;
-	int secure_vmid = VMID_INVAL;
 	struct bus_type *bus;
-	u32 start_addr = 0, pool_size = 0;
-	int s1_bypass = 1;
 
 	if (!dev || !cb) {
 		dprintk(VIDC_ERR,
@@ -1342,53 +1395,7 @@ static int msm_vidc_setup_context_bank(struct context_bank_info *cb,
 		goto remove_cb;
 	}
 
-	if (cma_enable) {
-		start_addr = cb->cma.addr_range.start;
-		pool_size = cb->cma.addr_range.size;
-	} else {
-		start_addr = cb->addr_range.start;
-		pool_size = cb->addr_range.size;
-	}
-
-	cb->mapping = arm_iommu_create_mapping(bus, start_addr, pool_size);
-	if (IS_ERR_OR_NULL(cb->mapping)) {
-		dprintk(VIDC_ERR, "%s - failed to create mapping\n", __func__);
-		rc = PTR_ERR(cb->mapping) ?: -ENODEV;
-		goto remove_cb;
-	}
-
-	if (cb->is_secure) {
-		secure_vmid = get_secure_vmid(cb);
-		if (cma_enable && cb->cma.s1_bypass)
-			secure_vmid = VMID_CP_CAMERA_ENCODE;
-		rc = iommu_domain_set_attr(cb->mapping->domain,
-				DOMAIN_ATTR_SECURE_VMID, &secure_vmid);
-		if (rc) {
-			dprintk(VIDC_ERR,
-				"%s - programming secure vmid failed: %s 0x%x\n",
-				__func__, dev_name(dev), rc);
-			goto release_mapping;
-		}
-	}
-
-	if (cma_enable && cb->cma.s1_bypass) {
-		s1_bypass = cb->cma.s1_bypass;
-		rc = iommu_domain_set_attr(cb->mapping->domain,
-			DOMAIN_ATTR_S1_BYPASS, &s1_bypass);
-		if (rc) {
-			dprintk(VIDC_ERR,
-				"%s S1 bypass failed rc %d ", __func__, rc);
-
-			goto release_mapping;
-		}
-	}
-
-	rc = arm_iommu_attach_device(cb->dev, cb->mapping);
-	if (rc) {
-		dprintk(VIDC_ERR, "%s - Couldn't arm_iommu_attach_device\n",
-			__func__);
-		goto release_mapping;
-	}
+	cb->domain = iommu_get_domain_for_dev(cb->dev);
 
 	/*
 	 * configure device segment size and segment boundary to ensure
@@ -1401,17 +1408,14 @@ static int msm_vidc_setup_context_bank(struct context_bank_info *cb,
 	dma_set_max_seg_size(dev, DMA_BIT_MASK(32));
 	dma_set_seg_boundary(dev, (unsigned long)DMA_BIT_MASK(64));
 
-	dprintk(VIDC_DBG, "Attached %s and created mapping cma status %d\n",
-			dev_name(dev), cma_enable);
+	dprintk(VIDC_DBG, "Attached %s and created mapping\n", dev_name(dev));
 	dprintk(VIDC_DBG,
 		"Context bank name:%s, buffer_type: %#x, is_secure: %d, address range start: %#x, size: %#x, dev: %pK, mapping: %pK",
-		cb->name, cb->buffer_type, cb->is_secure, start_addr,
-		pool_size, cb->dev, cb->mapping);
+		cb->name, cb->buffer_type, cb->is_secure, cb->addr_range.start,
+		cb->addr_range.size, cb->dev, cb->domain);
 
 	return rc;
 
-release_mapping:
-	arm_iommu_release_mapping(cb->mapping);
 remove_cb:
 	return rc;
 }
@@ -1504,7 +1508,6 @@ static int msm_vidc_populate_context_bank(struct device *dev,
 	int rc = 0;
 	struct context_bank_info *cb = NULL;
 	struct device_node *np = NULL;
-	unsigned int i = 0, j = 0, count = 0;
 
 	if (!dev || !core) {
 		dprintk(VIDC_ERR, "%s - invalid inputs\n", __func__);
@@ -1527,21 +1530,8 @@ static int msm_vidc_populate_context_bank(struct device *dev,
 			"Failed to read cb label from device tree\n");
 		rc = 0;
 	}
+
 	dprintk(VIDC_DBG, "%s: context bank has name %s\n", __func__, cb->name);
-	of_get_property(np, "iommus", &count);
-	memset(&cb->sids, -1, sizeof(cb->sids));
-	count /= 4;
-	for (i = 1, j = 0 ; i < count; i = i+2, j++) {
-		rc = of_property_read_u32_index(dev->of_node,
-			"iommus", i, &cb->sids[j]);
-		if (rc < 0)
-			dprintk(VIDC_ERR, "can't fetch SID\n");
-
-		dprintk(VIDC_DBG,
-			"%s sid[%d]:0x%x\n",  cb->name, j, cb->sids[j]);
-	}
-	cb->num_sids = j;
-
 	rc = of_property_read_u32_array(np, "virtual-addr-pool",
 			(u32 *)&cb->addr_range, 2);
 	if (rc) {
@@ -1550,13 +1540,6 @@ static int msm_vidc_populate_context_bank(struct device *dev,
 			cb->name, rc);
 		goto err_setup_cb;
 	}
-
-	rc = of_property_read_u32_array(np, "cma-addr-pool",
-			(u32 *)&cb->cma.addr_range, 2);
-
-	cb->cma.s1_bypass = of_property_read_bool(np, "qcom,cma-s1-bypass");
-	if (cb->cma.s1_bypass && !rc)
-		core->resources.cma_exist = true;
 
 	cb->is_secure = of_property_read_bool(np, "qcom,secure-context-bank");
 	dprintk(VIDC_DBG, "context bank %s : secure = %d\n",
@@ -1570,18 +1553,17 @@ static int msm_vidc_populate_context_bank(struct device *dev,
 		goto err_setup_cb;
 	}
 	dprintk(VIDC_DBG,
-		"context bank %s address start = %x size = %x cma address start = %x size = %x s1 bypass = %d buffer_type = %x\n",
-		cb->name, cb->addr_range.start, cb->addr_range.size,
-		cb->cma.addr_range.start, cb->cma.addr_range.size,
-		cb->cma.s1_bypass, cb->buffer_type);
+		"context bank %s address start = %x address size = %x buffer_type = %x\n",
+		cb->name, cb->addr_range.start,
+		cb->addr_range.size, cb->buffer_type);
 
-	rc = msm_vidc_setup_context_bank(cb, dev, false);
+	rc = msm_vidc_setup_context_bank(cb, dev);
 	if (rc) {
 		dprintk(VIDC_ERR, "Cannot setup context bank %d\n", rc);
 		goto err_setup_cb;
 	}
 
-	iommu_set_fault_handler(cb->mapping->domain,
+	iommu_set_fault_handler(cb->domain,
 		msm_vidc_smmu_fault_handler, (void *)core);
 
 	return 0;
@@ -1672,7 +1654,7 @@ static int msm_vidc_populate_legacy_context_bank(
 			goto err_setup_cb;
 		}
 
-		rc = msm_vidc_setup_context_bank(cb, cb->dev, false);
+		rc = msm_vidc_setup_context_bank(cb, cb->dev);
 		if (rc) {
 			dprintk(VIDC_ERR, "Cannot setup context bank %d\n", rc);
 			goto err_setup_cb;
@@ -1758,43 +1740,4 @@ int read_bus_resources_from_dt(struct platform_device *pdev)
 	}
 
 	return msm_vidc_populate_bus(&pdev->dev, &core->resources);
-}
-
-int msm_vidc_enable_cma(struct msm_vidc_platform_resources *res, bool enable)
-{
-	int rc;
-	int secure_vmid = VMID_INVAL;
-	struct context_bank_info *cb = NULL;
-
-	dprintk(VIDC_DBG, "%s: In enable status %d\n", __func__, enable);
-
-	msm_vidc_detach_context_banks(res);
-	list_for_each_entry(cb, &res->context_banks, list) {
-		if (cb->is_secure && cb->cma.s1_bypass) {
-			if (enable) {
-				rc = msm_vidc_switch_vmid(VMID_CP_CAMERA_ENCODE,
-						cb);
-				if (rc) {
-					dprintk(VIDC_ERR,
-						"failed SID switching\n");
-					goto detach_cb;
-				}
-			} else {
-				secure_vmid = get_secure_vmid(cb);
-				rc = msm_vidc_switch_vmid(secure_vmid, cb);
-				if (rc)
-					goto detach_cb;
-			}
-		}
-		rc = msm_vidc_setup_context_bank(cb, cb->dev, enable);
-		if (rc)
-			goto detach_cb;
-	}
-
-	return rc;
-
-detach_cb:
-	dprintk(VIDC_DBG, "%s: - failed %d\n", __func__, enable);
-	msm_vidc_detach_context_banks(res);
-	return rc;
 }

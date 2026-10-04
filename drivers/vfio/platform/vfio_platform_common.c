@@ -17,6 +17,7 @@
 #include <linux/iommu.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
+#include <linux/pm_runtime.h>
 #include <linux/slab.h>
 #include <linux/types.h>
 #include <linux/uaccess.h>
@@ -238,6 +239,7 @@ static void vfio_platform_release(void *device_data)
 				 ret, extra_dbg ? extra_dbg : "");
 			WARN_ON(1);
 		}
+		pm_runtime_put(vdev->device);
 		vfio_platform_regions_cleanup(vdev);
 		vfio_platform_irq_cleanup(vdev);
 	}
@@ -268,6 +270,10 @@ static int vfio_platform_open(void *device_data)
 		if (ret)
 			goto err_irq;
 
+		ret = pm_runtime_get_sync(vdev->device);
+		if (ret < 0)
+			goto err_rst;
+
 		ret = vfio_platform_call_reset(vdev, &extra_dbg);
 		if (ret && vdev->reset_required) {
 			dev_warn(vdev->device, "reset driver is required and reset call failed in open (%d) %s\n",
@@ -282,6 +288,7 @@ static int vfio_platform_open(void *device_data)
 	return 0;
 
 err_rst:
+	pm_runtime_put(vdev->device);
 	vfio_platform_irq_cleanup(vdev);
 err_irq:
 	vfio_platform_regions_cleanup(vdev);
@@ -404,6 +411,11 @@ static ssize_t vfio_platform_read_mmio(struct vfio_platform_region *reg,
 {
 	unsigned int done = 0;
 
+	if (off >= reg->size)
+		return -EINVAL;
+
+	count = min_t(size_t, count, reg->size - off);
+
 	if (!reg->ioaddr) {
 		reg->ioaddr =
 			ioremap_nocache(reg->addr, reg->size);
@@ -480,6 +492,11 @@ static ssize_t vfio_platform_write_mmio(struct vfio_platform_region *reg,
 					loff_t off)
 {
 	unsigned int done = 0;
+
+	if (off >= reg->size)
+		return -EINVAL;
+
+	count = min_t(size_t, count, reg->size - off);
 
 	if (!reg->ioaddr) {
 		reg->ioaddr =
@@ -629,8 +646,7 @@ static int vfio_platform_of_probe(struct vfio_platform_device *vdev,
 	ret = device_property_read_string(dev, "compatible",
 					  &vdev->compat);
 	if (ret)
-		pr_err("VFIO: cannot retrieve compat for %s\n",
-			vdev->name);
+		pr_err("VFIO: Cannot retrieve compat for %s\n", vdev->name);
 
 	return ret;
 }
@@ -672,7 +688,7 @@ int vfio_platform_probe_common(struct vfio_platform_device *vdev,
 
 	ret = vfio_platform_get_reset(vdev);
 	if (ret && vdev->reset_required) {
-		pr_err("vfio: no reset function found for device %s\n",
+		pr_err("VFIO: No reset function found for device %s\n",
 		       vdev->name);
 		return ret;
 	}
@@ -690,6 +706,7 @@ int vfio_platform_probe_common(struct vfio_platform_device *vdev,
 
 	mutex_init(&vdev->igate);
 
+	pm_runtime_enable(vdev->device);
 	return 0;
 
 put_iommu:
@@ -707,6 +724,7 @@ struct vfio_platform_device *vfio_platform_remove_common(struct device *dev)
 	vdev = vfio_del_group_dev(dev);
 
 	if (vdev) {
+		pm_runtime_disable(vdev->device);
 		vfio_platform_put_reset(vdev);
 		vfio_iommu_group_put(dev->iommu_group, dev);
 	}

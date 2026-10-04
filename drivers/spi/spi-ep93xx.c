@@ -625,6 +625,7 @@ fail_release_rx:
 	espi->dma_rx = NULL;
 fail_free_page:
 	free_page((unsigned long)espi->zeropage);
+	espi->zeropage = NULL;
 
 	return ret;
 }
@@ -685,8 +686,8 @@ static int ep93xx_spi_probe(struct platform_device *pdev)
 	master->bits_per_word_mask = SPI_BPW_RANGE_MASK(4, 16);
 
 	master->num_chipselect = info->num_chipselect;
-	master->cs_gpios = devm_kzalloc(&master->dev,
-					sizeof(int) * master->num_chipselect,
+	master->cs_gpios = devm_kcalloc(&master->dev,
+					master->num_chipselect, sizeof(int),
 					GFP_KERNEL);
 	if (!master->cs_gpios) {
 		error = -ENOMEM;

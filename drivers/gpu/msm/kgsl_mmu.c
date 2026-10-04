@@ -1,33 +1,14 @@
-/* Copyright (c) 2002,2007-2017,2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2002,2007-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
  */
-#include <linux/export.h>
-#include <linux/types.h>
-#include <linux/device.h>
-#include <linux/spinlock.h>
-#include <linux/genalloc.h>
+
 #include <linux/slab.h>
-#include <linux/sched.h>
-#include <linux/types.h>
 
-#include "kgsl.h"
-#include "kgsl_mmu.h"
 #include "kgsl_device.h"
+#include "kgsl_mmu.h"
 #include "kgsl_sharedmem.h"
-
-#if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
-#include <linux/delay.h>
-#endif
 
 static void pagetable_remove_sysfs_objects(struct kgsl_pagetable *pagetable);
 
@@ -103,7 +84,7 @@ sysfs_show_entries(struct kobject *kobj,
 	if (pt) {
 		unsigned int val = atomic_read(&pt->stats.entries);
 
-		ret += snprintf(buf, PAGE_SIZE, "%d\n", val);
+		ret += scnprintf(buf, PAGE_SIZE, "%d\n", val);
 	}
 
 	kgsl_put_pagetable(pt);
@@ -123,7 +104,7 @@ sysfs_show_mapped(struct kobject *kobj,
 	if (pt) {
 		uint64_t val = atomic_long_read(&pt->stats.mapped);
 
-		ret += snprintf(buf, PAGE_SIZE, "%llu\n", val);
+		ret += scnprintf(buf, PAGE_SIZE, "%llu\n", val);
 	}
 
 	kgsl_put_pagetable(pt);
@@ -143,7 +124,7 @@ sysfs_show_max_mapped(struct kobject *kobj,
 	if (pt) {
 		uint64_t val = atomic_long_read(&pt->stats.max_mapped);
 
-		ret += snprintf(buf, PAGE_SIZE, "%llu\n", val);
+		ret += scnprintf(buf, PAGE_SIZE, "%llu\n", val);
 	}
 
 	kgsl_put_pagetable(pt);
@@ -399,9 +380,6 @@ kgsl_mmu_map(struct kgsl_pagetable *pagetable,
 				struct kgsl_memdesc *memdesc)
 {
 	int size;
-#if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
-	int retry_cnt;
-#endif
 
 	if (!memdesc->gpuaddr)
 		return -EINVAL;
@@ -419,22 +397,6 @@ kgsl_mmu_map(struct kgsl_pagetable *pagetable,
 		int ret;
 
 		ret = pagetable->pt_ops->mmu_map(pagetable, memdesc);
-
-#if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
-		if (ret != 0 && !in_interrupt()) {
-			for (retry_cnt = 0; retry_cnt < 62 ; retry_cnt++) {
-				/* To wait free page by memory reclaim*/
-				usleep_range(16000, 16000);
-
-				pr_err("kgsl_mmu_map failed : retry (%d) ret : %d\n", retry_cnt, ret);
-				
-				ret = pagetable->pt_ops->mmu_map(pagetable, memdesc);
-				if (ret == 0)
-					break;
-			}
-		}
-#endif
-
 		if (ret)
 			return ret;
 
@@ -463,7 +425,9 @@ void kgsl_mmu_put_gpuaddr(struct kgsl_memdesc *memdesc)
 	if (memdesc->size == 0 || memdesc->gpuaddr == 0)
 		return;
 
-	if (!kgsl_memdesc_is_global(memdesc) && (KGSL_MEMDESC_MAPPED & memdesc->priv))
+	if (!kgsl_memdesc_is_global(memdesc) &&
+			!kgsl_memdesc_is_reclaimed(memdesc) &&
+			(KGSL_MEMDESC_MAPPED & memdesc->priv))
 		unmap_fail = kgsl_mmu_unmap(pagetable, memdesc);
 
 	/*
@@ -481,6 +445,7 @@ void kgsl_mmu_put_gpuaddr(struct kgsl_memdesc *memdesc)
 	 * gpuaddr returns to zero so we shouldn't need to worry about taking a
 	 * lock here
 	 */
+
 	if (!kgsl_memdesc_is_global(memdesc))
 		memdesc->gpuaddr = 0;
 
@@ -642,7 +607,7 @@ bool kgsl_mmu_gpuaddr_in_range(struct kgsl_pagetable *pagetable,
 {
 	if (PT_OP_VALID(pagetable, addr_in_range))
 		return pagetable->pt_ops->addr_in_range(pagetable,
-				gpuaddr, size);
+			 gpuaddr, size);
 
 	return false;
 }
@@ -686,11 +651,9 @@ static bool nommu_gpuaddr_in_range(struct kgsl_pagetable *pagetable,
 static int nommu_get_gpuaddr(struct kgsl_pagetable *pagetable,
 		struct kgsl_memdesc *memdesc)
 {
-	if (memdesc->sgt->nents > 1) {
-		WARN_ONCE(1,
-			"Attempt to map non-contiguous memory with NOMMU\n");
+	if (WARN_ONCE(memdesc->sgt->nents > 1,
+		"Attempt to map non-contiguous memory with NOMMU\n"))
 		return -EINVAL;
-	}
 
 	memdesc->gpuaddr = (uint64_t) sg_phys(memdesc->sgt->sgl);
 
@@ -775,31 +738,10 @@ static struct {
 	{ "nommu", KGSL_MMU_TYPE_NONE, &kgsl_nommu_ops },
 };
 
-int kgsl_mmu_probe(struct kgsl_device *device, char *mmutype)
+int kgsl_mmu_probe(struct kgsl_device *device)
 {
 	struct kgsl_mmu *mmu = &device->mmu;
 	int ret, i;
-
-	if (mmutype != NULL) {
-		for (i = 0; i < ARRAY_SIZE(kgsl_mmu_subtypes); i++) {
-			if (strcmp(kgsl_mmu_subtypes[i].name, mmutype))
-				continue;
-
-			ret = kgsl_mmu_subtypes[i].ops->probe(device);
-
-			if (ret == 0) {
-				mmu->type = kgsl_mmu_subtypes[i].type;
-				mmu->mmu_ops = kgsl_mmu_subtypes[i].ops;
-
-				if (MMU_OP_VALID(mmu, mmu_init))
-					return mmu->mmu_ops->mmu_init(mmu);
-			}
-
-			return ret;
-		}
-
-		KGSL_CORE_ERR("mmu: MMU type '%s' unknown\n", mmutype);
-	}
 
 	for (i = 0; i < ARRAY_SIZE(kgsl_mmu_subtypes); i++) {
 		ret = kgsl_mmu_subtypes[i].ops->probe(device);
@@ -815,7 +757,7 @@ int kgsl_mmu_probe(struct kgsl_device *device, char *mmutype)
 		}
 	}
 
-	KGSL_CORE_ERR("mmu: couldn't detect any known MMU types\n");
+	dev_err(device->dev, "mmu: couldn't detect any known MMU types\n");
 	return -ENODEV;
 }
 EXPORT_SYMBOL(kgsl_mmu_probe);

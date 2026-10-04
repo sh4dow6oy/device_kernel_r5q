@@ -142,8 +142,10 @@ static struct phy_provider *of_phy_provider_lookup(struct device_node *node)
 			return phy_provider;
 
 		for_each_child_of_node(phy_provider->children, child)
-			if (child == node)
+			if (child == node) {
+				of_node_put(child);
 				return phy_provider;
+			}
 	}
 
 	return ERR_PTR(-EPROBE_DEFER);
@@ -152,6 +154,9 @@ static struct phy_provider *of_phy_provider_lookup(struct device_node *node)
 int phy_pm_runtime_get(struct phy *phy)
 {
 	int ret;
+
+	if (!phy)
+		return 0;
 
 	if (!pm_runtime_enabled(&phy->dev))
 		return -ENOTSUPP;
@@ -168,6 +173,9 @@ int phy_pm_runtime_get_sync(struct phy *phy)
 {
 	int ret;
 
+	if (!phy)
+		return 0;
+
 	if (!pm_runtime_enabled(&phy->dev))
 		return -ENOTSUPP;
 
@@ -181,6 +189,9 @@ EXPORT_SYMBOL_GPL(phy_pm_runtime_get_sync);
 
 int phy_pm_runtime_put(struct phy *phy)
 {
+	if (!phy)
+		return 0;
+
 	if (!pm_runtime_enabled(&phy->dev))
 		return -ENOTSUPP;
 
@@ -190,6 +201,9 @@ EXPORT_SYMBOL_GPL(phy_pm_runtime_put);
 
 int phy_pm_runtime_put_sync(struct phy *phy)
 {
+	if (!phy)
+		return 0;
+
 	if (!pm_runtime_enabled(&phy->dev))
 		return -ENOTSUPP;
 
@@ -199,6 +213,9 @@ EXPORT_SYMBOL_GPL(phy_pm_runtime_put_sync);
 
 void phy_pm_runtime_allow(struct phy *phy)
 {
+	if (!phy)
+		return;
+
 	if (!pm_runtime_enabled(&phy->dev))
 		return;
 
@@ -208,6 +225,9 @@ EXPORT_SYMBOL_GPL(phy_pm_runtime_allow);
 
 void phy_pm_runtime_forbid(struct phy *phy)
 {
+	if (!phy)
+		return;
+
 	if (!pm_runtime_enabled(&phy->dev))
 		return;
 
@@ -308,13 +328,9 @@ err_pwr_on:
 	mutex_unlock(&phy->mutex);
 	phy_pm_runtime_put_sync(phy);
 err_pm_sync:
-	dev_err(&phy->dev, "phy err_pm_sync --> %d\n", ret);
 	if (phy->pwr)
 		regulator_disable(phy->pwr);
 out:
-	if (phy && phy->pwr)
-		dev_err(&phy->dev, "phy regulator is %s --> %d\n",
-				regulator_is_enabled(phy->pwr) ? "on" : "off", ret);
 	return ret;
 }
 EXPORT_SYMBOL_GPL(phy_power_on);
@@ -355,6 +371,8 @@ int phy_set_mode(struct phy *phy, enum phy_mode mode)
 
 	mutex_lock(&phy->mutex);
 	ret = phy->ops->set_mode(phy, mode);
+	if (!ret)
+		phy->attrs.mode = mode;
 	mutex_unlock(&phy->mutex);
 
 	return ret;
@@ -375,6 +393,21 @@ int phy_reset(struct phy *phy)
 	return ret;
 }
 EXPORT_SYMBOL_GPL(phy_reset);
+
+int phy_calibrate(struct phy *phy)
+{
+	int ret;
+
+	if (!phy || !phy->ops->calibrate)
+		return 0;
+
+	mutex_lock(&phy->mutex);
+	ret = phy->ops->calibrate(phy);
+	mutex_unlock(&phy->mutex);
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(phy_calibrate);
 
 /**
  * _of_phy_get() - lookup and obtain a reference to a phy by phandle
@@ -400,8 +433,10 @@ static struct phy *_of_phy_get(struct device_node *np, int index)
 		return ERR_PTR(-ENODEV);
 
 	/* This phy type handled by the usb-phy subsystem for now */
-	if (of_device_is_compatible(args.np, "usb-nop-xceiv"))
-		return ERR_PTR(-ENODEV);
+	if (of_device_is_compatible(args.np, "usb-nop-xceiv")) {
+		phy = ERR_PTR(-ENODEV);
+		goto out_put_node;
+	}
 
 	mutex_lock(&phy_provider_mutex);
 	phy_provider = of_phy_provider_lookup(args.np);
@@ -423,6 +458,7 @@ out_put_module:
 
 out_unlock:
 	mutex_unlock(&phy_provider_mutex);
+out_put_node:
 	of_node_put(args.np);
 
 	return phy;
@@ -489,7 +525,7 @@ void devm_phy_put(struct device *dev, struct phy *phy)
 	if (!phy)
 		return;
 
-	r = devres_destroy(dev, devm_phy_release, devm_phy_match, phy);
+	r = devres_release(dev, devm_phy_release, devm_phy_match, phy);
 	dev_WARN_ONCE(dev, r, "couldn't find PHY resource\n");
 }
 EXPORT_SYMBOL_GPL(devm_phy_put);
@@ -578,7 +614,7 @@ struct phy *phy_optional_get(struct device *dev, const char *string)
 {
 	struct phy *phy = phy_get(dev, string);
 
-	if (IS_ERR(phy) && (PTR_ERR(phy) == -ENODEV))
+	if (PTR_ERR(phy) == -ENODEV)
 		phy = NULL;
 
 	return phy;
@@ -632,7 +668,7 @@ struct phy *devm_phy_optional_get(struct device *dev, const char *string)
 {
 	struct phy *phy = devm_phy_get(dev, string);
 
-	if (IS_ERR(phy) && (PTR_ERR(phy) == -ENODEV))
+	if (PTR_ERR(phy) == -ENODEV)
 		phy = NULL;
 
 	return phy;
@@ -841,7 +877,7 @@ void devm_phy_destroy(struct device *dev, struct phy *phy)
 {
 	int r;
 
-	r = devres_destroy(dev, devm_phy_consume, devm_phy_match, phy);
+	r = devres_release(dev, devm_phy_consume, devm_phy_match, phy);
 	dev_WARN_ONCE(dev, r, "couldn't find PHY resource\n");
 }
 EXPORT_SYMBOL_GPL(devm_phy_destroy);
@@ -977,11 +1013,12 @@ EXPORT_SYMBOL_GPL(of_phy_provider_unregister);
  * of_phy_provider_unregister to unregister the phy provider.
  */
 void devm_of_phy_provider_unregister(struct device *dev,
-	struct phy_provider *phy_provider) {
+				     struct phy_provider *phy_provider)
+{
 	int r;
 
-	r = devres_destroy(dev, devm_phy_provider_release, devm_phy_match,
-		phy_provider);
+	r = devres_release(dev, devm_phy_provider_release, devm_phy_match,
+			   phy_provider);
 	dev_WARN_ONCE(dev, r, "couldn't find PHY provider device resource\n");
 }
 EXPORT_SYMBOL_GPL(devm_of_phy_provider_unregister);

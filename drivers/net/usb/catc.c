@@ -76,6 +76,16 @@ static const char driver_name[] = "catc";
 #define RX_PKT_SZ		1600	/* Max size of receive packet for F5U011 */
 
 /*
+ * USB endpoints.
+ */
+
+enum catc_usb_ep {
+	CATC_USB_EP_CONTROL	= 0,
+	CATC_USB_EP_BULK	= 1,
+	CATC_USB_EP_INT_IN	= 2,
+};
+
+/*
  * Control requests.
  */
 
@@ -611,9 +621,9 @@ static void catc_stats_done(struct catc *catc, struct ctrl_queue *q)
 	catc->stats_vals[index >> 1] = data;
 }
 
-static void catc_stats_timer(unsigned long data)
+static void catc_stats_timer(struct timer_list *t)
 {
-	struct catc *catc = (void *) data;
+	struct catc *catc = from_timer(catc, t, timer);
 	int i;
 
 	for (i = 0; i < 8; i++)
@@ -781,17 +791,38 @@ static int catc_probe(struct usb_interface *intf, const struct usb_device_id *id
 	struct net_device *netdev;
 	struct catc *catc;
 	u8 broadcast[ETH_ALEN];
-	int pktsz, ret;
+	u8 *macbuf;
+	int pktsz, ret = -ENOMEM;
+	static const u8 bulk_ep_addr[] = {
+		CATC_USB_EP_BULK | USB_DIR_OUT,
+		CATC_USB_EP_BULK | USB_DIR_IN,
+		0};
+	static const u8 int_ep_addr[] = {
+		CATC_USB_EP_INT_IN | USB_DIR_IN,
+		0};
+
+	macbuf = kmalloc(ETH_ALEN, GFP_KERNEL);
+	if (!macbuf)
+		goto error;
 
 	if (usb_set_interface(usbdev,
 			intf->altsetting->desc.bInterfaceNumber, 1)) {
 		dev_err(dev, "Can't set altsetting 1.\n");
-		return -EIO;
+		ret = -EIO;
+		goto fail_mem;;
+	}
+
+	/* Verify that all required endpoints are present */
+	if (!usb_check_bulk_endpoints(intf, bulk_ep_addr) ||
+	    !usb_check_int_endpoints(intf, int_ep_addr)) {
+		dev_err(dev, "Missing or invalid endpoints\n");
+		ret = -ENODEV;
+		goto fail_mem;
 	}
 
 	netdev = alloc_etherdev(sizeof(struct catc));
 	if (!netdev)
-		return -ENOMEM;
+		goto fail_mem;
 
 	catc = netdev_priv(netdev);
 
@@ -805,9 +836,7 @@ static int catc_probe(struct usb_interface *intf, const struct usb_device_id *id
 	spin_lock_init(&catc->tx_lock);
 	spin_lock_init(&catc->ctrl_lock);
 
-	init_timer(&catc->timer);
-	catc->timer.data = (long) catc;
-	catc->timer.function = catc_stats_timer;
+	timer_setup(&catc->timer, catc_stats_timer, 0);
 
 	catc->ctrl_urb = usb_alloc_urb(0, GFP_KERNEL);
 	catc->tx_urb = usb_alloc_urb(0, GFP_KERNEL);
@@ -835,14 +864,14 @@ static int catc_probe(struct usb_interface *intf, const struct usb_device_id *id
 	usb_fill_control_urb(catc->ctrl_urb, usbdev, usb_sndctrlpipe(usbdev, 0),
 		NULL, NULL, 0, catc_ctrl_done, catc);
 
-	usb_fill_bulk_urb(catc->tx_urb, usbdev, usb_sndbulkpipe(usbdev, 1),
-		NULL, 0, catc_tx_done, catc);
+	usb_fill_bulk_urb(catc->tx_urb, usbdev, usb_sndbulkpipe(usbdev, CATC_USB_EP_BULK),
+			  NULL, 0, catc_tx_done, catc);
 
-	usb_fill_bulk_urb(catc->rx_urb, usbdev, usb_rcvbulkpipe(usbdev, 1),
-		catc->rx_buf, pktsz, catc_rx_done, catc);
+	usb_fill_bulk_urb(catc->rx_urb, usbdev, usb_rcvbulkpipe(usbdev, CATC_USB_EP_BULK),
+			  catc->rx_buf, pktsz, catc_rx_done, catc);
 
-	usb_fill_int_urb(catc->irq_urb, usbdev, usb_rcvintpipe(usbdev, 2),
-                catc->irq_buf, 2, catc_irq_done, catc, 1);
+	usb_fill_int_urb(catc->irq_urb, usbdev, usb_rcvintpipe(usbdev, CATC_USB_EP_INT_IN),
+			 catc->irq_buf, 2, catc_irq_done, catc, 1);
 
 	if (!catc->is_f5u011) {
 		u32 *buf;
@@ -871,6 +900,7 @@ static int catc_probe(struct usb_interface *intf, const struct usb_device_id *id
 		default:
 			dev_warn(&intf->dev,
 				 "Couldn't detect memory size, assuming 32k\n");
+			/* fall through */
 		case 0x87654321:
 			catc_set_reg(catc, TxBufCount, 4);
 			catc_set_reg(catc, RxBufCount, 16);
@@ -882,7 +912,8 @@ static int catc_probe(struct usb_interface *intf, const struct usb_device_id *id
 	  
 		dev_dbg(dev, "Getting MAC from SEEROM.\n");
 	  
-		catc_get_mac(catc, netdev->dev_addr);
+		catc_get_mac(catc, macbuf);
+		eth_hw_addr_set(netdev, macbuf);
 		
 		dev_dbg(dev, "Setting MAC into registers.\n");
 	  
@@ -911,7 +942,8 @@ static int catc_probe(struct usb_interface *intf, const struct usb_device_id *id
 	} else {
 		dev_dbg(dev, "Performing reset\n");
 		catc_reset(catc);
-		catc_get_mac(catc, netdev->dev_addr);
+		catc_get_mac(catc, macbuf);
+		eth_hw_addr_set(netdev, macbuf);
 		
 		dev_dbg(dev, "Setting RX Mode\n");
 		catc->rxmode[0] = RxEnable | RxPolarity | RxMultiCast;
@@ -929,6 +961,7 @@ static int catc_probe(struct usb_interface *intf, const struct usb_device_id *id
 	if (ret)
 		goto fail_clear_intfdata;
 
+	kfree(macbuf);
 	return 0;
 
 fail_clear_intfdata:
@@ -939,6 +972,9 @@ fail_free:
 	usb_free_urb(catc->rx_urb);
 	usb_free_urb(catc->irq_urb);
 	free_netdev(netdev);
+fail_mem:
+	kfree(macbuf);
+error:
 	return ret;
 }
 

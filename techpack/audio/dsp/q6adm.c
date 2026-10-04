@@ -1,14 +1,7 @@
-/* Copyright (c) 2012-2020, The Linux Foundation. All rights reserved.
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
  * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 #include <linux/module.h>
 #include <linux/slab.h>
@@ -28,7 +21,6 @@
 #include <dsp/q6common.h>
 #include <ipc/apr.h>
 #include "adsp_err.h"
-#include <dsp/sec_adaptation.h>
 
 #define TIMEOUT_MS 1000
 
@@ -51,6 +43,8 @@
 #define DS2_ADM_COPP_TOPOLOGY_ID 0xFFFFFFFF
 #endif
 
+#define SESSION_TYPE_RX 0
+
 /* ENUM for adm_status */
 enum adm_cal_status {
 	ADM_STATUS_CALIBRATION_REQUIRED = 0,
@@ -69,6 +63,7 @@ struct adm_copp {
 	atomic_t channels[AFE_MAX_PORTS][MAX_COPPS_PER_PORT];
 	atomic_t app_type[AFE_MAX_PORTS][MAX_COPPS_PER_PORT];
 	atomic_t acdb_id[AFE_MAX_PORTS][MAX_COPPS_PER_PORT];
+	atomic_t session_type[AFE_MAX_PORTS][MAX_COPPS_PER_PORT];
 	wait_queue_head_t wait[AFE_MAX_PORTS][MAX_COPPS_PER_PORT];
 	wait_queue_head_t adm_delay_wait[AFE_MAX_PORTS][MAX_COPPS_PER_PORT];
 	atomic_t adm_delay_stat[AFE_MAX_PORTS][MAX_COPPS_PER_PORT];
@@ -101,11 +96,15 @@ struct adm_ctl {
 	struct param_outband outband_memmap;
 	struct source_tracking_data sourceTrackingData;
 
+	struct mutex adm_apr_lock;
 	int set_custom_topology;
 	int ec_ref_rx;
 	int num_ec_ref_rx_chans;
 	int ec_ref_rx_bit_width;
 	int ec_ref_rx_sampling_rate;
+	int num_ec_ref_rx_chans_downmixed;
+	uint16_t ec_ref_chmixer_weights[PCM_FORMAT_MAX_NUM_CHANNEL_V8]
+						[PCM_FORMAT_MAX_NUM_CHANNEL_V8];
 	int ffecns_port_id;
 	int native_mode;
 };
@@ -150,6 +149,12 @@ void msm_dts_srs_release_lock(void)
 {
 	mutex_unlock(&dts_srs_lock);
 }
+
+static int adm_arrange_mch_map_v8(
+		struct adm_device_endpoint_payload *ep_payload,
+		int path,
+		int channel_mode,
+		int port_idx);
 
 /**
  * adm_validate_and_get_port_index -
@@ -279,7 +284,8 @@ static int adm_get_copp_id(int port_idx, int copp_idx)
 }
 
 static int adm_get_idx_if_copp_exists(int port_idx, int topology, int mode,
-				 int rate, int bit_width, int app_type)
+				 int rate, int bit_width, int app_type,
+				 int session_type)
 {
 	int idx;
 
@@ -293,6 +299,9 @@ static int adm_get_idx_if_copp_exists(int port_idx, int topology, int mode,
 		    (rate == atomic_read(&this_adm.copp.rate[port_idx][idx])) &&
 		    (bit_width ==
 			atomic_read(&this_adm.copp.bit_width[port_idx][idx])) &&
+		    (session_type ==
+			atomic_read(
+				&this_adm.copp.session_type[port_idx][idx])) &&
 		    (app_type ==
 			atomic_read(&this_adm.copp.app_type[port_idx][idx])))
 			return idx;
@@ -494,9 +503,10 @@ int adm_programable_channel_mixer(int port_id, int copp_idx, int session_id,
 	struct adm_cmd_set_pspd_mtmx_strtr_params_v5 *adm_params = NULL;
 	struct param_hdr_v1 data_v5;
 	int ret = 0, port_idx, sz = 0, param_size = 0;
+	struct adm_device_endpoint_payload ep_params = {0, 0, 0, {0}};
 	u16 *adm_pspd_params;
 	u16 *ptr;
-	int index = 0;
+	int index = 0, i = 0, path_type = ADM_PATH_PLAYBACK;
 
 	pr_debug("%s: port_id = %d\n", __func__, port_id);
 	port_id = afe_convert_virtual_to_portid(port_id);
@@ -505,6 +515,17 @@ int adm_programable_channel_mixer(int port_id, int copp_idx, int session_id,
 		pr_err("%s: Invalid port_id %#x\n", __func__, port_id);
 		return -EINVAL;
 	}
+
+	/*
+	 * check if PSPD is already configured
+	 * if it is configured already, return 0 without applying PSPD.
+	 */
+	if (atomic_read(&this_adm.copp.cnt[port_idx][copp_idx]) > 1) {
+		pr_debug("%s: copp.cnt:%#x\n", __func__,
+			atomic_read(&this_adm.copp.cnt[port_idx][copp_idx]));
+		return 0;
+	}
+
 	/*
 	 * First 8 bytes are 4 bytes as rule number, 2 bytes as output
 	 * channel and 2 bytes as input channel.
@@ -567,84 +588,33 @@ int adm_programable_channel_mixer(int port_id, int copp_idx, int session_id,
 	adm_pspd_params[3] = ch_mixer->input_channels[channel_index];
 	index = 4;
 
-	if (ch_mixer->output_channel == 1) {
-		adm_pspd_params[index] = PCM_CHANNEL_FC;
-	} else if (ch_mixer->output_channel == 2) {
-		adm_pspd_params[index] = PCM_CHANNEL_FL;
-		adm_pspd_params[index + 1] = PCM_CHANNEL_FR;
-	} else if (ch_mixer->output_channel == 3) {
-		adm_pspd_params[index] = PCM_CHANNEL_FL;
-		adm_pspd_params[index + 1] = PCM_CHANNEL_FR;
-		adm_pspd_params[index + 2] = PCM_CHANNEL_FC;
-	} else if (ch_mixer->output_channel == 4) {
-		adm_pspd_params[index] = PCM_CHANNEL_FL;
-		adm_pspd_params[index + 1] = PCM_CHANNEL_FR;
-		adm_pspd_params[index + 2] = PCM_CHANNEL_LS;
-		adm_pspd_params[index + 3] = PCM_CHANNEL_RS;
-	} else if (ch_mixer->output_channel == 5) {
-		adm_pspd_params[index] = PCM_CHANNEL_FL;
-		adm_pspd_params[index + 1] = PCM_CHANNEL_FR;
-		adm_pspd_params[index + 2] = PCM_CHANNEL_FC;
-		adm_pspd_params[index + 3] = PCM_CHANNEL_LS;
-		adm_pspd_params[index + 4] = PCM_CHANNEL_RS;
-	} else if (ch_mixer->output_channel == 6) {
-		adm_pspd_params[index] = PCM_CHANNEL_FL;
-		adm_pspd_params[index + 1] = PCM_CHANNEL_FR;
-		adm_pspd_params[index + 2] = PCM_CHANNEL_LFE;
-		adm_pspd_params[index + 3] = PCM_CHANNEL_FC;
-		adm_pspd_params[index + 4] = PCM_CHANNEL_LS;
-		adm_pspd_params[index + 5] = PCM_CHANNEL_RS;
-	} else if (ch_mixer->output_channel == 8) {
-		adm_pspd_params[index] = PCM_CHANNEL_FL;
-		adm_pspd_params[index + 1] = PCM_CHANNEL_FR;
-		adm_pspd_params[index + 2] = PCM_CHANNEL_LFE;
-		adm_pspd_params[index + 3] = PCM_CHANNEL_FC;
-		adm_pspd_params[index + 4] = PCM_CHANNEL_LS;
-		adm_pspd_params[index + 5] = PCM_CHANNEL_RS;
-		adm_pspd_params[index + 6] = PCM_CHANNEL_LB;
-		adm_pspd_params[index + 7] = PCM_CHANNEL_RB;
+	path_type = (session_type == SESSION_TYPE_RX) ?
+				ADM_PATH_PLAYBACK : ADM_PATH_LIVE_REC;
+
+	if (ch_mixer->override_out_ch_map) {
+		memcpy(&adm_pspd_params[index], &ch_mixer->out_ch_map,
+			ch_mixer->output_channel * sizeof(uint16_t));
+		index += ch_mixer->output_channel;
+	} else {
+		ep_params.dev_num_channel = ch_mixer->output_channel;
+		adm_arrange_mch_map_v8(&ep_params, path_type,
+				       ep_params.dev_num_channel, port_idx);
+		for (i = 0; i < ch_mixer->output_channel; i++)
+			adm_pspd_params[index++] = ep_params.dev_channel_mapping[i];
 	}
 
-	index = index + ch_mixer->output_channel;
-	if (ch_mixer->input_channels[channel_index] == 1) {
-		adm_pspd_params[index] = PCM_CHANNEL_FC;
-	} else if (ch_mixer->input_channels[channel_index] == 2) {
-		adm_pspd_params[index] = PCM_CHANNEL_FL;
-		adm_pspd_params[index + 1] = PCM_CHANNEL_FR;
-	} else if (ch_mixer->input_channels[channel_index] == 3) {
-		adm_pspd_params[index] = PCM_CHANNEL_FL;
-		adm_pspd_params[index + 1] = PCM_CHANNEL_FR;
-		adm_pspd_params[index + 2] = PCM_CHANNEL_FC;
-	} else if (ch_mixer->input_channels[channel_index] == 4) {
-		adm_pspd_params[index] = PCM_CHANNEL_FL;
-		adm_pspd_params[index + 1] = PCM_CHANNEL_FR;
-		adm_pspd_params[index + 2] = PCM_CHANNEL_LS;
-		adm_pspd_params[index + 3] = PCM_CHANNEL_RS;
-	} else if (ch_mixer->input_channels[channel_index] == 5) {
-		adm_pspd_params[index] = PCM_CHANNEL_FL;
-		adm_pspd_params[index + 1] = PCM_CHANNEL_FR;
-		adm_pspd_params[index + 2] = PCM_CHANNEL_FC;
-		adm_pspd_params[index + 3] = PCM_CHANNEL_LS;
-		adm_pspd_params[index + 4] = PCM_CHANNEL_RS;
-	} else if (ch_mixer->input_channels[channel_index] == 6) {
-		adm_pspd_params[index] = PCM_CHANNEL_FL;
-		adm_pspd_params[index + 1] = PCM_CHANNEL_FR;
-		adm_pspd_params[index + 2] = PCM_CHANNEL_LFE;
-		adm_pspd_params[index + 3] = PCM_CHANNEL_FC;
-		adm_pspd_params[index + 4] = PCM_CHANNEL_LS;
-		adm_pspd_params[index + 5] = PCM_CHANNEL_RS;
-	} else if (ch_mixer->input_channels[channel_index] == 8) {
-		adm_pspd_params[index] = PCM_CHANNEL_FL;
-		adm_pspd_params[index + 1] = PCM_CHANNEL_FR;
-		adm_pspd_params[index + 2] = PCM_CHANNEL_LFE;
-		adm_pspd_params[index + 3] = PCM_CHANNEL_FC;
-		adm_pspd_params[index + 4] = PCM_CHANNEL_LS;
-		adm_pspd_params[index + 5] = PCM_CHANNEL_RS;
-		adm_pspd_params[index + 6] = PCM_CHANNEL_LB;
-		adm_pspd_params[index + 7] = PCM_CHANNEL_RB;
+	if (ch_mixer->override_in_ch_map) {
+		memcpy(&adm_pspd_params[index], &ch_mixer->in_ch_map,
+			ch_mixer->input_channel * sizeof(uint16_t));
+		index += ch_mixer->input_channel;
+	} else {
+		ep_params.dev_num_channel = ch_mixer->input_channels[channel_index];
+		adm_arrange_mch_map_v8(&ep_params, path_type,
+				       ep_params.dev_num_channel, port_idx);
+		for (i = 0; i < ch_mixer->input_channels[channel_index]; i++)
+			adm_pspd_params[index++] = ep_params.dev_channel_mapping[i];
 	}
 
-	index = index + ch_mixer->input_channels[channel_index];
 	ret = adm_populate_channel_weight(&adm_pspd_params[index],
 					ch_mixer, channel_index);
 	if (ret) {
@@ -902,6 +872,71 @@ exit:
 EXPORT_SYMBOL(adm_set_custom_chmix_cfg);
 
 /*
+ * adm_apr_send_pkt : returns 0 on success, negative otherwise.
+ */
+int adm_apr_send_pkt(void *data, wait_queue_head_t *wait,
+			int port_idx, int copp_idx, int opcode)
+{
+	int ret = 0;
+	atomic_t *copp_stat = NULL;
+	int32_t time_out = msecs_to_jiffies(TIMEOUT_MS);
+	wait = &this_adm.copp.wait[port_idx][copp_idx];
+
+	if (!wait)
+		return -EINVAL;
+
+	mutex_lock(&this_adm.adm_apr_lock);
+	pr_debug("%s: port idx  %d copp idx  %d\n", __func__,
+				port_idx, copp_idx);
+	copp_stat = &this_adm.copp.stat[port_idx][copp_idx];
+	atomic_set(copp_stat, -1);
+
+	if (opcode != ADM_CMD_DEVICE_OPEN_V8 &&
+		opcode != ADM_CMD_DEVICE_OPEN_V6 &&
+		opcode != ADM_CMD_DEVICE_OPEN_V5 &&
+		opcode != ADM_CMD_DEVICE_CLOSE_V5) {
+		if (atomic_read(&this_adm.copp.cnt[port_idx][copp_idx])
+			== 0) {
+			pr_err("%s: port[0x%x] copp[0x%x] inactive\n",
+				__func__, port_idx, copp_idx);
+			mutex_unlock(&this_adm.adm_apr_lock);
+			return -EINVAL;
+		}
+	}
+
+	if (opcode == ADM_CMD_DEVICE_OPEN_V8 ||
+		opcode == ADM_CMD_DEVICE_OPEN_V6 ||
+		opcode == ADM_CMD_DEVICE_OPEN_V5) {
+		time_out = msecs_to_jiffies(2 * TIMEOUT_MS);
+	}
+
+	ret = apr_send_pkt(this_adm.apr, data);
+	if (ret > 0) {
+		ret = wait_event_timeout(*wait,
+			atomic_read(copp_stat) >= 0,
+			time_out);
+		if (atomic_read(copp_stat) > 0) {
+			pr_err("%s: DSP returned error[%s]\n", __func__,
+				adsp_err_get_err_str(atomic_read(copp_stat)));
+			ret = adsp_err_get_lnx_err_code(atomic_read(copp_stat));
+		} else	if (!ret) {
+			pr_err_ratelimited("%s: request timedout\n",
+				__func__);
+			ret = -ETIMEDOUT;
+		} else {
+			ret = 0;
+		}
+	} else if (ret == 0) {
+		pr_err("%s: packet not transmitted\n", __func__);
+		/* apr_send_pkt can return 0 when nothing is transmitted */
+		ret = -EINVAL;
+	}
+
+	mutex_unlock(&this_adm.adm_apr_lock);
+	return ret;
+}
+
+/*
  * With pre-packed data, only the opcode differes from V5 and V6.
  * Use q6common_pack_pp_params to pack the data correctly.
  */
@@ -912,7 +947,6 @@ int adm_set_pp_params(int port_id, int copp_idx,
 	struct adm_cmd_set_pp_params *adm_set_params = NULL;
 	int size = 0;
 	int port_idx = 0;
-	atomic_t *copp_stat = NULL;
 	int ret = 0;
 
 	port_id = afe_convert_virtual_to_portid(port_id);
@@ -970,32 +1004,9 @@ int adm_set_pp_params(int port_id, int copp_idx,
 		ret = -EINVAL;
 		goto done;
 	}
-
-	copp_stat = &this_adm.copp.stat[port_idx][copp_idx];
-	atomic_set(copp_stat, -1);
-	ret = apr_send_pkt(this_adm.apr, (uint32_t *) adm_set_params);
-	if (ret < 0) {
-		pr_err("%s: Set params APR send failed port = 0x%x ret %d\n",
-		       __func__, port_id, ret);
-		goto done;
-	}
-	ret = wait_event_timeout(this_adm.copp.wait[port_idx][copp_idx],
-				 atomic_read(copp_stat) >= 0,
-				 msecs_to_jiffies(TIMEOUT_MS));
-	if (!ret) {
-		pr_err("%s: Set params timed out port = 0x%x\n", __func__,
-		       port_id);
-		ret = -ETIMEDOUT;
-		goto done;
-	}
-	if (atomic_read(copp_stat) > 0) {
-		pr_err("%s: DSP returned error[%s]\n", __func__,
-		       adsp_err_get_err_str(atomic_read(copp_stat)));
-		ret = adsp_err_get_lnx_err_code(atomic_read(copp_stat));
-		goto done;
-	}
-
-	ret = 0;
+	ret = adm_apr_send_pkt((uint32_t *) adm_set_params,
+			&this_adm.copp.wait[port_idx][copp_idx],
+			port_idx, copp_idx, adm_set_params->apr_hdr.opcode);
 done:
 	kfree(adm_set_params);
 	return ret;
@@ -1048,7 +1059,6 @@ int adm_get_pp_params(int port_id, int copp_idx, uint32_t client_id,
 	int returned_param_size_in_bytes = 0;
 	int port_idx = 0;
 	int idx = 0;
-	atomic_t *copp_stat = NULL;
 	int ret = 0;
 
 	if (param_hdr == NULL) {
@@ -1096,33 +1106,9 @@ int adm_get_pp_params(int port_id, int copp_idx, uint32_t client_id,
 	else
 		adm_get_params.apr_hdr.opcode = ADM_CMD_GET_PP_PARAMS_V5;
 
-	copp_stat = &this_adm.copp.stat[port_idx][copp_idx];
-	atomic_set(copp_stat, -1);
-
-	ret = apr_send_pkt(this_adm.apr, (uint32_t *) &adm_get_params);
-	if (ret < 0) {
-		pr_err("%s: Get params APR send failed port = 0x%x ret %d\n",
-		       __func__, port_id, ret);
-		ret = -EINVAL;
-		goto done;
-	}
-	ret = wait_event_timeout(this_adm.copp.wait[port_idx][copp_idx],
-				 atomic_read(copp_stat) >= 0,
-				 msecs_to_jiffies(TIMEOUT_MS));
-	if (!ret) {
-		pr_err("%s: Get params timed out port = 0x%x\n", __func__,
-		       port_id);
-		ret = -ETIMEDOUT;
-		goto done;
-	}
-	if (atomic_read(copp_stat) > 0) {
-		pr_err("%s: DSP returned error[%s]\n", __func__,
-		       adsp_err_get_err_str(atomic_read(copp_stat)));
-		ret = adsp_err_get_lnx_err_code(atomic_read(copp_stat));
-		goto done;
-	}
-
-	ret = 0;
+	ret = adm_apr_send_pkt((uint32_t *) &adm_get_params,
+			&this_adm.copp.wait[port_idx][copp_idx],
+			port_idx, copp_idx, adm_get_params.apr_hdr.opcode);
 
 	/* Copy data to caller if sent in band */
 	if (!returned_param_data) {
@@ -1150,7 +1136,6 @@ int adm_get_pp_params(int port_id, int copp_idx, uint32_t client_id,
 
 	memcpy(returned_param_data, &adm_get_parameters[idx + 1],
 	       returned_param_size_in_bytes);
-done:
 	return ret;
 }
 EXPORT_SYMBOL(adm_get_pp_params);
@@ -1529,6 +1514,8 @@ static void adm_reset_data(void)
 			    &this_adm.copp.app_type[i][j], 0);
 			atomic_set(
 			   &this_adm.copp.acdb_id[i][j], 0);
+			atomic_set(
+			   &this_adm.copp.session_type[i][j], 0);
 			this_adm.copp.adm_status[i][j] =
 				ADM_STATUS_CALIBRATION_REQUIRED;
 		}
@@ -1606,16 +1593,11 @@ static int32_t adm_callback(struct apr_client_data *data, void *priv)
 		if (data->opcode == APR_BASIC_RSP_RESULT) {
 			pr_debug("%s: APR_BASIC_RSP_RESULT id 0x%x\n",
 				__func__, payload[0]);
-
-			if (!((client_id != ADM_CLIENT_ID_SOURCE_TRACKING) &&
-			     ((payload[0] == ADM_CMD_SET_PP_PARAMS_V5) ||
-			      (payload[0] == ADM_CMD_SET_PP_PARAMS_V6)))) {
-				if (data->payload_size <
-						(2 * sizeof(uint32_t))) {
-					pr_err("%s: Invalid payload size %d\n",
-						__func__, data->payload_size);
-					return 0;
-				}
+			if (data->payload_size <
+					(2 * sizeof(uint32_t))) {
+				pr_err("%s: Invalid payload size %d\n",
+					__func__, data->payload_size);
+				return 0;
 			}
 
 			if (payload[1] != 0) {
@@ -1631,8 +1613,15 @@ static int32_t adm_callback(struct apr_client_data *data, void *priv)
 					this_adm.sourceTrackingData.
 						apr_cmd_status = payload[1];
 				else if (rtac_make_adm_callback(payload,
-							data->payload_size))
-					break;
+						data->payload_size)) {
+					pr_debug("%s: rtac cmd response\n",
+						 __func__);
+				}
+				atomic_set(&this_adm.copp.stat[port_idx]
+						[copp_idx], payload[1]);
+				wake_up(
+				&this_adm.copp.wait[port_idx][copp_idx]);
+				break;
 				/*
 				 * if soft volume is called and already
 				 * interrupted break out of the sequence here
@@ -1641,8 +1630,8 @@ static int32_t adm_callback(struct apr_client_data *data, void *priv)
 			case ADM_CMD_DEVICE_CLOSE_V5:
 			case ADM_CMD_DEVICE_OPEN_V6:
 			case ADM_CMD_DEVICE_OPEN_V8:
-				pr_debug("%s: Basic callback received, wake up.\n",
-					__func__);
+				pr_debug("%s: Basic callback received for 0x%x, wake up.\n",
+					__func__, payload[0]);
 				atomic_set(&this_adm.copp.stat[port_idx]
 						[copp_idx], payload[1]);
 				wake_up(
@@ -1775,8 +1764,13 @@ static int32_t adm_callback(struct apr_client_data *data, void *priv)
 				this_adm.sourceTrackingData.apr_cmd_status =
 					payload[0];
 			else if (rtac_make_adm_callback(payload,
-							data->payload_size))
+						data->payload_size)) {
+				pr_debug("%s: rtac cmd response\n", __func__);
+				atomic_set(&this_adm.copp.stat[port_idx][copp_idx],
+					   payload[0]);
+				wake_up(&this_adm.copp.wait[port_idx][copp_idx]);
 				break;
+			}
 
 			idx = ADM_GET_PARAMETER_LENGTH * copp_idx;
 			if (payload[0] == 0 && data->payload_size > 0) {
@@ -2179,7 +2173,8 @@ static struct cal_block_data *adm_find_cal_by_path(int cal_index, int path)
 
 		if (cal_index == ADM_AUDPROC_CAL ||
 		    cal_index == ADM_LSM_AUDPROC_CAL ||
-		    cal_index == ADM_LSM_AUDPROC_PERSISTENT_CAL) {
+		    cal_index == ADM_LSM_AUDPROC_PERSISTENT_CAL ||
+		    cal_index == ADM_AUDPROC_PERSISTENT_CAL) {
 			audproc_cal_info = cal_block->cal_info;
 			if ((audproc_cal_info->path == path) &&
 			    (cal_block->cal_data.size > 0))
@@ -2217,7 +2212,8 @@ static struct cal_block_data *adm_find_cal_by_app_type(int cal_index, int path,
 
 		if (cal_index == ADM_AUDPROC_CAL ||
 		    cal_index == ADM_LSM_AUDPROC_CAL ||
-		    cal_index == ADM_LSM_AUDPROC_PERSISTENT_CAL) {
+		    cal_index == ADM_LSM_AUDPROC_PERSISTENT_CAL ||
+		    cal_index == ADM_AUDPROC_PERSISTENT_CAL) {
 			audproc_cal_info = cal_block->cal_info;
 			if ((audproc_cal_info->path == path) &&
 			    (audproc_cal_info->app_type == app_type) &&
@@ -2258,7 +2254,8 @@ static struct cal_block_data *adm_find_cal(int cal_index, int path,
 
 		if (cal_index == ADM_AUDPROC_CAL ||
 		    cal_index == ADM_LSM_AUDPROC_CAL ||
-		    cal_index == ADM_LSM_AUDPROC_PERSISTENT_CAL) {
+		    cal_index == ADM_LSM_AUDPROC_PERSISTENT_CAL||
+		    cal_index == ADM_AUDPROC_PERSISTENT_CAL) {
 			audproc_cal_info = cal_block->cal_info;
 			if ((audproc_cal_info->path == path) &&
 			    (audproc_cal_info->app_type == app_type) &&
@@ -2349,6 +2346,9 @@ static void send_adm_cal(int port_id, int copp_idx, int path, int perf_mode,
 	if (passthr_mode != LISTEN) {
 		send_adm_cal_type(ADM_AUDPROC_CAL, path, port_id, copp_idx,
 				perf_mode, app_type, acdb_id, sample_rate);
+		send_adm_cal_type(ADM_AUDPROC_PERSISTENT_CAL, path,
+				  port_id, copp_idx, perf_mode, app_type,
+				  acdb_id, sample_rate);
 	} else {
 		send_adm_cal_type(ADM_LSM_AUDPROC_CAL, path, port_id, copp_idx,
 				  perf_mode, app_type, acdb_id, sample_rate);
@@ -2472,12 +2472,6 @@ int adm_arrange_mch_map(struct adm_cmd_device_open_v5 *open, int path,
 	default:
 		goto non_mch_path;
 	};
-
-	pr_info("%s : channel_mode = %d, num_channel = %d, set_channel_map = %d\n",
-		__func__,
-		channel_mode,
-		open->dev_num_channel,
-		multi_ch_maps[idx].set_channel_map);
 
 	if ((open->dev_num_channel > 2) &&
 		(port_channel_map[port_idx].set_channel_map ||
@@ -2701,6 +2695,21 @@ static int adm_arrange_mch_map_v8(
 			ep_payload->dev_channel_mapping[9] = PCM_CHANNEL_TFR;
 			ep_payload->dev_channel_mapping[10] = PCM_CHANNEL_TSL;
 			ep_payload->dev_channel_mapping[11] = PCM_CHANNEL_TSR;
+		} else if (channel_mode == 14) {
+			ep_payload->dev_channel_mapping[0] = PCM_CHANNEL_FL;
+			ep_payload->dev_channel_mapping[1] = PCM_CHANNEL_FR;
+			ep_payload->dev_channel_mapping[2] = PCM_CHANNEL_LFE;
+			ep_payload->dev_channel_mapping[3] = PCM_CHANNEL_FC;
+			ep_payload->dev_channel_mapping[4] = PCM_CHANNEL_LB;
+			ep_payload->dev_channel_mapping[5] = PCM_CHANNEL_RB;
+			ep_payload->dev_channel_mapping[6] = PCM_CHANNEL_LS;
+			ep_payload->dev_channel_mapping[7] = PCM_CHANNEL_RS;
+			ep_payload->dev_channel_mapping[8] = PCM_CHANNEL_TFL;
+			ep_payload->dev_channel_mapping[9] = PCM_CHANNEL_TFR;
+			ep_payload->dev_channel_mapping[10] = PCM_CHANNEL_TSL;
+			ep_payload->dev_channel_mapping[11] = PCM_CHANNEL_TSR;
+			ep_payload->dev_channel_mapping[12] = PCM_CHANNEL_FLC;
+			ep_payload->dev_channel_mapping[13] = PCM_CHANNEL_FRC;
 		} else if (channel_mode == 16) {
 			ep_payload->dev_channel_mapping[0] = PCM_CHANNEL_FL;
 			ep_payload->dev_channel_mapping[1] = PCM_CHANNEL_FR;
@@ -2718,6 +2727,39 @@ static int adm_arrange_mch_map_v8(
 			ep_payload->dev_channel_mapping[13] = PCM_CHANNEL_FRC;
 			ep_payload->dev_channel_mapping[14] = PCM_CHANNEL_RLC;
 			ep_payload->dev_channel_mapping[15] = PCM_CHANNEL_RRC;
+		} else if (channel_mode == 32) {
+			ep_payload->dev_channel_mapping[0] = PCM_CHANNEL_FL;
+			ep_payload->dev_channel_mapping[1] = PCM_CHANNEL_FR;
+			ep_payload->dev_channel_mapping[2] = PCM_CHANNEL_LFE;
+			ep_payload->dev_channel_mapping[3] = PCM_CHANNEL_FC;
+			ep_payload->dev_channel_mapping[4] = PCM_CHANNEL_LS;
+			ep_payload->dev_channel_mapping[5] = PCM_CHANNEL_RS;
+			ep_payload->dev_channel_mapping[6] = PCM_CHANNEL_LB;
+			ep_payload->dev_channel_mapping[7] = PCM_CHANNEL_RB;
+			ep_payload->dev_channel_mapping[8] = PCM_CHANNEL_CS;
+			ep_payload->dev_channel_mapping[9] = PCM_CHANNEL_TS;
+			ep_payload->dev_channel_mapping[10] = PCM_CHANNEL_CVH;
+			ep_payload->dev_channel_mapping[11] = PCM_CHANNEL_MS;
+			ep_payload->dev_channel_mapping[12] = PCM_CHANNEL_FLC;
+			ep_payload->dev_channel_mapping[13] = PCM_CHANNEL_FRC;
+			ep_payload->dev_channel_mapping[14] = PCM_CHANNEL_RLC;
+			ep_payload->dev_channel_mapping[15] = PCM_CHANNEL_RRC;
+			ep_payload->dev_channel_mapping[16] = PCM_CHANNEL_LFE2;
+			ep_payload->dev_channel_mapping[17] = PCM_CHANNEL_SL;
+			ep_payload->dev_channel_mapping[18] = PCM_CHANNEL_SR;
+			ep_payload->dev_channel_mapping[19] = PCM_CHANNEL_TFL;
+			ep_payload->dev_channel_mapping[20] = PCM_CHANNEL_TFR;
+			ep_payload->dev_channel_mapping[21] = PCM_CHANNEL_TC;
+			ep_payload->dev_channel_mapping[22] = PCM_CHANNEL_TBL;
+			ep_payload->dev_channel_mapping[23] = PCM_CHANNEL_TBR;
+			ep_payload->dev_channel_mapping[24] = PCM_CHANNEL_TSL;
+			ep_payload->dev_channel_mapping[25] = PCM_CHANNEL_TSR;
+			ep_payload->dev_channel_mapping[26] = PCM_CHANNEL_TBC;
+			ep_payload->dev_channel_mapping[27] = PCM_CHANNEL_BFC;
+			ep_payload->dev_channel_mapping[28] = PCM_CHANNEL_BFL;
+			ep_payload->dev_channel_mapping[29] = PCM_CHANNEL_BFR;
+			ep_payload->dev_channel_mapping[30] = PCM_CHANNEL_LW;
+			ep_payload->dev_channel_mapping[31] = PCM_CHANNEL_RW;
 		} else {
 			pr_err("%s: invalid num_chan %d\n", __func__,
 				channel_mode);
@@ -2786,7 +2828,7 @@ static int adm_arrange_mch_ep2_map_v8(
 		ep_payload->dev_channel_mapping[6] = PCM_CHANNEL_LB;
 		ep_payload->dev_channel_mapping[7] = PCM_CHANNEL_RB;
 		ep_payload->dev_channel_mapping[8] = PCM_CHANNEL_CS;
-		ep_payload->dev_channel_mapping[9] = PCM_CHANNELS;
+		ep_payload->dev_channel_mapping[9] = PCM_CHANNEL_TS;
 	} else if (channel_mode == 12) {
 		ep_payload->dev_channel_mapping[0] = PCM_CHANNEL_FL;
 		ep_payload->dev_channel_mapping[1] = PCM_CHANNEL_FR;
@@ -2810,13 +2852,46 @@ static int adm_arrange_mch_ep2_map_v8(
 		ep_payload->dev_channel_mapping[6] = PCM_CHANNEL_LB;
 		ep_payload->dev_channel_mapping[7] = PCM_CHANNEL_RB;
 		ep_payload->dev_channel_mapping[8] = PCM_CHANNEL_CS;
-		ep_payload->dev_channel_mapping[9] = PCM_CHANNELS;
+		ep_payload->dev_channel_mapping[9] = PCM_CHANNEL_TS;
 		ep_payload->dev_channel_mapping[10] = PCM_CHANNEL_CVH;
 		ep_payload->dev_channel_mapping[11] = PCM_CHANNEL_MS;
 		ep_payload->dev_channel_mapping[12] = PCM_CHANNEL_FLC;
 		ep_payload->dev_channel_mapping[13] = PCM_CHANNEL_FRC;
 		ep_payload->dev_channel_mapping[14] = PCM_CHANNEL_RLC;
 		ep_payload->dev_channel_mapping[15] = PCM_CHANNEL_RRC;
+	} else if (channel_mode == 32) {
+		ep_payload->dev_channel_mapping[0] = PCM_CHANNEL_FL;
+		ep_payload->dev_channel_mapping[1] = PCM_CHANNEL_FR;
+		ep_payload->dev_channel_mapping[2] = PCM_CHANNEL_LFE;
+		ep_payload->dev_channel_mapping[3] = PCM_CHANNEL_FC;
+		ep_payload->dev_channel_mapping[4] = PCM_CHANNEL_LS;
+		ep_payload->dev_channel_mapping[5] = PCM_CHANNEL_RS;
+		ep_payload->dev_channel_mapping[6] = PCM_CHANNEL_LB;
+		ep_payload->dev_channel_mapping[7] = PCM_CHANNEL_RB;
+		ep_payload->dev_channel_mapping[8] = PCM_CHANNEL_CS;
+		ep_payload->dev_channel_mapping[9] = PCM_CHANNEL_TS;
+		ep_payload->dev_channel_mapping[10] = PCM_CHANNEL_CVH;
+		ep_payload->dev_channel_mapping[11] = PCM_CHANNEL_MS;
+		ep_payload->dev_channel_mapping[12] = PCM_CHANNEL_FLC;
+		ep_payload->dev_channel_mapping[13] = PCM_CHANNEL_FRC;
+		ep_payload->dev_channel_mapping[14] = PCM_CHANNEL_RLC;
+		ep_payload->dev_channel_mapping[15] = PCM_CHANNEL_RRC;
+		ep_payload->dev_channel_mapping[16] = PCM_CHANNEL_LFE2;
+		ep_payload->dev_channel_mapping[17] = PCM_CHANNEL_SL;
+		ep_payload->dev_channel_mapping[18] = PCM_CHANNEL_SR;
+		ep_payload->dev_channel_mapping[19] = PCM_CHANNEL_TFL;
+		ep_payload->dev_channel_mapping[20] = PCM_CHANNEL_TFR;
+		ep_payload->dev_channel_mapping[21] = PCM_CHANNEL_TC;
+		ep_payload->dev_channel_mapping[22] = PCM_CHANNEL_TBL;
+		ep_payload->dev_channel_mapping[23] = PCM_CHANNEL_TBR;
+		ep_payload->dev_channel_mapping[24] = PCM_CHANNEL_TSL;
+		ep_payload->dev_channel_mapping[25] = PCM_CHANNEL_TSR;
+		ep_payload->dev_channel_mapping[26] = PCM_CHANNEL_TBC;
+		ep_payload->dev_channel_mapping[27] = PCM_CHANNEL_BFC;
+		ep_payload->dev_channel_mapping[28] = PCM_CHANNEL_BFL;
+		ep_payload->dev_channel_mapping[29] = PCM_CHANNEL_BFR;
+		ep_payload->dev_channel_mapping[30] = PCM_CHANNEL_LW;
+		ep_payload->dev_channel_mapping[31] = PCM_CHANNEL_RW;
 	} else {
 		pr_err("%s: invalid num_chan %d\n", __func__,
 			channel_mode);
@@ -2825,6 +2900,103 @@ static int adm_arrange_mch_ep2_map_v8(
 
 	return rc;
 }
+
+static int adm_copp_set_ec_ref_mfc_cfg(int port_id, int copp_idx,
+					int sample_rate, int bps,
+					int in_channels, int out_channels)
+{
+	struct audproc_mfc_param_media_fmt mfc_cfg;
+	struct param_hdr_v3 param_hdr;
+	u16 *chmixer_params = NULL;
+	int rc = 0, i  = 0, j = 0, param_index = 0, param_size = 0;
+	struct adm_device_endpoint_payload ep_payload = {0, 0, 0, {0}};
+
+	memset(&mfc_cfg, 0, sizeof(mfc_cfg));
+	memset(&ep_payload, 0, sizeof(ep_payload));
+	memset(&param_hdr, 0, sizeof(param_hdr));
+
+	param_hdr.module_id = AUDPROC_MODULE_ID_MFC_EC_REF;
+	param_hdr.instance_id = INSTANCE_ID_0;
+
+	pr_debug("%s: port_id %d copp_idx %d SR %d, BW %d in_ch %d out_ch %d\n",
+			__func__, port_id, copp_idx, sample_rate,
+			bps, in_channels, out_channels);
+
+	if (out_channels <= 0 || out_channels > AUDPROC_MFC_OUT_CHANNELS_MAX) {
+		pr_err("%s: unsupported out channels=%d\n", __func__, out_channels);
+		return -EINVAL;
+	}
+
+	/* 1. Update Media Format */
+	param_hdr.param_id = AUDPROC_PARAM_ID_MFC_OUTPUT_MEDIA_FORMAT;
+	param_hdr.param_size = sizeof(mfc_cfg);
+
+	mfc_cfg.sampling_rate = sample_rate;
+	mfc_cfg.bits_per_sample = bps;
+	mfc_cfg.num_channels = out_channels;
+
+	ep_payload.dev_num_channel = out_channels;
+	rc = adm_arrange_mch_ep2_map_v8(&ep_payload, out_channels);
+	if (rc < 0) {
+		pr_err("%s: unable to get map for out channels=%d\n",
+				__func__, out_channels);
+		return -EINVAL;
+	}
+
+	for (i = 0; i < out_channels; i++)
+		mfc_cfg.channel_type[i] = (uint16_t) ep_payload.dev_channel_mapping[i];
+
+
+	rc = adm_pack_and_set_one_pp_param(port_id, copp_idx,
+				param_hdr, (uint8_t *) &mfc_cfg);
+	if (rc) {
+		pr_err("%s: Failed to set media format, err %d\n", __func__, rc);
+		return rc;
+	}
+
+	/* 2. Send Channel Mixer params */
+	param_size =  2 * (4 + out_channels + in_channels + (out_channels * in_channels));
+	param_size = round_up(param_size, 4);
+	param_hdr.param_id = DEFAULT_CHMIXER_PARAM_ID_COEFF;
+	param_hdr.param_size = param_size;
+
+	pr_debug("%s: chmixer param sz = %d\n", __func__, param_size);
+	chmixer_params = kzalloc(param_size, GFP_KERNEL);
+	if (!chmixer_params) {
+		return -ENOMEM;
+	}
+	param_index = 2; /* param[0] and [1] represents chmixer rule(always 0) */
+	chmixer_params[param_index++] = out_channels;
+	chmixer_params[param_index++] = in_channels;
+
+	/* output channel map is same as one set in media format */
+	for (i = 0; i < out_channels; i++)
+		chmixer_params[param_index++] = ep_payload.dev_channel_mapping[i];
+
+	/* input channel map should be same as one set for ep2 during copp open */
+	ep_payload.dev_num_channel = in_channels;
+	rc = adm_arrange_mch_ep2_map_v8(&ep_payload, in_channels);
+	if (rc < 0) {
+		pr_err("%s: unable to get in channal map\n", __func__);
+		goto exit;
+	}
+	for (i = 0; i < in_channels; i++)
+		chmixer_params[param_index++] = ep_payload.dev_channel_mapping[i];
+
+	for (i = 0; i < out_channels; i++)
+		for (j = 0; j < in_channels; j++)
+		chmixer_params[param_index++] = this_adm.ec_ref_chmixer_weights[i][j];
+
+	rc = adm_pack_and_set_one_pp_param(port_id, copp_idx,
+					   param_hdr, (uint8_t *) chmixer_params);
+	if (rc)
+		pr_err("%s: Failed to set chmixer params, err %d\n", __func__, rc);
+
+exit:
+	kfree(chmixer_params);
+	return rc;
+}
+
 /**
  * adm_open -
  *        command to send ADM open
@@ -2838,11 +3010,13 @@ static int adm_arrange_mch_ep2_map_v8(
  * @bit_width: bit width to set for copp
  * @app_type: App type used for this session
  * @acdb_id: ACDB ID of this device
+ * @session_type: type of session
  *
  * Returns 0 on success or error on failure
  */
 int adm_open(int port_id, int path, int rate, int channel_mode, int topology,
-	     int perf_mode, uint16_t bit_width, int app_type, int acdb_id)
+	     int perf_mode, uint16_t bit_width, int app_type, int acdb_id,
+	     int session_type, uint32_t passthr_mode)
 {
 	struct adm_cmd_device_open_v5	open;
 	struct adm_cmd_device_open_v6	open_v6;
@@ -2857,12 +3031,11 @@ int adm_open(int port_id, int path, int rate, int channel_mode, int topology,
 	int tmp_port = q6audio_get_port_id(port_id);
 	void *adm_params = NULL;
 	int param_size;
+	int num_ec_ref_rx_chans = this_adm.num_ec_ref_rx_chans;
 
-	pr_info("%s:port %#x path:%d rate:%d mode:%d perf_mode:%d,topo_id %#x\n",
-		__func__, port_id, path, rate, channel_mode, perf_mode,
-		topology);
-	pr_info("%s:bit_width:%d app_type:%#x acdb_id:%d\n",
-		__func__, bit_width, app_type, acdb_id);
+	pr_debug("%s:port %#x path:%d rate:%d mode:%d perf_mode:%d,topo_id %d\n",
+		 __func__, port_id, path, rate, channel_mode, perf_mode,
+		 topology);
 
 	port_id = q6audio_convert_virtual_to_portid(port_id);
 	port_idx = adm_validate_and_get_port_index(port_id);
@@ -2933,17 +3106,8 @@ int adm_open(int port_id, int path, int rate, int channel_mode, int topology,
 				this_adm.ffecns_port_id);
 	}
 
-	if ((topology == VPM_TX_SM_LVVEFQ_COPP_TOPOLOGY) ||
-	    (topology == VPM_TX_DM_LVVEFQ_COPP_TOPOLOGY) ||
-	    (topology == VPM_TX_SM_LVSAFQ_COPP_TOPOLOGY) ||
-	    (topology == VPM_TX_DM_LVSAFQ_COPP_TOPOLOGY) ||
-	    (topology == VOICE_TX_DIAMONDVOICE_FVSAM_SM) ||
-	    (topology == VOICE_TX_DIAMONDVOICE_FVSAM_DM) ||
-	    (topology == VOICE_TX_DIAMONDVOICE_FVSAM_QM) ||
-	    (topology == VOICE_TX_DIAMONDVOICE_FRSAM_DM))
-		rate = 16000;
-
-	if (topology == VPM_TX_VOICE_SMECNS_V2_COPP_TOPOLOGY)
+	if (topology == VPM_TX_VOICE_SMECNS_V2_COPP_TOPOLOGY ||
+	    topology == VPM_TX_VOICE_FLUENCE_SM_COPP_TOPOLOGY)
 		channel_mode = 1;
 
 	/*
@@ -2955,7 +3119,7 @@ int adm_open(int port_id, int path, int rate, int channel_mode, int topology,
 		copp_idx = adm_get_idx_if_copp_exists(port_idx, topology,
 						      perf_mode,
 						      rate, bit_width,
-						      app_type);
+						      app_type, session_type);
 
 	if (copp_idx < 0) {
 		copp_idx = adm_get_next_available_copp(port_idx);
@@ -2979,6 +3143,8 @@ int adm_open(int port_id, int path, int rate, int channel_mode, int topology,
 			   app_type);
 		atomic_set(&this_adm.copp.acdb_id[port_idx][copp_idx],
 			   acdb_id);
+		atomic_set(&this_adm.copp.session_type[port_idx][copp_idx],
+			   session_type);
 		set_bit(ADM_STATUS_CALIBRATION_REQUIRED,
 		(void *)&this_adm.copp.adm_status[port_idx][copp_idx]);
 		if ((path != ADM_PATH_COMPRESSED_RX) &&
@@ -3018,8 +3184,7 @@ int adm_open(int port_id, int path, int rate, int channel_mode, int topology,
 
 		if ((q6core_get_avcs_api_version_per_service(
 				APRV2_IDS_SERVICE_ID_ADSP_ADM_V) >=
-					ADSP_ADM_API_VERSION_V3) &&
-					q6core_use_Q6_32ch_support()) {
+					ADSP_ADM_API_VERSION_V3)) {
 			memset(&open_v8, 0, sizeof(open_v8));
 			memset(&ep1_payload, 0, sizeof(ep1_payload));
 			memset(&ep2_payload, 0, sizeof(ep2_payload));
@@ -3048,8 +3213,26 @@ int adm_open(int port_id, int path, int rate, int channel_mode, int topology,
 			open_v8.endpoint_id_1 = tmp_port;
 			open_v8.endpoint_id_2 = 0xFFFF;
 			open_v8.endpoint_id_3 = 0xFFFF;
+
+			if (((this_adm.ec_ref_rx & AFE_PORT_INVALID) !=
+				AFE_PORT_INVALID) &&
+				(path != ADM_PATH_PLAYBACK)) {
+				if (this_adm.num_ec_ref_rx_chans != 0) {
+					open_v8.endpoint_id_2 =
+						this_adm.ec_ref_rx;
+					this_adm.ec_ref_rx = AFE_PORT_INVALID;
+				} else {
+					pr_err("%s: EC channels not set %d\n",
+						__func__,
+						this_adm.num_ec_ref_rx_chans);
+					return -EINVAL;
+				}
+			}
+
 			open_v8.topology_id = topology;
-			open_v8.reserved = 0;
+			open_v8.compressed_data_type = 0;
+			if (passthr_mode == COMPRESSED_PASSTHROUGH_DSD)
+				open_v8.compressed_data_type = 1;
 
 			/* variable endpoint payload */
 			ep1_payload.dev_num_channel = channel_mode & 0x00FF;
@@ -3077,11 +3260,8 @@ int adm_open(int port_id, int path, int rate, int channel_mode, int topology,
 			if ((this_adm.num_ec_ref_rx_chans != 0)
 				&& (path != ADM_PATH_PLAYBACK)
 				&& (open_v8.endpoint_id_2 != 0xFFFF)) {
-				open_v8.endpoint_id_2 = this_adm.ec_ref_rx;
-				this_adm.ec_ref_rx = -1;
 				ep2_payload.dev_num_channel =
 					this_adm.num_ec_ref_rx_chans;
-				this_adm.num_ec_ref_rx_chans = 0;
 
 				if (this_adm.ec_ref_rx_bit_width != 0) {
 					ep2_payload.bit_width =
@@ -3131,8 +3311,9 @@ int adm_open(int port_id, int path, int rate, int channel_mode, int topology,
 						ep2_payload_size);
 			}
 
-			ret = apr_send_pkt(this_adm.apr,
-					(uint32_t *)adm_params);
+			ret = adm_apr_send_pkt((uint32_t *) adm_params,
+				&this_adm.copp.wait[port_idx][copp_idx],
+				port_idx, copp_idx, open_v8.hdr.opcode);
 			if (ret < 0) {
 				pr_err("%s: port_id: 0x%x for[0x%x] failed %d for open_v8\n",
 					__func__, tmp_port, port_id, ret);
@@ -3158,7 +3339,8 @@ int adm_open(int port_id, int path, int rate, int channel_mode, int topology,
 			open.endpoint_id_1 = tmp_port;
 			open.endpoint_id_2 = 0xFFFF;
 
-			if (this_adm.ec_ref_rx && (path != 1)) {
+			if (this_adm.ec_ref_rx && (path != 1) &&
+			    (afe_get_port_type(tmp_port) == MSM_AFE_PORT_TYPE_TX)) {
 				open.endpoint_id_2 = this_adm.ec_ref_rx;
 			}
 
@@ -3217,11 +3399,13 @@ int adm_open(int port_id, int path, int rate, int channel_mode, int topology,
 				if (ret)
 					return ret;
 
-				ret = apr_send_pkt(this_adm.apr,
-					(uint32_t *)&open_v6);
+				ret = adm_apr_send_pkt((uint32_t *) &open_v6,
+					&this_adm.copp.wait[port_idx][copp_idx],
+					port_idx, copp_idx, open_v6.hdr.opcode);
 			} else {
-				ret = apr_send_pkt(this_adm.apr,
-					(uint32_t *)&open);
+				ret = adm_apr_send_pkt((uint32_t *) &open,
+					&this_adm.copp.wait[port_idx][copp_idx],
+					port_idx, copp_idx, open.hdr.opcode);
 			}
 			if (ret < 0) {
 				pr_err("%s: port_id: 0x%x for[0x%x] failed %d\n",
@@ -3229,28 +3413,25 @@ int adm_open(int port_id, int path, int rate, int channel_mode, int topology,
 				return -EINVAL;
 			}
 		}
-
-		/* Wait for the callback with copp id */
-		ret = wait_event_timeout(this_adm.copp.wait[port_idx][copp_idx],
-			atomic_read(&this_adm.copp.stat
-			[port_idx][copp_idx]) >= 0,
-			msecs_to_jiffies(TIMEOUT_MS));
-		if (!ret) {
-			pr_err("%s: ADM open timedout for port_id: 0x%x for [0x%x]\n",
-						__func__, tmp_port, port_id);
-			return -EINVAL;
-		} else if (atomic_read(&this_adm.copp.stat
-					[port_idx][copp_idx]) > 0) {
-			pr_err("%s: DSP returned error[%s]\n",
-				__func__, adsp_err_get_err_str(
-				atomic_read(&this_adm.copp.stat
-				[port_idx][copp_idx])));
-			return adsp_err_get_lnx_err_code(
-					atomic_read(&this_adm.copp.stat
-						[port_idx][copp_idx]));
-		}
 	}
 	atomic_inc(&this_adm.copp.cnt[port_idx][copp_idx]);
+
+	/*
+	 * Configure MFC(in ec_ref path) if chmixing param is applicable and set.
+	 * Except channels and channel maps the media format config for this module
+	 * should match with the COPP(EP1) config values.
+	 */
+	if (path != ADM_PATH_PLAYBACK &&
+		this_adm.num_ec_ref_rx_chans_downmixed != 0 &&
+		num_ec_ref_rx_chans != this_adm.num_ec_ref_rx_chans_downmixed) {
+		ret = adm_copp_set_ec_ref_mfc_cfg(port_id, copp_idx,
+				rate, bit_width, num_ec_ref_rx_chans,
+				this_adm.num_ec_ref_rx_chans_downmixed);
+		this_adm.num_ec_ref_rx_chans_downmixed = 0;
+		if (ret)
+			pr_err("%s: set EC REF MFC cfg failed, err %d\n", __func__, ret);
+	}
+
 	return copp_idx;
 }
 EXPORT_SYMBOL(adm_open);
@@ -3539,6 +3720,52 @@ void adm_num_ec_ref_rx_chans(int num_chans)
 EXPORT_SYMBOL(adm_num_ec_ref_rx_chans);
 
 /**
+ * adm_num_ec_rx_ref_chans_downmixed -
+ *        Update EC ref num of channels(downmixed) to be fed to EC algo
+ *
+ */
+void adm_num_ec_ref_rx_chans_downmixed(int num_chans)
+{
+	this_adm.num_ec_ref_rx_chans_downmixed = num_chans;
+	pr_debug("%s: num_ec_ref_rx_chans_downmixed:%d\n",
+		__func__, this_adm.num_ec_ref_rx_chans_downmixed);
+}
+EXPORT_SYMBOL(adm_num_ec_ref_rx_chans_downmixed);
+
+/**
+ * adm_ec_ref_chmixer_weights -
+ *        Update MFC(in ec ref) Channel Mixer Weights to be used
+ *        for downmixing rx channels before feeding them to EC algo
+ * @out_channel_idx: index of output channel to which weightages are applicable
+ * @weights:         pointer to array having input weightages
+ * @count:           array sizeof pointer weights, max supported value is
+ *                   PCM_FORMAT_MAX_NUM_CHANNEL_V8
+ * Returns 0 on success or error on failure
+ */
+int adm_ec_ref_chmixer_weights(int out_channel_idx,
+				uint16_t *weights, int count)
+{
+	int i = 0;
+
+	if (weights == NULL || count <= 0 || out_channel_idx < 0 ||
+		count > PCM_FORMAT_MAX_NUM_CHANNEL_V8 ||
+		out_channel_idx >= PCM_FORMAT_MAX_NUM_CHANNEL_V8) {
+		pr_err("%s: invalid weightages count(%d) ch_idx(%d)",
+				__func__, count, out_channel_idx);
+		return -EINVAL;
+	}
+
+	for (i = 0; i < count; i++) {
+		this_adm.ec_ref_chmixer_weights[out_channel_idx][i] = weights[i];
+		pr_debug("%s: out ch idx :%d, weight[%d] = %d\n",
+			__func__, out_channel_idx, i, weights[i]);
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL(adm_ec_ref_chmixer_weights);
+
+/**
  * adm_ec_ref_rx_bit_width -
  *        Update EC ref bit_width
  *
@@ -3597,7 +3824,7 @@ int adm_close(int port_id, int perf_mode, int copp_idx)
 	int ret = 0, port_idx;
 	int copp_id = RESET_COPP_ID;
 
-	pr_info("%s: port_id=0x%x perf_mode: %d copp_idx: %d\n", __func__,
+	pr_debug("%s: port_id=0x%x perf_mode: %d copp_idx: %d\n", __func__,
 		 port_id, perf_mode, copp_idx);
 
 	port_id = q6audio_convert_virtual_to_portid(port_id);
@@ -3686,33 +3913,16 @@ int adm_close(int port_id, int perf_mode, int copp_idx)
 		atomic_set(&this_adm.copp.channels[port_idx][copp_idx], 0);
 		atomic_set(&this_adm.copp.bit_width[port_idx][copp_idx], 0);
 		atomic_set(&this_adm.copp.app_type[port_idx][copp_idx], 0);
+		atomic_set(&this_adm.copp.session_type[port_idx][copp_idx], 0);
 
 		clear_bit(ADM_STATUS_CALIBRATION_REQUIRED,
 			(void *)&this_adm.copp.adm_status[port_idx][copp_idx]);
-
-		ret = apr_send_pkt(this_adm.apr, (uint32_t *)&close);
+		ret = adm_apr_send_pkt((uint32_t *) &close,
+			&this_adm.copp.wait[port_idx][copp_idx],
+			port_idx, copp_idx, close.opcode);
 		if (ret < 0) {
 			pr_err("%s: ADM close failed %d\n", __func__, ret);
 			return -EINVAL;
-		}
-
-		ret = wait_event_timeout(this_adm.copp.wait[port_idx][copp_idx],
-			atomic_read(&this_adm.copp.stat
-			[port_idx][copp_idx]) >= 0,
-			msecs_to_jiffies(TIMEOUT_MS));
-		if (!ret) {
-			pr_err("%s: ADM cmd Route timedout for port 0x%x\n",
-				__func__, port_id);
-			return -EINVAL;
-		} else if (atomic_read(&this_adm.copp.stat
-					[port_idx][copp_idx]) > 0) {
-			pr_err("%s: DSP returned error[%s]\n",
-				__func__, adsp_err_get_err_str(
-				atomic_read(&this_adm.copp.stat
-				[port_idx][copp_idx])));
-			return adsp_err_get_lnx_err_code(
-					atomic_read(&this_adm.copp.stat
-						[port_idx][copp_idx]));
 		}
 	}
 
@@ -3920,6 +4130,9 @@ static int get_cal_type_index(int32_t cal_type)
 		break;
 	case ADM_LSM_AUDPROC_PERSISTENT_CAL_TYPE:
 		ret = ADM_LSM_AUDPROC_PERSISTENT_CAL;
+		break;
+	case ADM_AUDPROC_PERSISTENT_CAL_TYPE:
+		ret = ADM_AUDPROC_PERSISTENT_CAL;
 		break;
 	default:
 		pr_err("%s: invalid cal type %d!\n", __func__, cal_type);
@@ -4148,6 +4361,12 @@ static int adm_init_cal_data(void)
 		  adm_set_cal, NULL, NULL} },
 		 {adm_map_cal_data, adm_unmap_cal_data,
 		  cal_utils_match_buf_num} },
+
+		{{ADM_AUDPROC_PERSISTENT_CAL_TYPE,
+		 {adm_alloc_cal, adm_dealloc_cal, NULL,
+		  adm_set_cal, NULL, NULL} },
+		 {adm_map_cal_data, adm_unmap_cal_data,
+		  cal_utils_match_buf_num} },
 	};
 	pr_debug("%s:\n", __func__);
 
@@ -4365,6 +4584,49 @@ int adm_set_ffecns_effect(int effect)
 	return rc;
 }
 EXPORT_SYMBOL(adm_set_ffecns_effect);
+
+/**
+ * adm_set_ffecns_freeze_event -
+ *      command to set event for ffecns module
+ *
+ * @event: send ffecns freeze event true or false
+ *
+ * Returns 0 on success or error on failure
+ */
+int adm_set_ffecns_freeze_event(bool ffecns_freeze_event)
+{
+	struct ffv_spf_freeze_param_t ffv_param;
+	struct param_hdr_v3 param_hdr;
+	int rc = 0;
+	int copp_idx = 0;
+
+	memset(&param_hdr, 0, sizeof(param_hdr));
+	memset(&ffv_param, 0, sizeof(ffv_param));
+
+	ffv_param.freeze = ffecns_freeze_event ? 1 : 0;
+	ffv_param.source_id = 0; /*default value*/
+
+	copp_idx = adm_get_default_copp_idx(this_adm.ffecns_port_id);
+	if ((copp_idx < 0) || (copp_idx >= MAX_COPPS_PER_PORT)) {
+		pr_err("%s, no active copp to query rms copp_idx:%d\n",
+			__func__, copp_idx);
+		return -EINVAL;
+	}
+
+	param_hdr.module_id = FFECNS_MODULE_ID;
+	param_hdr.instance_id = INSTANCE_ID_0;
+	param_hdr.param_id = PARAM_ID_FFV_SPF_FREEZE;
+	param_hdr.param_size = sizeof(ffv_param);
+
+	rc = adm_pack_and_set_one_pp_param(this_adm.ffecns_port_id, copp_idx,
+					param_hdr, (uint8_t *) &ffv_param);
+	if (rc)
+		pr_err("%s: Failed to set ffecns imc event, err %d\n",
+		       __func__, rc);
+
+	return rc;
+}
+EXPORT_SYMBOL(adm_set_ffecns_freeze_event);
 
 /**
  * adm_param_enable -
@@ -4666,7 +4928,15 @@ int adm_store_cal_data(int port_id, int copp_idx, int path, int perf_mode,
 			rc = -ENOMEM;
 			goto unlock;
 		}
-	} else if (cal_index == ADM_AUDVOL_CAL) {
+	} else if (cal_index == ADM_AUDPROC_PERSISTENT_CAL) {
+		if (cal_block->cal_data.size > AUD_PROC_PERSIST_BLOCK_SIZE) {
+			pr_err("%s:persist invalid size exp/actual[%zd, %d]\n",
+				__func__, cal_block->cal_data.size, *size);
+			rc = -ENOMEM;
+			goto unlock;
+		}
+	}
+	else if (cal_index == ADM_AUDVOL_CAL) {
 		if (cal_block->cal_data.size > AUD_VOL_BLOCK_SIZE) {
 			pr_err("%s:aud_vol:invalid size exp/actual[%zd, %d]\n",
 				__func__, cal_block->cal_data.size, *size);
@@ -5140,6 +5410,81 @@ done:
 }
 EXPORT_SYMBOL(adm_get_source_tracking);
 
+/**
+ * adm_get_doa_tracking_mon -
+ *        Retrieve doa tracking monitor info
+ *
+ * @port_id: Port ID number
+ * @copp_idx: copp index assigned
+ * @doa_tracking_data: pointer for doa data to be updated with
+ *
+ * Returns 0 on success or error on failure
+ */
+int adm_get_doa_tracking_mon(int port_id, int copp_idx,
+	struct doa_tracking_mon_param *doa_tracking_data)
+{
+	int ret = 0, i;
+	char *params_value;
+	uint32_t max_param_size = 0;
+	struct adm_param_doa_tracking_mon_t *doa_tracking_params = NULL;
+	struct param_hdr_v3 param_hdr;
+
+	pr_debug("%s: Enter, port_id %d, copp_idx %d\n",
+		 __func__, port_id, copp_idx);
+
+	if (doa_tracking_data == NULL) {
+		pr_err("%s: Received NULL pointer for doa tracking data\n",
+			 __func__);
+		return -EINVAL;
+	}
+
+	max_param_size = sizeof(struct adm_param_doa_tracking_mon_t) +
+			 sizeof(union param_hdrs);
+	params_value = kzalloc(max_param_size, GFP_KERNEL);
+	if (!params_value)
+		return -ENOMEM;
+
+	memset(&param_hdr, 0, sizeof(param_hdr));
+	param_hdr.module_id = AUDPROC_MODULE_ID_FFECNS;
+	param_hdr.instance_id = INSTANCE_ID_0;
+	param_hdr.param_id = AUDPROC_PARAM_ID_FFV_DOA_TRACKING_MONITOR;
+	param_hdr.param_size = max_param_size;
+	ret = adm_get_pp_params(port_id, copp_idx,
+				ADM_CLIENT_ID_DEFAULT, NULL, &param_hdr,
+				params_value);
+	if (ret) {
+		pr_err("%s: get parameters failed ret:%d\n", __func__, ret);
+		goto done;
+	}
+
+	doa_tracking_params =
+		(struct adm_param_doa_tracking_mon_t *)params_value;
+	for (i = 0; i < MAX_DOA_TRACKING_ANGLES; i++) {
+		doa_tracking_data->target_angle_L16[i] =
+			doa_tracking_params->target_angle_L16[i];
+		pr_debug("%s: target angle[%d] = %d\n",
+			 __func__, i, doa_tracking_data->target_angle_L16[i]);
+	}
+
+	for (i = 0; i < MAX_DOA_TRACKING_ANGLES; i++) {
+		doa_tracking_data->interf_angle_L16[i] =
+			doa_tracking_params->interf_angle_L16[i];
+		pr_debug("%s: interference angle[%d] = %d\n",
+			 __func__, i, doa_tracking_data->interf_angle_L16[i]);
+	}
+
+	for (i = 0; i < MAX_POLAR_ACTIVITY_INDICATORS; i++) {
+		doa_tracking_data->polar_activity[i] =
+			doa_tracking_params->polar_activity[i];
+	}
+
+done:
+	pr_debug("%s: Exit, ret = %d\n", __func__, ret);
+	kfree(params_value);
+	return ret;
+}
+EXPORT_SYMBOL(adm_get_doa_tracking_mon);
+
 int __init adm_init(void)
 {
 	int i = 0, j;
@@ -5148,6 +5493,7 @@ int __init adm_init(void)
 	this_adm.ffecns_port_id = -1;
 	init_waitqueue_head(&this_adm.matrix_map_wait);
 	init_waitqueue_head(&this_adm.adm_wait);
+	mutex_init(&this_adm.adm_apr_lock);
 
 	for (i = 0; i < AFE_MAX_PORTS; i++) {
 		for (j = 0; j < MAX_COPPS_PER_PORT; j++) {
@@ -5172,6 +5518,7 @@ int __init adm_init(void)
 
 void adm_exit(void)
 {
+	mutex_destroy(&this_adm.adm_apr_lock);
 	if (this_adm.apr)
 		adm_reset_data();
 	adm_delete_cal_data();

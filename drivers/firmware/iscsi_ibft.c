@@ -320,7 +320,10 @@ static ssize_t ibft_attr_show_nic(void *data, int type, char *buf)
 		str += sprintf_ipaddr(str, nic->ip_addr);
 		break;
 	case ISCSI_BOOT_ETH_SUBNET_MASK:
-		val = cpu_to_be32(~((1 << (32-nic->subnet_mask_prefix))-1));
+		if (nic->subnet_mask_prefix > 32)
+			val = cpu_to_be32(~0);
+		else
+			val = cpu_to_be32(~((1 << (32-nic->subnet_mask_prefix))-1));
 		str += sprintf(str, "%pI4", &val);
 		break;
 	case ISCSI_BOOT_ETH_PREFIX_LEN:
@@ -724,8 +727,9 @@ static int __init ibft_create_kobject(struct acpi_table_ibft *header,
 		* executes only devices which are in domain 0. Furthermore, the
 		* iBFT spec doesn't have a domain id field :-(
 		*/
-		pci_dev = pci_get_bus_and_slot((nic->pci_bdf & 0xff00) >> 8,
-					       (nic->pci_bdf & 0xff));
+		pci_dev = pci_get_domain_bus_and_slot(0,
+						(nic->pci_bdf & 0xff00) >> 8,
+						(nic->pci_bdf & 0xff));
 		if (pci_dev) {
 			rc = sysfs_create_link(&boot_kobj->kobj,
 					       &pci_dev->dev.kobj, "device");

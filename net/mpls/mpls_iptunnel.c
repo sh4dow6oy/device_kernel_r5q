@@ -141,8 +141,9 @@ static int mpls_xmit(struct sk_buff *skb)
 		if (rt->rt_gw_family == AF_INET)
 			err = neigh_xmit(NEIGH_ARP_TABLE, out_dev, &rt->rt_gw4,
 					 skb);
-		else
-			err = -EAFNOSUPPORT;
+		else if (rt->rt_gw_family == AF_INET6)
+			err = neigh_xmit(NEIGH_ND_TABLE, out_dev, &rt->rt_gw6,
+					 skb);
 	} else if (rt6) {
 		if (ipv6_addr_v4mapped(&rt6->rt6i_gateway)) {
 			/* 6PE (RFC 4798) */
@@ -166,7 +167,7 @@ drop:
 	return -EINVAL;
 }
 
-static int mpls_build_state(struct nlattr *nla,
+static int mpls_build_state(struct net *net, struct nlattr *nla,
 			    unsigned int family, const void *cfg,
 			    struct lwtunnel_state **ts,
 			    struct netlink_ext_ack *extack)
@@ -177,8 +178,8 @@ static int mpls_build_state(struct nlattr *nla,
 	u8 n_labels;
 	int ret;
 
-	ret = nla_parse_nested(tb, MPLS_IPTUNNEL_MAX, nla,
-			       mpls_iptunnel_policy, extack);
+	ret = nla_parse_nested_deprecated(tb, MPLS_IPTUNNEL_MAX, nla,
+					  mpls_iptunnel_policy, extack);
 	if (ret < 0)
 		return ret;
 
@@ -233,7 +234,7 @@ static int mpls_fill_encap_info(struct sk_buff *skb,
 				struct lwtunnel_state *lwtstate)
 {
 	struct mpls_iptunnel_encap *tun_encap_info;
-	
+
 	tun_encap_info = mpls_lwtunnel_encap(lwtstate);
 
 	if (nla_put_labels(skb, MPLS_IPTUNNEL_DST, tun_encap_info->labels,

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * kernel/power/hibernate.c - Hibernation (a.k.a suspend-to-disk) support.
  *
@@ -6,8 +7,6 @@
  * Copyright (c) 2004 Pavel Machek <pavel@ucw.cz>
  * Copyright (c) 2009 Rafael J. Wysocki, Novell Inc.
  * Copyright (C) 2012 Bojan Smojver <bojan@rexursive.com>
- *
- * This file is released under the GPLv2.
  */
 
 #define pr_fmt(fmt) "PM: " fmt
@@ -33,7 +32,6 @@
 #include <linux/genhd.h>
 #include <linux/ktime.h>
 #include <trace/events/power.h>
-#include <soc/qcom/boot_stats.h>
 
 #include "power.h"
 
@@ -293,6 +291,8 @@ static int create_image(int platform_mode)
 
 	local_irq_disable();
 
+	system_state = SYSTEM_SUSPEND;
+
 	error = syscore_suspend();
 	if (error) {
 		pr_err("Some system devices failed to power down, aborting hibernation\n");
@@ -323,6 +323,7 @@ static int create_image(int platform_mode)
 	syscore_resume();
 
  Enable_irqs:
+	system_state = SYSTEM_RUNNING;
 	local_irq_enable();
 
  Enable_cpus:
@@ -335,7 +336,6 @@ static int create_image(int platform_mode)
  Platform_finish:
 	platform_finish(platform_mode);
 
-	place_marker("M - Hibernation: start device resume");
 	dpm_resume_start(in_suspend ?
 		(error ? PMSG_RECOVER : PMSG_THAW) : PMSG_RESTORE);
 
@@ -346,7 +346,7 @@ static int create_image(int platform_mode)
  * hibernation_snapshot - Quiesce devices and create a hibernation image.
  * @platform_mode: If set, use platform driver to prepare for the transition.
  *
- * This routine must be called with pm_mutex held.
+ * This routine must be called with system_transition_mutex held.
  */
 int hibernation_snapshot(int platform_mode)
 {
@@ -411,7 +411,7 @@ int hibernation_snapshot(int platform_mode)
 
 	resume_console();
 	dpm_complete(msg);
-	place_marker("M - Hibernation: end device resume");
+
  Close:
 	platform_end(platform_mode);
 	return error;
@@ -456,6 +456,7 @@ static int resume_target_kernel(bool platform_mode)
 		goto Enable_cpus;
 
 	local_irq_disable();
+	system_state = SYSTEM_SUSPEND;
 
 	error = syscore_suspend();
 	if (error)
@@ -489,6 +490,7 @@ static int resume_target_kernel(bool platform_mode)
 	syscore_resume();
 
  Enable_irqs:
+	system_state = SYSTEM_RUNNING;
 	local_irq_enable();
 
  Enable_cpus:
@@ -506,8 +508,9 @@ static int resume_target_kernel(bool platform_mode)
  * hibernation_restore - Quiesce devices and restore from a hibernation image.
  * @platform_mode: If set, use platform driver to prepare for the transition.
  *
- * This routine must be called with pm_mutex held.  If it is successful, control
- * reappears in the restored target kernel in hibernation_snapshot().
+ * This routine must be called with system_transition_mutex held.  If it is
+ * successful, control reappears in the restored target kernel in
+ * hibernation_snapshot().
  */
 int hibernation_restore(int platform_mode)
 {
@@ -574,7 +577,12 @@ int hibernation_platform_enter(void)
 		goto Enable_cpus;
 
 	local_irq_disable();
-	syscore_suspend();
+	system_state = SYSTEM_SUSPEND;
+
+	error = syscore_suspend();
+	if (error)
+		goto Enable_irqs;
+
 	if (pm_wakeup_pending()) {
 		error = -EAGAIN;
 		goto Power_up;
@@ -586,6 +594,8 @@ int hibernation_platform_enter(void)
 
  Power_up:
 	syscore_resume();
+ Enable_irqs:
+	system_state = SYSTEM_RUNNING;
 	local_irq_enable();
 
  Enable_cpus:
@@ -642,6 +652,7 @@ static void power_down(void)
 		break;
 	case HIBERNATION_PLATFORM:
 		hibernation_platform_enter();
+		/* Fall through */
 	case HIBERNATION_SHUTDOWN:
 		if (pm_power_off)
 			kernel_power_off();
@@ -712,7 +723,7 @@ int hibernate(void)
 	}
 
 	pr_info("Syncing filesystems ... \n");
-	sys_sync();
+	ksys_sync();
 	pr_info("done.\n");
 
 	error = freeze_processes();
@@ -751,7 +762,6 @@ int hibernate(void)
 		in_suspend = 0;
 		pm_restore_gfp_mask();
 	} else {
-		place_marker("M - PM: Image restored!");
 		pm_pr_dbg("Image restored successfully.\n");
 	}
 
@@ -766,7 +776,6 @@ int hibernate(void)
 			error = load_image_and_restore();
 	}
 	thaw_processes();
-	place_marker("M - Hibernation: processes thaw done");
 
 	/* Don't bother checking whether freezer_test_done is true */
 	freezer_test_done = false;
@@ -776,7 +785,6 @@ int hibernate(void)
 	atomic_inc(&snapshot_device_available);
  Unlock:
 	unlock_system_sleep();
-	place_marker("M - PM: Hibernation Exit!");
 	pr_info("hibernation exit\n");
 
 	return error;
@@ -812,13 +820,13 @@ static int software_resume(void)
 	 * name_to_dev_t() below takes a sysfs buffer mutex when sysfs
 	 * is configured into the kernel. Since the regular hibernate
 	 * trigger path is via sysfs which takes a buffer mutex before
-	 * calling hibernate functions (which take pm_mutex) this can
-	 * cause lockdep to complain about a possible ABBA deadlock
+	 * calling hibernate functions (which take system_transition_mutex)
+	 * this can cause lockdep to complain about a possible ABBA deadlock
 	 * which cannot happen since we're in the boot code here and
 	 * sysfs can't be invoked yet. Therefore, we use a subclass
 	 * here to avoid lockdep complaining.
 	 */
-	mutex_lock_nested(&pm_mutex, SINGLE_DEPTH_NESTING);
+	mutex_lock_nested(&system_transition_mutex, SINGLE_DEPTH_NESTING);
 
 	if (swsusp_resume_device)
 		goto Check_image;
@@ -895,7 +903,6 @@ static int software_resume(void)
 
 	error = load_image_and_restore();
 	thaw_processes();
-	place_marker("M - PM: Thaw processes completed!");
  Finish:
 	__pm_notifier_call_chain(PM_POST_RESTORE, nr_calls, NULL);
 	pm_restore_console();
@@ -903,7 +910,7 @@ static int software_resume(void)
 	atomic_inc(&snapshot_device_available);
 	/* For success case, the suspend path will release the lock */
  Unlock:
-	mutex_unlock(&pm_mutex);
+	mutex_unlock(&system_transition_mutex);
 	pm_pr_dbg("Hibernation image not present or could not be loaded.\n");
 	return error;
  Close_Finish:
@@ -1064,7 +1071,7 @@ static ssize_t resume_store(struct kobject *kobj, struct kobj_attribute *attr,
 	lock_system_sleep();
 	swsusp_resume_device = res;
 	unlock_system_sleep();
-	pr_info("Starting manual resume from disk\n");
+	pm_pr_dbg("Configured resume from disk to %u\n", swsusp_resume_device);
 	noresume = 0;
 	software_resume();
 	return n;

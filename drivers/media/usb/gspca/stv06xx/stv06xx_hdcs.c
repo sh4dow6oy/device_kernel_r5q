@@ -251,8 +251,8 @@ static int hdcs_set_exposure(struct gspca_dev *gspca_dev, __s32 val)
 		if (err < 0)
 			return err;
 	}
-	PDEBUG(D_CONF, "Writing exposure %d, rowexp %d, srowexp %d",
-	       val, rowexp, srowexp);
+	gspca_dbg(gspca_dev, D_CONF, "Writing exposure %d, rowexp %d, srowexp %d\n",
+		  val, rowexp, srowexp);
 	return err;
 }
 
@@ -276,7 +276,7 @@ static int hdcs_set_gains(struct sd *sd, u8 g)
 
 static int hdcs_set_gain(struct gspca_dev *gspca_dev, __s32 val)
 {
-	PDEBUG(D_CONF, "Writing gain %d", val);
+	gspca_dbg(gspca_dev, D_CONF, "Writing gain %d\n", val);
 	return hdcs_set_gains((struct sd *) gspca_dev,
 			       val & 0xff);
 }
@@ -465,7 +465,7 @@ static int hdcs_start(struct sd *sd)
 {
 	struct gspca_dev *gspca_dev = (struct gspca_dev *)sd;
 
-	PDEBUG(D_STREAM, "Starting stream");
+	gspca_dbg(gspca_dev, D_STREAM, "Starting stream\n");
 
 	return hdcs_set_state(sd, HDCS_STATE_RUN);
 }
@@ -474,7 +474,7 @@ static int hdcs_stop(struct sd *sd)
 {
 	struct gspca_dev *gspca_dev = (struct gspca_dev *)sd;
 
-	PDEBUG(D_STREAM, "Halting stream");
+	gspca_dbg(gspca_dev, D_STREAM, "Halting stream\n");
 
 	return hdcs_set_state(sd, HDCS_STATE_SLEEP);
 }
@@ -529,12 +529,13 @@ static int hdcs_init(struct sd *sd)
 static int hdcs_dump(struct sd *sd)
 {
 	u16 reg, val;
+	int err = 0;
 
 	pr_info("Dumping sensor registers:\n");
 
-	for (reg = HDCS_IDENT; reg <= HDCS_ROWEXPH; reg++) {
-		stv06xx_read_sensor(sd, reg, &val);
+	for (reg = HDCS_IDENT; reg <= HDCS_ROWEXPH && !err; reg++) {
+		err = stv06xx_read_sensor(sd, reg, &val);
 		pr_info("reg 0x%02x = 0x%02x\n", reg, val);
 	}
-	return 0;
+	return (err < 0) ? err : 0;
 }

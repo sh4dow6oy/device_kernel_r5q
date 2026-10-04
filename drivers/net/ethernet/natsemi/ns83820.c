@@ -832,7 +832,7 @@ static void rx_irq(struct net_device *ndev)
 	struct ns83820 *dev = PRIV(ndev);
 	struct rx_info *info = &dev->rx_info;
 	unsigned next_rx;
-	int rx_rc, len;
+	int len;
 	u32 cmdsts;
 	__le32 *desc;
 	unsigned long flags;
@@ -893,8 +893,10 @@ static void rx_irq(struct net_device *ndev)
 		if (likely(CMDSTS_OK & cmdsts)) {
 #endif
 			skb_put(skb, len);
-			if (unlikely(!skb))
+			if (unlikely(!skb)) {
+				ndev->stats.rx_dropped++;
 				goto netdev_mangle_me_harder_failed;
+			}
 			if (cmdsts & CMDSTS_DEST_MULTI)
 				ndev->stats.multicast++;
 			ndev->stats.rx_packets++;
@@ -913,15 +915,12 @@ static void rx_irq(struct net_device *ndev)
 				__vlan_hwaccel_put_tag(skb, htons(ETH_P_IPV6), tag);
 			}
 #endif
-			rx_rc = netif_rx(skb);
-			if (NET_RX_DROP == rx_rc) {
-netdev_mangle_me_harder_failed:
-				ndev->stats.rx_dropped++;
-			}
+			netif_rx(skb);
 		} else {
 			dev_kfree_skb_irq(skb);
 		}
 
+netdev_mangle_me_harder_failed:
 		nr++;
 		next_rx = info->next_rx;
 		desc = info->descs + (DESC_SIZE * next_rx);
@@ -1600,10 +1599,10 @@ static void ns83820_tx_timeout(struct net_device *ndev)
 	spin_unlock_irqrestore(&dev->tx_lock, flags);
 }
 
-static void ns83820_tx_watch(unsigned long data)
+static void ns83820_tx_watch(struct timer_list *t)
 {
-	struct net_device *ndev = (void *)data;
-	struct ns83820 *dev = PRIV(ndev);
+	struct ns83820 *dev = from_timer(dev, t, tx_watchdog);
+	struct net_device *ndev = dev->ndev;
 
 #if defined(DEBUG)
 	printk("ns83820_tx_watch: %u %u %d\n",
@@ -1652,9 +1651,7 @@ static int ns83820_open(struct net_device *ndev)
 	writel(0, dev->base + TXDP_HI);
 	writel(desc, dev->base + TXDP);
 
-	init_timer(&dev->tx_watchdog);
-	dev->tx_watchdog.data = (unsigned long)ndev;
-	dev->tx_watchdog.function = ns83820_tx_watch;
+	timer_setup(&dev->tx_watchdog, ns83820_tx_watch, 0);
 	mod_timer(&dev->tx_watchdog, jiffies + 2*HZ);
 
 	netif_start_queue(ndev);	/* FIXME: wait for phy to come up */

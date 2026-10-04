@@ -1,17 +1,9 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /* include/linux/usb/msm_hsusb.h
  *
  * Copyright (C) 2008 Google, Inc.
  * Author: Brian Swetland <swetland@google.com>
- * Copyright (c) 2009-2020, The Linux Foundation. All rights reserved.
- *
- * This software is licensed under the terms of the GNU General Public
- * License version 2, as published by the Free Software Foundation, and
- * may be copied, distributed, and modified under those terms.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * Copyright (c) 2009-2021 The Linux Foundation. All rights reserved.
  *
  */
 
@@ -187,11 +179,13 @@ enum usb_id_state {
 		nominal mode.
  * @sdp_check: SDP detection work in case of USB_FLOAT power supply
  * @notify_charger_work: Charger notification work.
+ * @enable_sdp_check_timer: Timer for SDP charger to check enumeration.
  */
 struct msm_otg {
 	struct usb_phy phy;
 	struct msm_otg_platform_data *pdata;
 	struct platform_device *pdev;
+	struct mutex lock;
 	int irq;
 	int async_irq;
 	int phy_irq;
@@ -332,52 +326,6 @@ struct ci13xxx_platform_data {
 	bool enable_ahb2ahb_bypass;
 	bool enable_streaming;
 	bool enable_axi_prefetch;
-};
-
-/**
- * struct msm_hsic_host_platform_data - platform device data
- *              for msm_hsic_host driver.
- * @phy_sof_workaround: Enable ALL PHY SOF bug related workarounds for
- *               SUSPEND, RESET and RESUME.
- * @phy_susp_sof_workaround: Enable PHY SOF workaround for
- *      SUSPEND.
- * @phy_reset_sof_workaround: Enable PHY SOF workaround for
- *      RESET.
- * @dis_internal_clk_gating: If set, internal clock gating in controller
- *              is disabled.
- *
- */
-struct msm_hsic_host_platform_data {
-	unsigned int strobe;
-	unsigned int data;
-	bool ignore_cal_pad_config;
-	bool phy_sof_workaround;
-	bool dis_internal_clk_gating;
-	bool phy_susp_sof_workaround;
-	bool phy_reset_sof_workaround;
-	u32 reset_delay;
-	int strobe_pad_offset;
-	int data_pad_offset;
-
-	struct msm_bus_scale_pdata *bus_scale_table;
-	unsigned int log2_irq_thresh;
-
-	/* gpio used to resume peripheral */
-	unsigned int resume_gpio;
-	int *tlmm_init_seq;
-	int tlmm_seq_count;
-
-	/*swfi latency is required while driving resume on to the bus */
-	u32 swfi_latency;
-
-	/*standalone latency is required when HSCI is active*/
-	u32 standalone_latency;
-	bool pool_64_bit_align;
-	bool enable_hbm;
-	bool disable_park_mode;
-	bool consider_ipa_handshake;
-	bool ahb_async_bridge_bypass;
-	bool disable_cerr;
 };
 
 #ifdef CONFIG_USB_BAM

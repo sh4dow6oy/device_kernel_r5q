@@ -407,8 +407,8 @@ bool mipi_dsi_packet_format_is_short(u8 type)
 	case MIPI_DSI_DCS_SHORT_WRITE:
 	case MIPI_DSI_DCS_SHORT_WRITE_PARAM:
 	case MIPI_DSI_DCS_READ:
+	case MIPI_DSI_DCS_COMPRESSION_MODE:
 	case MIPI_DSI_SET_MAXIMUM_RETURN_PACKET_SIZE:
-	case MIPI_DSI_COMPRESSION_MODE:
 		return true;
 	}
 
@@ -426,6 +426,7 @@ EXPORT_SYMBOL(mipi_dsi_packet_format_is_short);
 bool mipi_dsi_packet_format_is_long(u8 type)
 {
 	switch (type) {
+	case MIPI_DSI_PPS_LONG_WRITE:
 	case MIPI_DSI_NULL_PACKET:
 	case MIPI_DSI_BLANKING_PACKET:
 	case MIPI_DSI_GENERIC_LONG_WRITE:
@@ -440,7 +441,6 @@ bool mipi_dsi_packet_format_is_long(u8 type)
 	case MIPI_DSI_PACKED_PIXEL_STREAM_18:
 	case MIPI_DSI_PIXEL_STREAM_3BYTE_18:
 	case MIPI_DSI_PACKED_PIXEL_STREAM_24:
-	case MIPI_DSI_PPS:
 		return true;
 	}
 
@@ -515,8 +515,9 @@ int mipi_dsi_shutdown_peripheral(struct mipi_dsi_device *dsi)
 		.tx_buf = (u8 [2]) { 0, 0 },
 		.tx_len = 2,
 	};
+	int ret = mipi_dsi_device_transfer(dsi, &msg);
 
-	return mipi_dsi_device_transfer(dsi, &msg);
+	return (ret < 0) ? ret : 0;
 }
 EXPORT_SYMBOL(mipi_dsi_shutdown_peripheral);
 
@@ -534,8 +535,9 @@ int mipi_dsi_turn_on_peripheral(struct mipi_dsi_device *dsi)
 		.tx_buf = (u8 [2]) { 0, 0 },
 		.tx_len = 2,
 	};
+	int ret = mipi_dsi_device_transfer(dsi, &msg);
 
-	return mipi_dsi_device_transfer(dsi, &msg);
+	return (ret < 0) ? ret : 0;
 }
 EXPORT_SYMBOL(mipi_dsi_turn_on_peripheral);
 
@@ -558,8 +560,9 @@ int mipi_dsi_set_maximum_return_packet_size(struct mipi_dsi_device *dsi,
 		.tx_len = sizeof(tx),
 		.tx_buf = tx,
 	};
+	int ret = mipi_dsi_device_transfer(dsi, &msg);
 
-	return mipi_dsi_device_transfer(dsi, &msg);
+	return (ret < 0) ? ret : 0;
 }
 EXPORT_SYMBOL(mipi_dsi_set_maximum_return_packet_size);
 
@@ -575,13 +578,8 @@ EXPORT_SYMBOL(mipi_dsi_set_maximum_return_packet_size);
  * Return: The number of bytes transmitted on success or a negative error code
  * on failure.
  */
-#if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
-ssize_t mipi_dsi_generic_write(struct mipi_dsi_device *dsi, void *payload,
-				   size_t size)
-#else
 ssize_t mipi_dsi_generic_write(struct mipi_dsi_device *dsi, const void *payload,
-				   size_t size)
-#endif
+			       size_t size)
 {
 	struct mipi_dsi_msg msg = {
 		.channel = dsi->channel,
@@ -625,13 +623,8 @@ EXPORT_SYMBOL(mipi_dsi_generic_write);
  * Return: The number of bytes successfully read or a negative error code on
  * failure.
  */
-#if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
-ssize_t mipi_dsi_generic_read(struct mipi_dsi_device *dsi, void *params,
-				  size_t num_params, void *data, size_t size)
-#else
 ssize_t mipi_dsi_generic_read(struct mipi_dsi_device *dsi, const void *params,
-				  size_t num_params, void *data, size_t size)
-#endif
+			      size_t num_params, void *data, size_t size)
 {
 	struct mipi_dsi_msg msg = {
 		.channel = dsi->channel,
@@ -674,13 +667,8 @@ EXPORT_SYMBOL(mipi_dsi_generic_read);
  * Return: The number of bytes successfully transmitted or a negative error
  * code on failure.
  */
-#if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
-ssize_t mipi_dsi_dcs_write_buffer(struct mipi_dsi_device *dsi,
-				  void *data, size_t len)
-#else
 ssize_t mipi_dsi_dcs_write_buffer(struct mipi_dsi_device *dsi,
 				  const void *data, size_t len)
-#endif
 {
 	struct mipi_dsi_msg msg = {
 		.channel = dsi->channel,

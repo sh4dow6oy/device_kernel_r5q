@@ -1,14 +1,8 @@
-/* Copyright (c) 2018-2019 The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+/* SPDX-License-Identifier: GPL-2.0 */
+/*
+ * Copyright (c) 2018-2021 The Linux Foundation. All rights reserved.
  */
+
 #ifndef __QG_CORE_H__
 #define __QG_CORE_H__
 
@@ -65,6 +59,7 @@ struct qg_dt {
 	int			sys_min_volt_mv;
 	int			fvss_vbat_mv;
 	int			tcss_entry_soc;
+	int			esr_low_temp_threshold;
 	bool			hold_soc_while_full;
 	bool			linearize_soc;
 	bool			cl_disable;
@@ -72,6 +67,7 @@ struct qg_dt {
 	bool			esr_disable;
 	bool			esr_discharge_enable;
 	bool			qg_ext_sense;
+	bool			use_cp_iin_sns;
 	bool			use_s7_ocv;
 	bool			qg_sleep_config;
 	bool			qg_fast_chg_cfg;
@@ -95,12 +91,13 @@ struct qpnp_qg {
 	struct pmic_revid_data	*pmic_rev_id;
 	struct regmap		*regmap;
 	struct qpnp_vadc_chip	*vadc_dev;
-	struct soh_profile	*sp;
+	struct soh_profile      *sp;
 	struct power_supply	*qg_psy;
 	struct class		*qg_class;
 	struct device		*qg_device;
 	struct cdev		qg_cdev;
-	struct device_node	*batt_node;
+	struct device_node      *batt_node;
+	struct dentry		*dfs_root;
 	dev_t			dev_no;
 	struct work_struct	udata_work;
 	struct work_struct	scale_soc_work;
@@ -117,6 +114,7 @@ struct qpnp_qg {
 	struct votable		*good_ocv_irq_disable_votable;
 	u32			qg_base;
 	u8			qg_subtype;
+	u8			qg_mode;
 
 	/* local data variables */
 	u32			batt_id_ohm;
@@ -126,10 +124,12 @@ struct qpnp_qg {
 	struct power_supply	*usb_psy;
 	struct power_supply	*dc_psy;
 	struct power_supply	*parallel_psy;
+	struct power_supply	*cp_psy;
 	struct qg_esr_data	esr_data[QG_MAX_ESR_COUNT];
 
 	/* status variable */
 	u32			*debug_mask;
+	u32			qg_version;
 	bool			qg_device_open;
 	bool			profile_loaded;
 	bool			battery_missing;
@@ -145,6 +145,7 @@ struct qpnp_qg {
 	bool			fvss_active;
 	bool			tcss_active;
 	bool			bass_active;
+	bool			first_profile_load;
 	int			charge_status;
 	int			charge_type;
 	int			chg_iterm_ma;
@@ -162,6 +163,8 @@ struct qpnp_qg {
 	int			tcss_entry_count;
 	int			max_fcc_limit_ma;
 	int			bsoc_bass_entry;
+	int			qg_v_ibat;
+	int			qg_charge_counter;
 	u32			fifo_done_count;
 	u32			wa_flags;
 	u32			seq_no;
@@ -172,6 +175,7 @@ struct qpnp_qg {
 	u32			s2_state_mask;
 	u32			soc_fvss_entry;
 	u32			vbat_fvss_entry;
+	u32			max_fifo_length;
 	ktime_t			last_user_update_time;
 	ktime_t			last_fifo_update_time;
 	unsigned long		last_maint_soc_update_time;
@@ -259,5 +263,14 @@ enum qg_wa_flags {
 	QG_PON_OCV_WA = BIT(3),
 };
 
+enum qg_version {
+	QG_PMIC5,
+	QG_LITE,
+};
+
+enum qg_mode {
+	QG_V_I_MODE,
+	QG_V_MODE,
+};
 
 #endif /* __QG_CORE_H__ */

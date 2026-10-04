@@ -41,7 +41,7 @@ struct clockgen_pll_div {
 };
 
 struct clockgen_pll {
-	struct clockgen_pll_div div[4];
+	struct clockgen_pll_div div[8];
 };
 
 #define CLKSEL_VALID	1
@@ -766,13 +766,11 @@ static const struct clockgen_pll_div *get_pll_div(struct clockgen *cg,
 	return &cg->pll[pll].div[div];
 }
 
-static struct clk * __init create_mux_common(struct clockgen *cg,
-					     struct mux_hwclock *hwc,
-					     const struct clk_ops *ops,
-					     unsigned long min_rate,
-					     unsigned long max_rate,
-					     unsigned long pct80_rate,
-					     const char *fmt, int idx)
+static struct clk * __init __printf(7, 8)
+create_mux_common(struct clockgen *cg, struct mux_hwclock *hwc,
+		  const struct clk_ops *ops, unsigned long min_rate,
+		  unsigned long max_rate, unsigned long pct80_rate,
+		  const char *fmt, ...)
 {
 	struct clk_init_data init = {};
 	struct clk *clk;
@@ -780,8 +778,11 @@ static struct clk * __init create_mux_common(struct clockgen *cg,
 	const char *parent_names[NUM_MUX_PARENTS];
 	char name[32];
 	int i, j;
+	va_list args;
 
-	snprintf(name, sizeof(name), fmt, idx);
+	va_start(args, fmt);
+	vsnprintf(name, sizeof(name), fmt, args);
+	va_end(args);
 
 	for (i = 0, j = 0; i < NUM_MUX_PARENTS; i++) {
 		unsigned long rate;
@@ -1126,6 +1127,13 @@ static void __init create_one_pll(struct clockgen *cg, int idx)
 	for (i = 0; i < ARRAY_SIZE(pll->div); i++) {
 		struct clk *clk;
 		int ret;
+
+		/*
+		 * For platform PLL, there are 8 divider clocks.
+		 * For core PLL, there are 4 divider clocks at most.
+		 */
+		if (idx != PLATFORM_PLL && i >= 4)
+			break;
 
 		snprintf(pll->div[i].name, sizeof(pll->div[i].name),
 			 "cg-pll%d-div%d", idx, i + 1);

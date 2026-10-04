@@ -113,11 +113,14 @@ static void phonet_device_destroy(struct net_device *dev)
 	mutex_unlock(&pndevs->lock);
 
 	if (pnd) {
+		struct net *net = dev_net(dev);
+		u32 ifindex = dev->ifindex;
 		u8 addr;
 
 		for_each_set_bit(addr, pnd->addrs, 64)
-			phonet_address_notify(RTM_DELADDR, dev, addr);
-		kfree(pnd);
+			phonet_address_notify(net, RTM_DELADDR, ifindex, addr);
+
+		kfree_rcu(pnd, rcu);
 	}
 }
 
@@ -260,8 +263,9 @@ static int phonet_device_autoconf(struct net_device *dev)
 	ret = phonet_address_add(dev, req.ifr_phonet_autoconf.device);
 	if (ret)
 		return ret;
-	phonet_address_notify(RTM_NEWADDR, dev,
-				req.ifr_phonet_autoconf.device);
+
+	phonet_address_notify(dev_net(dev), RTM_NEWADDR, dev->ifindex,
+			      req.ifr_phonet_autoconf.device);
 	return 0;
 }
 
@@ -320,7 +324,8 @@ static int __net_init phonet_init_net(struct net *net)
 {
 	struct phonet_net *pnn = phonet_pernet(net);
 
-	if (!proc_create("phonet", 0, net->proc_net, &pn_sock_seq_fops))
+	if (!proc_create_net("phonet", 0, net->proc_net, &pn_sock_seq_ops,
+			sizeof(struct seq_net_private)))
 		return -ENOMEM;
 
 	INIT_LIST_HEAD(&pnn->pndevs.list);
@@ -331,7 +336,10 @@ static int __net_init phonet_init_net(struct net *net)
 
 static void __net_exit phonet_exit_net(struct net *net)
 {
+	struct phonet_net *pnn = phonet_pernet(net);
+
 	remove_proc_entry("phonet", net->proc_net);
+	WARN_ON_ONCE(!list_empty(&pnn->pndevs.list));
 }
 
 static struct pernet_operations phonet_net_ops = {
@@ -348,7 +356,8 @@ int __init phonet_device_init(void)
 	if (err)
 		return err;
 
-	proc_create("pnresource", 0, init_net.proc_net, &pn_res_seq_fops);
+	proc_create_net("pnresource", 0, init_net.proc_net, &pn_res_seq_ops,
+			sizeof(struct seq_net_private));
 	register_netdevice_notifier(&phonet_device_notifier);
 	err = phonet_netlink_register();
 	if (err)
