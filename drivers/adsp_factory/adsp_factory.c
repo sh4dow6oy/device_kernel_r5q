@@ -32,7 +32,7 @@ static u8 msg_size[MSG_SENSOR_MAX] = {
 	MSG_PRESSURE_MAX,
 	MSG_LIGHT_MAX,
 	MSG_PROX_MAX,
-	MSG_TYPE_SIZE_ZERO,
+	MSG_TYPE_SIZE_ZERO, //MSG_HH_HOLE
 	MSG_MOBEAM_MAX,
 #ifdef CONFIG_SUPPORT_DUAL_6AXIS
 	MSG_ACCEL_MAX,
@@ -51,37 +51,27 @@ static u8 msg_size[MSG_SENSOR_MAX] = {
 	MSG_GYRO_TEMP_MAX,
 #endif
 	MSG_PRESSURE_TEMP_MAX,
-	MSG_TYPE_SIZE_ZERO,
+	MSG_TYPE_SIZE_ZERO, //MSG_MAG_CAL
 #ifdef CONFIG_SUPPORT_VIRTUAL_OPTIC
 	MSG_TYPE_SIZE_ZERO,
 #endif
-	MSG_TYPE_SIZE_ZERO,
+	MSG_TYPE_SIZE_ZERO, //MSG_REG_SNS
 #ifdef CONFIG_SUPPORT_AK0997X
 	MSG_DIGITAL_HALL_MAX,
 	MSG_DIGITAL_HALL_ANGLE_MAX,
 	MSG_DIGITAL_HALL_ANGLE_MAX,
 #endif
-#ifdef CONFIG_SUPPORT_DUAL_DDI_COPR_FOR_LIGHT_SENSOR
-	MSG_DDI_MAX,
+#ifdef CONFIG_SUPPORT_HIDDEN_HOLE_SUB
+	MSG_TYPE_SIZE_ZERO, //MSG_HH_HOLE_SUB
 #endif
-#ifdef CONFIG_SUPPORT_LIGHT_MAIN2_SENSOR
-	MSG_LIGHT_MAX,
-#endif
-	MSG_TYPE_SIZE_ZERO,
-	MSG_TYPE_SIZE_ZERO
+	MSG_TYPE_SIZE_ZERO, //MSG_FACTORY_INIT_CMD
+	MSG_TYPE_SIZE_ZERO, //MSG_SSC_CORE
 };
 
 /* The netlink socket */
 struct adsp_data *data;
 
 DEFINE_MUTEX(factory_mutex);
-
-#ifdef CONFIG_SUPPORT_BRIGHTNESS_NOTIFY_FOR_LIGHT_SENSOR
-struct adsp_data* adsp_get_struct_data(void)
-{
-	return data;
-}
-#endif
 
 /* Function used to send message to the user space */
 int adsp_unicast(void *param, int param_size, u16 sensor_type,
@@ -121,7 +111,7 @@ int adsp_unicast(void *param, int param_size, u16 sensor_type,
 	return ret;
 }
 
-#if defined(CONFIG_SUPPORT_DEVICE_MODE) || defined(CONFIG_VBUS_NOTIFIER)
+#ifdef CONFIG_SUPPORT_DEVICE_MODE
 struct adsp_data* adsp_ssc_core_register(unsigned int type,
 	struct device_attribute *attributes[])
 {
@@ -414,7 +404,6 @@ int get_hall_angle_data(int32_t *raw_data)
 {
 	uint8_t cnt = 0;
 
-	mutex_lock(&data->digital_hall_mutex);
 	adsp_unicast(NULL, 0, MSG_DIGITAL_HALL_ANGLE, 0, MSG_TYPE_GET_RAW_DATA);
 
 	while (!(data->ready_flag[MSG_TYPE_GET_RAW_DATA] & 1 << MSG_DIGITAL_HALL_ANGLE) &&
@@ -440,7 +429,6 @@ int get_hall_angle_data(int32_t *raw_data)
 		data->msg_buf[MSG_DIGITAL_HALL_ANGLE][8]);
 
 	*raw_data = data->msg_buf[MSG_DIGITAL_HALL_ANGLE][2];
-	mutex_unlock(&data->digital_hall_mutex);
 
 	return 0;
 }
@@ -455,7 +443,7 @@ static int process_received_msg(struct sk_buff *skb, struct nlmsghdr *nlh)
 	if (msg_type >= MSG_TYPE_MAX || sensor_type >= MSG_SENSOR_MAX ||
 		nlh->nlmsg_len - (int32_t)sizeof(struct nlmsghdr) >
 	    	sizeof(int32_t) * msg_size[sensor_type]) {
-		pr_err("[FACTORY] %s %d, %d, %d\n", __func__, msg_type, sensor_type, nlh->nlmsg_len);
+		pr_err("[FACTORY] %d, %d, %d\n", msg_type, sensor_type, nlh->nlmsg_len);
 		return 0;
 	}
 
@@ -472,40 +460,29 @@ static int process_received_msg(struct sk_buff *skb, struct nlmsghdr *nlh)
 #endif
 #ifdef CONFIG_SUPPORT_DEVICE_MODE
 		sns_device_mode_init_work();
-#endif
-#if defined(CONFIG_SUPPORT_DUAL_OPTIC) && defined(CONFIG_SUPPORT_DEVICE_MODE)
+#ifdef CONFIG_SUPPORT_DUAL_OPTIC
 		sns_flip_init_work();
 #endif
-#ifdef CONFIG_SUPPORT_AMS_PROX_CALIBRATION
-		prox_cal_init_work(data);
 #endif
-#ifdef CONFIG_SUPPORT_SSC_AOD_RECT
-		light_rect_init_work();
-#endif
-#ifdef CONFIG_SUPPORT_AMS_LIGHT_CALIBRATION
-		light_cal_init_work(data);
+#ifdef CONFIG_SUPPORT_BHL_COMPENSATION_FOR_LIGHT_SENSOR
+		light_factory_init_work(data);
 #endif
 #ifdef CONFIG_SUPPORT_PROX_POWER_ON_CAL
 		prox_factory_init_work();
 #endif
-#ifdef CONFIG_VBUS_NOTIFIER
-		sns_vbus_init_work();
+#ifdef CONFIG_SUPPORT_PROX_CALIBRATION
+		prox_cal_init_work(data);
 #endif
 #ifdef CONFIG_SUPPORT_AK0997X
 		digital_hall_factory_auto_cal_init_work();
 #endif
+		data->init_work_done = true;
 		return 0;
 	}
 
 	memcpy(data->msg_buf[sensor_type],
 		(int32_t *)NLMSG_DATA(nlh),
 		nlh->nlmsg_len - (int32_t)sizeof(struct nlmsghdr));
-#ifdef CONFIG_SUPPORT_LIGHT_DUALIZATION
-	if (sensor_type == MSG_LIGHT && msg_type == MSG_TYPE_ST_SHOW_DATA)
-	{
-		light_set_name_vendor(data->msg_buf[MSG_LIGHT][0]);
-	}
-#endif
 	data->ready_flag[msg_type] |= 1 << sensor_type;
 
 	return 0;
@@ -563,6 +540,8 @@ static int __init factory_adsp_init(void)
 		data->ready_flag[i] = 0;
 
 	data->restrict_mode = false;
+	data->init_work_done = false;
+
 	mutex_init(&data->accel_factory_mutex);
 	mutex_init(&data->prox_factory_mutex);
 	mutex_init(&data->light_factory_mutex);
@@ -570,15 +549,8 @@ static int __init factory_adsp_init(void)
 #ifdef CONFIG_SUPPORT_AK0997X
 	mutex_init(&data->digital_hall_mutex);
 #endif
-#ifdef CONFIG_SUPPORT_AMS_LIGHT_CALIBRATION
-	INIT_DELAYED_WORK(&data->light_cal_work, light_cal_read_work_func);
-#endif
-#if defined(CONFIG_SEC_C1Q_PROJECT) || defined(CONFIG_SEC_C2Q_PROJECT)
-	INIT_DELAYED_WORK(&data->light_copr_debug_work,
-		light_copr_debug_work_func);
-#endif
-#ifdef CONFIG_SUPPORT_BRIGHTNESS_NOTIFY_FOR_LIGHT_SENSOR
-	INIT_WORK(&data->light_br_work, light_brightness_work_func);
+#ifdef CONFIG_SUPPORT_PROX_CALIBRATION
+	INIT_DELAYED_WORK(&data->prox_cal_work, prox_cal_read_work_func);
 #endif
 	pr_info("[FACTORY] %s: Timer Init\n", __func__);
 	return 0;
@@ -595,16 +567,9 @@ static void __exit factory_adsp_exit(void)
 #ifdef CONFIG_SUPPORT_AK0997X
 	mutex_destroy(&data->digital_hall_mutex);
 #endif
-#ifdef CONFIG_SUPPORT_AMS_LIGHT_CALIBRATION
-	cancel_delayed_work_sync(&data->light_cal_work);
+#ifdef CONFIG_SUPPORT_PROX_CALIBRATION
+	cancel_delayed_work_sync(&data->prox_cal_work);
 #endif
-#if defined(CONFIG_SEC_C1Q_PROJECT) || defined(CONFIG_SEC_C2Q_PROJECT)
-	cancel_delayed_work_sync(&data->light_copr_debug_work);
-#endif
-#ifdef CONFIG_SUPPORT_BRIGHTNESS_NOTIFY_FOR_LIGHT_SENSOR
-	cancel_work_sync(&data->light_br_work);
-#endif
-
 	for (i = 0; i < MSG_SENSOR_MAX; i++)
 		kfree(data->msg_buf[i]);
 	pr_info("[FACTORY] %s\n", __func__);
