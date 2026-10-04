@@ -4498,7 +4498,7 @@ static int pca9468_charger_probe(struct i2c_client *client,
 err_power_supply_regsister:
 err_hw_init:
 err_regmap_init:
-	wakeup_source_trash(&pca9468_chg->monitor_wake_lock);
+	wakeup_source_remove(pca9468_chg->monitor_wake_lock);
 	return ret;
 #endif
 }
@@ -4515,7 +4515,7 @@ static int pca9468_charger_remove(struct i2c_client *client)
 			gpio_free(pca9468_chg->pdata->irq_gpio);
 	}
 
-	wakeup_source_trash(&pca9468_chg->monitor_wake_lock);
+	wakeup_source_remove(pca9468_chg->monitor_wake_lock);
 #if defined(CONFIG_BATTERY_SAMSUNG)
 	if (pca9468_chg->psy_chg)
 		power_supply_unregister(pca9468_chg->psy_chg);
