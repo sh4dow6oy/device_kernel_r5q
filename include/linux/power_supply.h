@@ -60,7 +60,6 @@ enum {
 	POWER_SUPPLY_HEALTH_COLD,
 	POWER_SUPPLY_HEALTH_WATCHDOG_TIMER_EXPIRE,
 	POWER_SUPPLY_HEALTH_SAFETY_TIMER_EXPIRE,
-	POWER_SUPPLY_HEALTH_OVERCURRENT,
 	POWER_SUPPLY_HEALTH_WARM,
 	POWER_SUPPLY_HEALTH_COOL,
 	POWER_SUPPLY_HEALTH_HOT,
@@ -232,7 +231,6 @@ enum power_supply_property {
 	POWER_SUPPLY_PROP_TIME_TO_FULL_NOW,
 	POWER_SUPPLY_PROP_TIME_TO_FULL_AVG,
 	POWER_SUPPLY_PROP_TYPE, /* use power_supply.type instead */
-	POWER_SUPPLY_PROP_USB_TYPE,
 	POWER_SUPPLY_PROP_SCOPE,
 	POWER_SUPPLY_PROP_PRECHARGE_CURRENT,
 	POWER_SUPPLY_PROP_CHARGE_TERM_CURRENT,
@@ -320,7 +318,6 @@ enum power_supply_property {
 	POWER_SUPPLY_PROP_PD_VOLTAGE_MAX,
 	POWER_SUPPLY_PROP_PD_VOLTAGE_MIN,
 	POWER_SUPPLY_PROP_SDP_CURRENT_MAX,
-	POWER_SUPPLY_PROP_FG_RESET_CLOCK,
 	POWER_SUPPLY_PROP_CONNECTOR_TYPE,
 	POWER_SUPPLY_PROP_PARALLEL_BATFET_MODE,
 	POWER_SUPPLY_PROP_PARALLEL_FCC_MAX,
@@ -344,20 +341,19 @@ enum power_supply_property {
 	POWER_SUPPLY_PROP_QC_OPTI_DISABLE,
 	POWER_SUPPLY_PROP_CC_SOC,
 	POWER_SUPPLY_PROP_BATT_AGE_LEVEL,
-	POWER_SUPPLY_PROP_SCALE_MODE_EN,
 	POWER_SUPPLY_PROP_VOLTAGE_VPH,
 	POWER_SUPPLY_PROP_CHIP_VERSION,
 	POWER_SUPPLY_PROP_THERM_ICL_LIMIT,
 	POWER_SUPPLY_PROP_DC_RESET,
+	POWER_SUPPLY_PROP_SCALE_MODE_EN,
 	POWER_SUPPLY_PROP_VOLTAGE_MAX_LIMIT,
 	POWER_SUPPLY_PROP_REAL_CAPACITY,
+	POWER_SUPPLY_PROP_ESR_SW_CONTROL,
 	POWER_SUPPLY_PROP_FORCE_MAIN_ICL,
 	POWER_SUPPLY_PROP_FORCE_MAIN_FCC,
 	POWER_SUPPLY_PROP_COMP_CLAMP_LEVEL,
 	POWER_SUPPLY_PROP_ADAPTER_CC_MODE,
 	POWER_SUPPLY_PROP_SKIN_HEALTH,
-	POWER_SUPPLY_PROP_AICL_DONE,
-	POWER_SUPPLY_PROP_VOLTAGE_STEP,
 	POWER_SUPPLY_PROP_APSD_RERUN,
 	POWER_SUPPLY_PROP_APSD_TIMEOUT,
 	/* Charge pump properties */
@@ -373,22 +369,39 @@ enum power_supply_property {
 	POWER_SUPPLY_PROP_CP_ILIM,
 	POWER_SUPPLY_PROP_IRQ_STATUS,
 	POWER_SUPPLY_PROP_PARALLEL_OUTPUT_MODE,
-	POWER_SUPPLY_PROP_CC_TOGGLE_ENABLE,
-	POWER_SUPPLY_PROP_FG_TYPE,
-	POWER_SUPPLY_PROP_CHARGER_STATUS,
+	POWER_SUPPLY_PROP_FUELGAUGE_RESET,
+	POWER_SUPPLY_PROP_USBPD_RESET,
+	POWER_SUPPLY_PROP_FACTORY_MODE,
+	POWER_SUPPLY_PROP_VBAT,
+	POWER_SUPPLY_PROP_IWCIN,
+	POWER_SUPPLY_PROP_VWCIN,
+	POWER_SUPPLY_PROP_ICHGIN,
+	POWER_SUPPLY_PROP_VCHGIN,
+	POWER_SUPPLY_PROP_CO_ENABLE,
+	POWER_SUPPLY_PROP_VBYP,
+	POWER_SUPPLY_PROP_VSYS,
+	POWER_SUPPLY_PROP_TDIE,
+	POWER_SUPPLY_PROP_VCC1,
+	POWER_SUPPLY_PROP_VCC2,
+	POWER_SUPPLY_PROP_IOTG,
+	POWER_SUPPLY_PROP_ITX,
+	POWER_SUPPLY_PROP_VGPADC,
+	POWER_SUPPLY_PROP_RR_ENABLE,
+	POWER_SUPPLY_PROP_PM_FACTORY,
+	POWER_SUPPLY_PROP_PD_SUPPORT,
+	POWER_SUPPLY_PROP_FAST_IAVG,
 	/* Local extensions of type int64_t */
 	POWER_SUPPLY_PROP_CHARGE_COUNTER_EXT,
-	/* Properties of type `const char *' */
-	POWER_SUPPLY_PROP_MODEL_NAME,
 	POWER_SUPPLY_PROP_MANUFACTURER,
+	POWER_SUPPLY_PROP_SERIAL_NUMBER,
 	POWER_SUPPLY_PROP_BATTERY_TYPE,
 	POWER_SUPPLY_PROP_CYCLE_COUNTS,
 	POWER_SUPPLY_PROP_AFC_CHARGER_MODE,
-	/*
-	 * Add local extensions for properties with string values between
-	 * MODEL_NAME and SERIAL_NUMBER. Don't add below SERIAL_NUMBER.
-	 */
-	POWER_SUPPLY_PROP_SERIAL_NUMBER,
+	POWER_SUPPLY_PROP_2LV_3LV_CHG_MODE,
+	POWER_SUPPLY_PROP_PM_VCHGIN,
+	/* Properties of type `const char *' */
+	POWER_SUPPLY_PROP_MODEL_NAME,
+
 	POWER_SUPPLY_PROP_MAX,
 	POWER_SUPPLY_EXT_PROP_MAX = POWER_SUPPLY_PROP_MAX + 256,
 };
@@ -422,19 +435,6 @@ enum power_supply_type {
 	POWER_SUPPLY_TYPE_OTG,
 	POWER_SUPPLY_TYPE_POGO,			/* POGO */
 	POWER_SUPPLY_TYPE_MAX,
-};
-
-enum power_supply_usb_type {
-	POWER_SUPPLY_USB_TYPE_UNKNOWN = 0,
-	POWER_SUPPLY_USB_TYPE_SDP,		/* Standard Downstream Port */
-	POWER_SUPPLY_USB_TYPE_DCP,		/* Dedicated Charging Port */
-	POWER_SUPPLY_USB_TYPE_CDP,		/* Charging Downstream Port */
-	POWER_SUPPLY_USB_TYPE_ACA,		/* Accessory Charger Adapters */
-	POWER_SUPPLY_USB_TYPE_C,		/* Type C Port */
-	POWER_SUPPLY_USB_TYPE_PD,		/* Power Delivery Port */
-	POWER_SUPPLY_USB_TYPE_PD_DRP,		/* PD Dual Role Port */
-	POWER_SUPPLY_USB_TYPE_PD_PPS,		/* PD Programmable Power Supply */
-	POWER_SUPPLY_USB_TYPE_APPLE_BRICK_ID,	/* Apple Charging Method */
 };
 
 /* Indicates USB Type-C CC connection status */
@@ -484,8 +484,6 @@ struct power_supply;
 /* Run-time specific power supply configuration */
 struct power_supply_config {
 	struct device_node *of_node;
-	struct fwnode_handle *fwnode;
-
 	/* Driver private data */
 	void *drv_data;
 
@@ -497,8 +495,6 @@ struct power_supply_config {
 struct power_supply_desc {
 	const char *name;
 	enum power_supply_type type;
-	enum power_supply_usb_type *usb_types;
-	size_t num_usb_types;
 	enum power_supply_property *properties;
 	size_t num_properties;
 
@@ -636,9 +632,8 @@ extern int power_supply_get_battery_info(struct power_supply *psy,
 					 struct power_supply_battery_info *info);
 extern void power_supply_changed(struct power_supply *psy);
 extern int power_supply_am_i_supplied(struct power_supply *psy);
-int power_supply_get_property_from_supplier(struct power_supply *psy,
-					    enum power_supply_property psp,
-					    union power_supply_propval *val);
+extern int power_supply_set_input_current_limit_from_supplier(
+					 struct power_supply *psy);
 extern int power_supply_set_battery_charged(struct power_supply *psy);
 
 #ifdef CONFIG_POWER_SUPPLY
@@ -675,8 +670,6 @@ devm_power_supply_register_no_ws(struct device *parent,
 				 const struct power_supply_config *cfg);
 extern void power_supply_unregister(struct power_supply *psy);
 extern int power_supply_powers(struct power_supply *psy, struct device *dev);
-
-#define to_power_supply(device) container_of(device, struct power_supply, dev)
 
 extern void *power_supply_get_drvdata(struct power_supply *psy);
 /* For APM emulation, think legacy userspace. */
