@@ -35,9 +35,11 @@
 #include <linux/vmalloc.h>
 #include <linux/ctype.h>
 
+#define SENDSZ 16
+
 unsigned int mfc_chip_id_now;
 
-static int mfc_reg_read(struct i2c_client *client, u16 reg, u8 *val)
+int mfc_reg_read(struct i2c_client *client, u16 reg, u8 *val)
 {
 	struct mfc_charger_data *charger = i2c_get_clientdata(client);
 	int ret;
@@ -72,7 +74,117 @@ static int mfc_reg_read(struct i2c_client *client, u16 reg, u8 *val)
 	return ret;
 }
 
-static int mfc_get_firmware_version(struct mfc_charger_data *charger)
+int mfc_reg_write(struct i2c_client *client, u16 reg, u8 val)
+{
+	struct mfc_charger_data *charger = i2c_get_clientdata(client);
+	int ret;
+	unsigned char data[3] = { reg >> 8, reg & 0xff, val };
+
+	//pr_info("%s reg=0x%x, val=0x%x", __func__, reg, val);
+
+	mutex_lock(&charger->io_lock);
+	ret = i2c_master_send(client, data, 3);
+	mutex_unlock(&charger->io_lock);
+	if (ret < 3) {
+		pr_err("%s: i2c write error, reg: 0x%x, ret: %d (called by %ps)\n",
+				__func__, reg, ret, __builtin_return_address(0));
+		return ret < 0 ? ret : -EIO;
+	}
+
+	return 0;
+}
+
+int mfc_reg_multi_write(struct i2c_client *client, u16 reg, const u8 * val, int size)
+{
+	struct mfc_charger_data *charger = i2c_get_clientdata(client);
+	int ret = 0;
+	unsigned char data[SENDSZ+2];
+	int cnt = 0;
+
+	pr_err("%s: size: 0x%x\n",
+				__func__, size);
+	while(size > SENDSZ) {
+		data[0] = (reg+cnt) >>8;
+		data[1] = (reg+cnt) & 0xff;
+		memcpy(data+2, val+cnt, SENDSZ);
+		mutex_lock(&charger->io_lock);
+		ret = i2c_master_send(client, data, SENDSZ+2);
+		mutex_unlock(&charger->io_lock);
+		if (ret < SENDSZ+2) {
+			pr_err("%s: i2c write error, reg: 0x%x\n",
+					__func__, reg);
+			return ret < 0 ? ret : -EIO;
+		}
+		cnt = cnt + SENDSZ;
+		size = size - SENDSZ;
+	}
+	if (size > 0) {
+		data[0] = (reg+cnt) >>8;
+		data[1] = (reg+cnt) & 0xff;
+		memcpy(data+2, val+cnt, size);
+		mutex_lock(&charger->io_lock);
+		ret = i2c_master_send(client, data, size+2);
+		mutex_unlock(&charger->io_lock);
+		if (ret < size+2) {
+			dev_err(&client->dev, "%s: i2c write error, reg: 0x%x\n",
+					__func__, reg);
+			return ret < 0 ? ret : -EIO;
+		}
+	}
+
+	return ret;
+}
+
+int mfc_reg_update(struct i2c_client *client, u16 reg, u8 val, u8 mask)
+{
+	//val = 0b 0000 0001
+	//ms = 0b 1111 1110
+	struct mfc_charger_data *charger = i2c_get_clientdata(client);
+	unsigned char data[3] = { reg >> 8, reg & 0xff, val };
+	u8 data2;
+	int ret;
+
+	ret = mfc_reg_read(client, reg, &data2);
+	if (ret >= 0) {
+		u8 old_val = data2 & 0xff;
+		u8 new_val = (val & mask) | (old_val & (~mask));
+		data[2] = new_val;
+
+		mutex_lock(&charger->io_lock);
+		ret = i2c_master_send(client, data, 3);
+		mutex_unlock(&charger->io_lock);
+		if (ret < 3) {
+			pr_err("%s: i2c write error, reg: 0x%x, ret: %d\n",
+				__func__, reg, ret);
+			return ret < 0 ? ret : -EIO;
+		}
+	}
+	mfc_reg_read(client, reg, &data2);
+
+	return ret;
+}
+
+void mfc_set_cmd_l_reg(struct mfc_charger_data *charger, u8 val, u8 mask)
+{
+	u8 temp = 0;
+	int ret = 0, i = 0;
+
+	do {
+		pr_info("%s\n", __func__);
+		ret = mfc_reg_update(charger->client, MFC_HAL_AP2MFC_CMD_L_REG, val, mask); // command
+		if (ret >= 0) {
+			msleep(10);
+			ret = mfc_reg_read(charger->client, MFC_HAL_AP2MFC_CMD_L_REG, &temp); // check out set bit exists
+			if(temp != 0)
+				pr_info("%s CMD is not clear yet, cnt = %d\n", __func__, i);
+			if (ret < 0 || i > 3)
+				break;
+		}
+		i++;
+	} while ((temp != 0) && (i < 3));
+}
+
+int mfc_get_firmware_version(struct mfc_charger_data *charger, int firm_mode)
 {
 	int version = -1;
 	int ret;
@@ -80,20 +192,27 @@ static int mfc_get_firmware_version(struct mfc_charger_data *charger)
 	u8 fw_minor[2] = {0,};
 
 	pr_info("%s: called by (%ps)\n", __func__, __builtin_return_address(0));
+	switch (firm_mode) {
+	case MFC_RX_FIRMWARE:
+		ret = mfc_reg_read(charger->client, MFC_HAL_FW_MAJOR_REV_L_REG, &fw_major[0]);
+		ret = mfc_reg_read(charger->client, MFC_HAL_FW_MAJOR_REV_H_REG, &fw_major[1]);
+		if (ret >= 0) {
+			version =  fw_major[0] | (fw_major[1] << 8);
+		}
+		pr_info("%s rx major firmware version 0x%x\n", __func__, version);
 
-	ret = mfc_reg_read(charger->client, MFC_HAL_FW_MAJOR_REV_L_REG, &fw_major[0]);
-	ret = mfc_reg_read(charger->client, MFC_HAL_FW_MAJOR_REV_H_REG, &fw_major[1]);
-	if (ret >= 0) {
-		version =  fw_major[0] | (fw_major[1] << 8);
+		ret = mfc_reg_read(charger->client, MFC_HAL_FW_MINOR_REV_L_REG, &fw_minor[0]);
+		ret = mfc_reg_read(charger->client, MFC_HAL_FW_MINOR_REV_H_REG, &fw_minor[1]);
+		if (ret >= 0) {
+			version = fw_minor[0] | (fw_minor[1] << 8);
+		}
+		pr_info("%s rx minor firmware version 0x%x\n", __func__, version);
+		break;
+	default:
+		pr_err("%s Wrong firmware mode\n", __func__);
+		version = -1;
+		break;
 	}
-	pr_info("%s rx major firmware version 0x%x\n", __func__, version);
-
-	ret = mfc_reg_read(charger->client, MFC_HAL_FW_MINOR_REV_L_REG, &fw_minor[0]);
-	ret = mfc_reg_read(charger->client, MFC_HAL_FW_MINOR_REV_H_REG, &fw_minor[1]);
-	if (ret >= 0) {
-		version = fw_minor[0] | (fw_minor[1] << 8);
-	}
-	pr_info("%s rx minor firmware version 0x%x\n", __func__, version);
 
 	return version;
 }
@@ -154,7 +273,7 @@ static int mfc_check_ic_info(struct mfc_charger_data *charger)
 	else
 		mfc_chip_id_now = MFC_CHIP_ID_P9320; /* default is IDT */
 
-	ver = mfc_get_firmware_version(charger);
+	ver = mfc_get_firmware_version(charger, MFC_RX_FIRMWARE);
 
 	if (!wpc_det)
 		mfc_uno_on(charger, 0);
@@ -250,7 +369,7 @@ static int mfc_hal_charger_probe(
 	mutex_init(&charger->io_lock);
 
 #if defined(CONFIG_WIRELESS_IC_PARAM)
-	pr_info("%s, wireless_chip_id_param : 0x%02X, wireless_fw_ver_param : 0x%04X"
+	pr_info("%s, wireless_chip_id_param : 0x%02X, wireless_fw_ver_param : 0x%04X "
 		"wireless_fw_mode_param : (0x%01X)\n", __func__,
 		wireless_chip_id_param, wireless_fw_ver_param, wireless_fw_mode_param);
 
