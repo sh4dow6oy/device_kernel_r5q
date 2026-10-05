@@ -4401,10 +4401,8 @@ static int pca9468_charger_probe(struct i2c_client *client,
 	pca9468_chg->wdt_kick = false;
 #endif
 
-/* Initializare corecta pentru obiect static in kernel 4.14+ */
-	memset(&pca9468_chg->monitor_wake_lock, 0, sizeof(pca9468_chg->monitor_wake_lock));
-	pca9468_chg->monitor_wake_lock.name = "pca9468-charger-monitor";
-	wakeup_source_add(&pca9468_chg->monitor_wake_lock);
+/* Înregistrare pointer wake_lock nativ Linux 4.19 */
+	pca9468_chg->monitor_wake_lock = wakeup_source_register(pca9468_chg->dev, "pca9468-charger-monitor");
 
 	/* initialize work */
 	INIT_DELAYED_WORK(&pca9468_chg->timer_work, pca9468_timer_work);
@@ -4458,17 +4456,12 @@ static int pca9468_charger_probe(struct i2c_client *client,
 #endif
 	}
 
-	/*
-	 * Interrupt pin is optional. If it is connected, we setup the
-	 * interrupt support here.
-	 */
 	if (pdata->irq_gpio >= 0) {
 		ret = pca9468_irq_init(pca9468_chg, client);
 		if (ret < 0) {
 			dev_warn(dev, "failed to initialize IRQ: %d\n", ret);
 			dev_warn(dev, "disabling IRQ support\n");
 		}
-		/* disable interrupt */
 		disable_irq(client->irq);
 	}
 
@@ -4498,7 +4491,7 @@ static int pca9468_charger_probe(struct i2c_client *client,
 err_power_supply_regsister:
 err_hw_init:
 err_regmap_init:
-	wakeup_source_remove(&pca9468_chg->monitor_wake_lock);
+	wakeup_source_unregister(pca9468_chg->monitor_wake_lock);
 	return ret;
 #endif
 }
@@ -4515,7 +4508,7 @@ static int pca9468_charger_remove(struct i2c_client *client)
 			gpio_free(pca9468_chg->pdata->irq_gpio);
 	}
 
-	wakeup_source_remove(&pca9468_chg->monitor_wake_lock);
+	wakeup_source_unregister(pca9468_chg->monitor_wake_lock);
 #if defined(CONFIG_BATTERY_SAMSUNG)
 	if (pca9468_chg->psy_chg)
 		power_supply_unregister(pca9468_chg->psy_chg);
@@ -4527,19 +4520,6 @@ static int pca9468_charger_remove(struct i2c_client *client)
 	pr_info("%s: --\n", __func__);
 
 	return 0;
-}
-
-static void pca9468_charger_shutdown(struct i2c_client *client)
-{
-	struct pca9468_charger *pca9468_chg = i2c_get_clientdata(client);
-
-	pr_info("%s: ++\n", __func__);
-
-	pca9468_set_charging(pca9468_chg, false);
-#if defined(CONFIG_DUAL_BATTERY_CELL_SENSING)
-	pca9468_chg_set_adc_force_mode(pca9468_chg, false);
-#endif
-	pr_info("%s: --\n", __func__);
 }
 static const struct i2c_device_id pca9468_charger_id_table[] = {
 	{ "pca9468-charger", 0 },
