@@ -704,7 +704,7 @@ static void s2mu106_temperature_compensation(struct s2mu106_fuelgauge_data *fuel
 			if (fuelgauge->temperature >= fuelgauge->low_temp_limit ||
 				((fuelgauge->temperature < fuelgauge->low_temp_limit) && (data[1] != 0))) {
 				fuelgauge->soc_r = soc_map;
-				pr_info("%s: When Initial Mapping, UI SOC = soc_r = soc_map(%d)\n", __func__, fuelgauge->soc_r);
+				pr_info("%s: When Initial Mapping, UI SOC = soc_r = soc_map\n", __func__, fuelgauge->soc_r);
 				fuelgauge->ui_soc = fuelgauge->soc_r / 100;
 				fuelgauge->capacity_old = fuelgauge->ui_soc;
 			}
@@ -1227,13 +1227,8 @@ static int s2mu106_get_rawsoc(struct s2mu106_fuelgauge_data *fuelgauge)
 
 	s2mu106_read_reg_byte(fuelgauge->i2c, 0x67, &reg_0x67);
 
-#if defined(CONFIG_SEC_BLOOMQ_PROJECT)
-	if ((avg_vbat > 3300) && /* bloom : 3300mV - 0% */
-#else
-	if ((avg_vbat > 3400) &&  /* other : 3400mV - 0% */
-#endif
-		(fuelgauge->is_charging == true) &&
-		(fuelgauge->rsoc < 400) && ((reg_0x67 & 0x02) == 0x02)) {
+	if ((avg_vbat > 3400) && (fuelgauge->is_charging == true) &&
+			(fuelgauge->rsoc < 400) && ((reg_0x67 & 0x02) == 0x02)) {
 		reg_0x67 &= 0xFD;
 		s2mu106_write_and_verify_reg_byte(fuelgauge->i2c, 0x67, reg_0x67);
 		pr_info("%s: 0x67[1] = 0", __func__);
@@ -1793,12 +1788,11 @@ static int s2mu106_fg_get_property(struct power_supply *psy,
 		enum power_supply_property psp,
 		union power_supply_propval *val)
 {
-	struct s2mu106_fuelgauge_data *fuelgauge =
-					power_supply_get_drvdata(psy);
+	struct s2mu106_fuelgauge_data *fuelgauge = power_supply_get_drvdata(psy);
 	enum power_supply_ext_property ext_psp = (enum power_supply_ext_property) psp;
 
 	switch (psp) {
-	case POWER_SUPPLY_PROP_STATUS:
+/*	case POWER_SUPPLY_PROP_STATUS: */
 	case POWER_SUPPLY_PROP_CHARGE_FULL:
 		return -ENODATA;
 	case POWER_SUPPLY_PROP_ENERGY_NOW:
@@ -1966,24 +1960,6 @@ static int s2mu106_fg_get_property(struct power_supply *psy,
 		break;
 	case POWER_SUPPLY_PROP_MAX ... POWER_SUPPLY_EXT_PROP_MAX:
 		switch (ext_psp) {
-		case POWER_SUPPLY_EXT_PROP_INBAT_VOLTAGE:
-			{
-				int jig_status = val->intval;
-				union power_supply_propval value = {0, };
-
-				value.intval = SEC_BAT_INBAT_FGSRC_SWITCHING_ON;
-				psy_do_property("s2mu106-fuelgauge", set,
-						POWER_SUPPLY_EXT_PROP_INBAT_VOLTAGE_FGSRC_SWITCHING, value);
-
-				val->intval = s2mu106_get_vbat(fuelgauge);
-
-				if (jig_status) {
-					value.intval = SEC_BAT_INBAT_FGSRC_SWITCHING_OFF;
-					psy_do_property("s2mu106-fuelgauge", set,
-							POWER_SUPPLY_EXT_PROP_INBAT_VOLTAGE_FGSRC_SWITCHING, value);
-				}
-			}
-			break;
 		case POWER_SUPPLY_EXT_PROP_TTF_FULL_CAPACITY:
 			val->intval = calc_ttf_to_full_capacity(fuelgauge, val);
 			break;
@@ -2007,7 +1983,7 @@ static int s2mu106_fg_set_property(struct power_supply *psy,
 	enum power_supply_ext_property ext_psp = (enum power_supply_ext_property) psp;
 
 	switch (psp) {
-		case POWER_SUPPLY_PROP_STATUS:
+/*		case POWER_SUPPLY_PROP_STATUS:*/
 #if defined(CONFIG_BATTERY_AGE_FORECAST)
 			if (val->intval == POWER_SUPPLY_STATUS_FULL)
 				s2mu106_fg_aging_check(fuelgauge, fuelgauge->change_step);
@@ -2377,6 +2353,11 @@ static int s2mu106_fuelgauge_parse_dt(struct s2mu106_fuelgauge_data *fuelgauge)
 
 			pr_err("%s: [Long life] fuelgauge->fg_num_age_step %d \n",
 				__func__,fuelgauge->fg_num_age_step);
+
+			if ((sizeof(fg_age_data_info_t) * fuelgauge->fg_num_age_step) != len) {
+				pr_err("%s: The Long life variables and the data in device tree does not match\n", __func__);
+				BUG();
+			}
 
 			for(i=0 ; i < fuelgauge->fg_num_age_step ; i++){
 				pr_err("%s: [Long life] age_step = %d, table3[0] %d, table4[0] %d, batcap[0] %02x, accum[0] %02x, soc_arr[0] %d, ocv_arr[0] %d, volt_tun : %02x\n",
