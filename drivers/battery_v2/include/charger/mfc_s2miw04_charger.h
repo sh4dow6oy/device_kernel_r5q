@@ -34,7 +34,7 @@
 #define MFC_FW_SDCARD_BIN_PATH		"/sdcard/mfc_fw_flash.bin"
 
 #define MFC_FW_BIN_VERSION			0x1020
-#define MFC_FLASH_FW_HEX_LSI_PATH		"mfc/mfc_fw_flash_s2miw04.bin"
+#define MFC_FLASH_FW_HEX_LSI_PATH	"mfc/mfc_fw_flash_s2miw04.bin"
 
 /* for SPU FW update */
 #define MFC_FW_SPU_BIN_PATH		"/spu/mfc/mfc_fw_flash_s2miw04.bin"
@@ -84,8 +84,8 @@
 #define MFC_ADC_VRECT_H_REG					0x41
 #define MFC_TX_IUNO_LIMIT_L_REG				0x34
 #define MFC_TX_IUNO_LIMIT_H_REG				0x35
-#define MFC_ADC_IOUT_L_REG				0x44
-#define MFC_ADC_IOUT_H_REG				0x45
+#define MFC_ADC_IOUT_L_REG					0x44
+#define MFC_ADC_IOUT_H_REG					0x45
 #define MFC_ADC_DIE_TEMP_L_REG				0x46 /* 8 LSB field is used, Celsius */
 #define MFC_ADC_DIE_TEMP_H_REG				0x47 /* only 4 MSB[3:0] field is used, Celsius */
 #define MFC_TRX_OP_FREQ_L_REG				0x48 /* kHZ */
@@ -115,13 +115,13 @@
 #define MFC_WPC_TX_DATA_VALUE2_REG			0x53
 
 /* Common */
-#define MFC_WPC_TRX_DATA2_COM_REG				0x58
-#define MFC_WPC_TRX_DATA2_VALUE0_REG			0x59
-#define MFC_WPC_TRX_DATA2_VALUE1_REG			0x5A
+#define MFC_WPC_TRX_DATA2_COM_REG			0x58
+#define MFC_WPC_TRX_DATA2_VALUE0_REG		0x59
+#define MFC_WPC_TRX_DATA2_VALUE1_REG		0x5A
 /********************************************************************************/
 
-#define MFC_ADT_TIMEOUT_PKT_REG					0x5C
-#define MFC_ADT_TIMEOUT_STR_REG					0x5D
+#define MFC_ADT_TIMEOUT_PKT_REG				0x5C
+#define MFC_ADT_TIMEOUT_STR_REG				0x5D
 
 #define MFC_TX_IUNO_HYS_REG					0x36
 #define MFC_TX_IUNO_OFFSET_L_REG			0x37
@@ -132,7 +132,7 @@
 #define MFC_TX_OC_FOD2_LIMIT_L_REG			0x96
 #define MFC_TX_OC_FOD2_LIMIT_H_REG			0x97
 
-#define MFC_STARTUP_EPT_COUNTER					0x6D
+#define MFC_STARTUP_EPT_COUNTER				0x6D
 
 #define MFC_TX_DUTY_CYCLE					0xE6 /* default 0x80(50%) */
 
@@ -157,7 +157,7 @@
 /* RX Mode Communication Modulation FET Ctrl */
 #define MFC_MST_MODE_SEL_REG				0x69
 #define MFC_RX_OV_CLAMP_REG					0x6A
-//#define MFC_RX_COMM_MOD_AFC_FET_REG			0x37
+//#define MFC_RX_COMM_MOD_AFC_FET_REG		0x37
 #define MFC_RX_COMM_MOD_FET_REG				0x6B
 
 #define MFC_RECTMODE_REG					0x6C
@@ -565,15 +565,15 @@
 #define MFC_SEND_USER_PKT_DONE_MASK		(0x1 << 7)
 #define MFC_SEND_USER_PKT_ERR_MASK		(0x3 << 5)
 #define MFC_SEND_ALIGN_MASK				(0x1 << 3)
-#define MFC_SEND_EPT_CC_MASK				(0x1 << 0)
-#define MFC_SEND_EOC_MASK					(0x1 << 0)
+#define MFC_SEND_EPT_CC_MASK			(0x1 << 0)
+#define MFC_SEND_EOC_MASK				(0x1 << 0)
 
 #define MFC_PTK_ERR_NO_ERR				0x00
 #define MFC_PTK_ERR_ERR					0x01
 #define MFC_PTK_ERR_ILLEGAL_HD			0x02
 #define MFC_PTK_ERR_NO_DEF				0x03
 
-#define MFC_FW_RESULT_DOWNLOADING			2
+#define MFC_FW_RESULT_DOWNLOADING		2
 #define MFC_FW_RESULT_PASS				1
 #define MFC_FW_RESULT_FAIL				0
 
@@ -679,7 +679,6 @@ enum {
     MFC_ADC_PING_FRQ,
     MFC_ADC_TX_IOUT,
     MFC_ADC_TX_VOUT,
-    MFC_ADC_TX_PING_FRQ,
 };
 
 enum {
@@ -770,11 +769,73 @@ enum mfc_headroom {
 	MFC_HEADROOM_5, /* 0.082V */
 };
 
+#define DEFAULT_PAD_ID		0
+enum mfc_fod_state {
+	FOD_STATE_CC = 0,
+	FOD_STATE_CV,
+	FOD_STATE_FULL,
+
+	FOD_STATE_MAX
+};
+
+enum mfc_fod_flag {
+	FOD_FLAG_NONE = 0,
+	FOD_FLAG_ADD,
+	FOD_FLAG_USE_CC,
+	FOD_FLAG_USE_DEFAULT,
+};
+
+typedef struct _mfc_fod_data {
+	int pad_id;
+	int flag;
+	u32* data[FOD_STATE_MAX];
+} mfc_fod_data;
+
+#if defined(CONFIG_CHECK_UNAUTH_PAD)
+enum mfc_ping_freq {
+	FREQ_TXID,
+	FREQ_LOW,
+	FREQ_HIGH,
+	FREQ_MAX,
+	FREQ_TXID_MAX = 23,
+};
+
+static const u8 Ping_freq[FREQ_TXID_MAX][FREQ_MAX] = {
+	/*txid	freq_low	freq_high*/
+	{0x0,	0xFF,	0xFF},
+	{0x10,	0x8F,	0x95},
+	{0x14,	0x8F,	0x95},
+	{0x15,	0x8F,	0x95},
+	{0x16,	0x8F,	0x95},
+	{0x20,	0x8F,	0x95},
+	{0x21,	0x8F,	0x95},
+	{0x22,	0x8F,	0x95},
+	{0x24,	0x8F,	0x95},
+	{0x30,	0x8F,	0x95},
+
+	{0x31,	0x8F,	0x95},
+	{0x32,	0x8F,	0x95},
+	{0x33,	0x8F,	0x95},
+	{0x34,	0x7D,	0x83},
+	{0x35,	0x7D,	0x83},
+	{0x42,	0x8F,	0x95},
+	{0x42,	0x7D,	0x83},
+	{0xA0,	0x8F,	0x95},
+	{0xA1,	0x7D,	0x83},
+	{0xA2,	0x7D,	0x83},
+
+	{0xF3,	0x87,	0x8D},
+	{0xF3,	0x8F,	0x95},
+	{0xFF,	0xFF,	0xFF},
+};
+#endif
+
 struct mfc_charger_platform_data {
 	int pad_mode;
 	int wpc_det;
 	int irq_wpc_det;
 	int wpc_int;
+	int mst_pwr_en;
 	int wpc_en;
 	int wpc_pdrc;
 	int irq_wpc_pdrc;
@@ -788,16 +849,10 @@ struct mfc_charger_platform_data {
 	int cable_type;
 	bool default_voreg;
 	int is_charging;
-	u32 *fod_data_cv;
-	u32 *fod_data;
-	u32 *fod_hero_5v_data;
-	u32 *fod_dream_data;
-	u32 *fod_dream_cv_data;
 	u32 *wireless20_vout_list;
 	u32 *wireless20_vrect_list;
 	u32 *wireless20_max_power_list;
 	u8 len_wc20_list;
-	int fod_data_check;
 	bool ic_on_mode;
 	int hw_rev_changed; /* this is only for noble/zero2 */
 	int otp_firmware_result;
@@ -814,14 +869,20 @@ struct mfc_charger_platform_data {
 	char *wired_charger_name;
 	char *fuelgauge_name;
 	int opfq_cnt;
+	int mst_switch_delay;
+	int wc_cover_rpp;
+	int wc_hv_rpp;
 	u32 oc_fod1;
 	u32 phone_fod_threshold;
 	u32 gear_ping_freq;
 	u32 gear_min_op_freq;
 	u32 gear_min_op_freq_delay;
-	u32 tx_ping_freq_init;
+	bool wpc_vout_ctrl_lcd_on;
 	int no_hv;
-	u32 tx_conflict_curr_init;
+	bool keep_tx_vout;
+
+	mfc_fod_data* fod_list;
+	int fod_data_count;
 };
 
 #define mfc_charger_platform_data_t \
@@ -841,20 +902,22 @@ struct mfc_charger_data {
 	int wc_w_state;
 
 	struct power_supply *psy_chg;
-	struct wake_lock wpc_wake_lock;
-	struct wake_lock wpc_tx_wake_lock;
-	struct wake_lock wpc_rx_wake_lock;
-	struct wake_lock wpc_update_lock;
-	struct wake_lock wpc_opfq_lock;
-	struct wake_lock wpc_tx_duty_min_lock;
-	struct wake_lock wpc_tx_min_opfq_lock;
-	struct wake_lock wpc_afc_vout_lock;
-	struct wake_lock wpc_vout_mode_lock;
-	struct wake_lock wpc_rx_connection_lock;
-	struct wake_lock wpc_rx_det_lock;
-	struct wake_lock wpc_tx_phm_lock;
-	struct wake_lock wpc_tx_id_lock;
-	struct wake_lock wpc_pdrc_lock;
+	struct wakeup_source *wpc_wake_lock;
+	struct wakeup_source *wpc_tx_wake_lock;
+	struct wakeup_source *wpc_rx_wake_lock;
+	struct wakeup_source *wpc_update_lock;
+	struct wakeup_source *wpc_opfq_lock;
+	struct wakeup_source *wpc_tx_opfq_lock;
+	struct wakeup_source *wpc_tx_duty_min_lock;
+	struct wakeup_source *wpc_tx_min_opfq_lock;
+	struct wakeup_source *wpc_afc_vout_lock;
+	struct wakeup_source *wpc_vout_mode_lock;
+	struct wakeup_source *wpc_rx_det_lock;
+	struct wakeup_source *wpc_tx_phm_lock;
+	struct wakeup_source *wpc_vrect_check_lock;
+	struct wakeup_source *wpc_tx_id_lock;
+	struct wakeup_source *wpc_cs100_lock;
+	struct wakeup_source *wpc_pdrc_lock;
 	struct workqueue_struct *wqueue;
 	struct work_struct	wcin_work;
 	struct delayed_work	wpc_det_work;
@@ -873,9 +936,12 @@ struct mfc_charger_data {
 	struct delayed_work	wpc_rx_type_det_work;
 	struct delayed_work	wpc_rx_connection_work;
 	struct delayed_work wpc_tx_min_op_freq_work;
+	struct delayed_work wpc_tx_op_freq_work;
 	struct delayed_work wpc_tx_duty_min_work;
 	struct delayed_work wpc_tx_phm_work;
+	struct delayed_work wpc_vrect_check_work;
 	struct delayed_work wpc_rx_power_work;
+	struct delayed_work wpc_cs100_work;
 #if defined(CONFIG_SEC_FACTORY)
 	struct delayed_work evt2_err_detect_work;
 #endif
@@ -898,11 +964,18 @@ struct mfc_charger_data {
 	int mst_off_lock;
 	bool is_otg_on;
 	int led_cover;
+	bool is_probed;
 	bool is_afc_tx;
+	bool pad_ctrl_by_lcd;
 	bool tx_id_done;
 	bool is_suspend;
 	int tx_id;
 	int tx_id_cnt;
+	bool initial_vrect;
+
+	int flicker_delay;
+	int flicker_vout_threshold;
+
 	/* wireless tx */
 	int tx_status;
 	bool initial_wc_check;
@@ -919,8 +992,16 @@ struct mfc_charger_data {
 	unsigned long gear_start_time;
 	int input_current;
 	int duty_min;
-	int tx_gear_phm;
 	int wpc_en_flag;
+
+	bool req_tx_id;
+	bool is_abnormal_pad;
+	bool afc_tx_done;
+
+#if defined(CONFIG_CHECK_UNAUTH_PAD)
+	u8 ping_freq;
+	bool req_afc_tx;
+#endif
 
 	struct mutex fw_lock;
 	unsigned long fw_size;

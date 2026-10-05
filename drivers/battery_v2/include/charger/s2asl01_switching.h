@@ -18,7 +18,6 @@
 #ifndef __S2ASL01_SWITCHING_H
 #define __S2ASL01_SWITCHING_H __FILE__
 
-#include <linux/wakelock.h>
 #include <linux/power_supply.h>
 #include <linux/i2c.h>
 #include <linux/device.h>
@@ -155,7 +154,6 @@ struct s2asl01_platform_data {
 	int bat_int;
 	int bat_enb;
 	int chg_current_limit;
-	int chg_current_max;
 	int eoc; /* for interrupt setting, not used */
 	int float_voltage; /* for interrupt setting, not used */
 	int hys_vchg_level;
@@ -163,20 +161,24 @@ struct s2asl01_platform_data {
 	int hys_ichg_level;
 	int hys_idischg_level;
 	bool tsd_en;
-	unsigned int charging_rate;
+};
+
+enum s2asl01_ver {
+	VER_6030 = 0,
+	VER_6130,
 };
 
 struct s2asl01_switching_data {
 	struct device           *dev;
 	struct i2c_client       *client;
 	struct mutex            i2c_lock;
-	struct wake_lock limiter_wake_lock;
 	struct s2asl01_platform_data *pdata;
 	struct power_supply     *psy_sw;
 	struct workqueue_struct *wqueue;	
 	struct delayed_work	limiter_isr_work;
 	int rev_id;
 	int es_num;
+	int ic_ver;
 	int irq_bat_int;
 	bool in_ok;
 	bool supllement_mode;
@@ -186,6 +188,4 @@ struct s2asl01_switching_data {
 	u8 addr;
 	u8 data;
 };
-
-static void s2asl01_init_regs(struct s2asl01_switching_data *switching);
 #endif /* __S2ASL01_SWITCHING_H */

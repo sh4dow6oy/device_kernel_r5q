@@ -31,7 +31,7 @@ enum {
 };
 
 extern unsigned int lpcharge;
-extern bool mfc_fw_update; 
+extern bool mfc_fw_update;
 //extern int is_debug_level_low;
 
 #if defined(CONFIG_SEC_FACTORY)
@@ -39,6 +39,7 @@ extern int factory_mode;
 #endif
 
 extern void max77705_set_fw_noautoibus(int enable);
+extern void max77705_set_snkcap(u8 *snkcap_data, int length);
 
 ssize_t max77705_chg_show_attrs(struct device *dev,
 				struct device_attribute *attr, char *buf);
@@ -368,12 +369,12 @@ struct max77705_charger_data {
 
 	/* wakelock */
 #if defined(CONFIG_USE_POGO)
-	struct wake_lock wpc_wake_lock;
+	struct wakeup_source *wpc_wake_lock;
 #endif
-	struct wake_lock chgin_wake_lock;
-	struct wake_lock wc_current_wake_lock;
-	struct wake_lock aicl_wake_lock;
-	struct wake_lock otg_wake_lock;
+	struct wakeup_source *chgin_wake_lock;
+	struct wakeup_source *wc_current_wake_lock;
+	struct wakeup_source *aicl_wake_lock;
+	struct wakeup_source *otg_wake_lock;
 
 	unsigned int	is_charging;
 	unsigned int	charging_type;
@@ -418,11 +419,11 @@ struct max77705_charger_data {
 	bool enable_sysovlo_irq;
 	bool enable_noise_wa;
 	int irq_sysovlo;
-	struct wake_lock sysovlo_wake_lock;
+	struct wakeup_source *sysovlo_wake_lock;
 
 	bool is_mdock;
 	bool otg_on;
-	bool uno_on;	
+	bool uno_on;
 #if defined(CONFIG_CHARGER_MAX77705_OTG_LIMIT)
 	int otg_limit_step;
 	int cpu_max_freq[MAX77705_LIMIT_STEP_NUM];
@@ -433,6 +434,7 @@ struct max77705_charger_data {
 	int wpc_input_curr_limit_step;
 	int charging_curr_step;
 	int float_voltage;
+	u8 *snkcap_data;
 
 	int misalign_cnt;
 

@@ -134,7 +134,6 @@ struct battery_data_t {
 	u32 ichgterm_2nd;
 	u32 misccfg_2nd;
 	u32 fullsocthr_2nd;
-	u32 rcomp0_offset;
 };
 
 /* FullCap learning setting */
@@ -208,7 +207,7 @@ struct max77705_fuelgauge_data {
 	struct battery_data_t        *battery_data;
 
 	bool is_fuel_alerted;
-	struct wake_lock fuel_alert_wake_lock;
+	struct wakeup_source *fuel_alert_wake_lock;
 
 	unsigned int capacity_old;	/* only for atomic calculation */
 	unsigned int capacity_max;	/* only for dynamic calculation */
@@ -242,6 +241,9 @@ struct max77705_fuelgauge_data {
 
 	int low_temp_limit;
 
+	int vempty_recover_time;
+	unsigned long vempty_time;
+
 	bool auto_discharge_en;
 	u32 discharge_temp_threshold;
 	u32 discharge_volt_threshold;
@@ -254,7 +256,6 @@ struct max77705_fuelgauge_data {
 #if defined(CONFIG_BATTERY_CISD)
 	bool valert_count_flag;
 #endif
-	u8 reg_b2[2];
 	struct lost_soc_data lost_soc;
 };
 

@@ -33,8 +33,15 @@
 #define MFC_HAL_FW_MINOR_REV_L_REG				0x06
 #define MFC_HAL_FW_MINOR_REV_H_REG				0x07
 
+#define MFC_HAL_AP2MFC_CMD_L_REG				0x4E
+
 #define MFC_CHIP_ID_P9320		0x20
 #define MFC_CHIP_ID_S2MIW04		0x04
+
+enum mfc_firmware_mode {
+	MFC_RX_FIRMWARE = 0,
+	MFC_TX_FIRMWARE,
+};
 
 struct mfc_hal_charger_platform_data {
 	int wpc_det;
