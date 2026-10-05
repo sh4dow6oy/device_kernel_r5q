@@ -25,7 +25,6 @@
 #include <linux/rcupdate.h>
 #include <linux/once.h>
 #include <linux/fs.h>
-#include <linux/android_kabi.h>
 
 #include <uapi/linux/net.h>
 
@@ -84,12 +83,6 @@ enum sock_type {
 
 #endif /* ARCH_HAS_SOCKET_TYPES */
 
-/**
- * enum sock_shutdown_cmd - Shutdown types
- * @SHUT_RD: shutdown receptions
- * @SHUT_WR: shutdown transmissions
- * @SHUT_RDWR: shutdown receptions/transmissions
- */
 enum sock_shutdown_cmd {
 	SHUT_RD,
 	SHUT_WR,
@@ -205,11 +198,6 @@ struct proto_ops {
 	int		(*sendmsg_locked)(struct sock *sk, struct msghdr *msg,
 					  size_t size);
 	int		(*set_rcvlowat)(struct sock *sk, int val);
-
-	ANDROID_KABI_RESERVE(1);
-	ANDROID_KABI_RESERVE(2);
-	ANDROID_KABI_RESERVE(3);
-	ANDROID_KABI_RESERVE(4);
 };
 
 #define DECLARE_SOCKADDR(type, dst, src)	\
@@ -247,7 +235,7 @@ int sock_sendmsg(struct socket *sock, struct msghdr *msg);
 int sock_recvmsg(struct socket *sock, struct msghdr *msg, int flags);
 struct file *sock_alloc_file(struct socket *sock, int flags, const char *dname);
 struct socket *sockfd_lookup(int fd, int *err);
-struct socket *sock_from_file(struct file *file);
+struct socket *sock_from_file(struct file *file, int *err);
 #define		     sockfd_put(sock) fput(sock->file)
 int net_ratelimit(void);
 
