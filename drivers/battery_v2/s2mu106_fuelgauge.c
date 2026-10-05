@@ -18,9 +18,9 @@
  *
  */
 
-#include "s2mu106_fuelgauge.h"
+#include "include/fuelgauge/s2mu106_fuelgauge.h"
 #include <linux/of_gpio.h>
-#include "../../common/sec_charging_common.h"
+#include "include/sec_charging_common.h"
 
 #define SINGLE_BYTE	1
 #define TABLE_SIZE	22
