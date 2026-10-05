@@ -65,6 +65,107 @@ static struct rtc_timer		rtctimer;
 static struct rtc_device	*rtcdev;
 static DEFINE_SPINLOCK(rtcdev_lock);
 
+#ifdef CONFIG_RTC_AUTO_PWRON
+/* 0|1234|56|78|90|12 */
+/* 1|2010|01|01|00|00 */
+/*en yyyy mm dd hh mm */
+#define BOOTALM_BIT_EN       0
+#define BOOTALM_BIT_YEAR     1
+#define BOOTALM_BIT_MONTH    5
+#define BOOTALM_BIT_DAY      7
+#define BOOTALM_BIT_HOUR     9
+#define BOOTALM_BIT_MIN     11
+#define BOOTALM_BIT_TOTAL   13
+
+int alarm_set_alarm(char *alarm_data)
+{
+	struct rtc_wkalrm alm;
+	int ret = 0;
+	char buf_ptr[BOOTALM_BIT_TOTAL+1] = {0,};
+	struct rtc_time     rtc_tm;
+	unsigned long       rtc_sec;
+	unsigned long       rtc_alm_sec;
+	struct timespec     delta;
+	struct timespec     ktm_ts;
+	struct rtc_time     ktm_tm;
+
+	if (!rtcdev) {
+		pr_err("alarm_set_alarm: no RTC, time will be lost on reboot\n");
+		return -ENXIO;
+	}
+
+	strlcpy(buf_ptr, alarm_data, BOOTALM_BIT_TOTAL+1);
+
+	alm.time.tm_sec = 0;
+	alm.time.tm_min = (buf_ptr[BOOTALM_BIT_MIN]-'0') * 10
+					+ (buf_ptr[BOOTALM_BIT_MIN+1]-'0');
+	alm.time.tm_hour = (buf_ptr[BOOTALM_BIT_HOUR]-'0') * 10
+					+ (buf_ptr[BOOTALM_BIT_HOUR+1]-'0');
+	alm.time.tm_mday = (buf_ptr[BOOTALM_BIT_DAY]-'0') * 10
+					+ (buf_ptr[BOOTALM_BIT_DAY+1]-'0');
+	alm.time.tm_mon  = (buf_ptr[BOOTALM_BIT_MONTH]-'0') * 10
+	                  + (buf_ptr[BOOTALM_BIT_MONTH+1]-'0');
+	alm.time.tm_year = (buf_ptr[BOOTALM_BIT_YEAR]-'0') * 1000
+					+ (buf_ptr[BOOTALM_BIT_YEAR+1]-'0') * 100
+					+ (buf_ptr[BOOTALM_BIT_YEAR+2]-'0') * 10
+					+ (buf_ptr[BOOTALM_BIT_YEAR+3]-'0');
+
+	alm.enabled = (*buf_ptr == '1');
+	if (*buf_ptr == '2')
+		alm.enabled = 2;
+
+	pr_info("sapa %s: %s => tm(%d %04d-%02d-%02d %02d:%02d:%02d)\n",
+			__func__, buf_ptr, alm.enabled,
+			alm.time.tm_year, alm.time.tm_mon, alm.time.tm_mday,
+			alm.time.tm_hour, alm.time.tm_min, alm.time.tm_sec);
+
+	if (alm.enabled) {
+		/* read kernel time */
+		getnstimeofday(&ktm_ts);
+		ktm_tm = rtc_ktime_to_tm(timespec_to_ktime(ktm_ts));
+		pr_info("set_sapa: <KTM > %4d-%02d-%02d %02d:%02d:%02d\n",
+			ktm_tm.tm_year+1900, ktm_tm.tm_mon+1, ktm_tm.tm_mday,
+			ktm_tm.tm_hour, ktm_tm.tm_min, ktm_tm.tm_sec);
+
+		alm.time.tm_mon -= 1;
+		alm.time.tm_year -= 1900;
+		pr_info("set_sapa: <ALRM> %4d-%02d-%02d %02d:%02d:%02d\n",
+			alm.time.tm_year+1900, alm.time.tm_mon+1, alm.time.tm_mday,
+			alm.time.tm_hour, alm.time.tm_min, alm.time.tm_sec);
+
+		/* read current time */
+		rtc_read_time(rtcdev, &rtc_tm);
+		rtc_tm_to_time(&rtc_tm, &rtc_sec);
+		pr_info("set_sapa: <rtc > %4d-%02d-%02d %02d:%02d:%02d -> %lu\n",
+			rtc_tm.tm_year, rtc_tm.tm_mon, rtc_tm.tm_mday,
+			rtc_tm.tm_hour, rtc_tm.tm_min, rtc_tm.tm_sec, rtc_sec);
+
+		/* calculate offset */
+		set_normalized_timespec(&delta,
+					ktm_ts.tv_sec - rtc_sec,
+					ktm_ts.tv_nsec);
+
+		/* convert user requested SAPA time to second type */
+		rtc_tm_to_time(&alm.time, &rtc_alm_sec);
+
+		/* convert to RTC time with user requested SAPA time and offset */
+		rtc_alm_sec -= delta.tv_sec;
+		rtc_alm_sec = (rtc_alm_sec & ~0x00000003) | ((alm.enabled-1)<<1);
+		alm.enabled = 1;
+		rtc_time_to_tm(rtc_alm_sec, &alm.time);
+		pr_info("set_sapa: <alrm> %4d-%02d-%02d %02d:%02d:%02d -> %lu\n",
+			alm.time.tm_year, alm.time.tm_mon, alm.time.tm_mday,
+			alm.time.tm_hour, alm.time.tm_min, alm.time.tm_sec, rtc_alm_sec);
+
+	}
+	ret = rtc_set_bootalarm(rtcdev, &alm);
+	if (ret < 0)
+		pr_err("%s: Failed to set bootalarm\n", __func__);
+
+	return ret;
+}
+#endif /*CONFIG_RTC_AUTO_PWRON*/
+
 /**
  * alarmtimer_get_rtcdev - Return selected rtcdevice
  *
@@ -91,8 +192,6 @@ static int alarmtimer_rtc_add_device(struct device *dev,
 	unsigned long flags;
 	struct rtc_device *rtc = to_rtc_device(dev);
 	struct wakeup_source *__ws;
-	struct platform_device *pdev;
-	int ret = 0;
 
 	if (rtcdev)
 		return -EBUSY;
@@ -102,15 +201,13 @@ static int alarmtimer_rtc_add_device(struct device *dev,
 	if (!device_may_wakeup(rtc->dev.parent))
 		return -1;
 
-	__ws = wakeup_source_register(dev, "alarmtimer");
-	pdev = platform_device_register_data(dev, "alarmtimer",
-					     PLATFORM_DEVID_AUTO, NULL, 0);
+	__ws = wakeup_source_register("alarmtimer");
 
 	spin_lock_irqsave(&rtcdev_lock, flags);
-	if (__ws && !IS_ERR(pdev) && !rtcdev) {
+	if (!rtcdev) {
 		if (!try_module_get(rtc->owner)) {
-			ret = -1;
-			goto unlock;
+			spin_unlock_irqrestore(&rtcdev_lock, flags);
+			return -1;
 		}
 
 		rtcdev = rtc;
@@ -118,17 +215,12 @@ static int alarmtimer_rtc_add_device(struct device *dev,
 		get_device(dev);
 		ws = __ws;
 		__ws = NULL;
-		pdev = NULL;
-	} else {
-		ret = -1;
 	}
-unlock:
 	spin_unlock_irqrestore(&rtcdev_lock, flags);
 
-	platform_device_unregister(pdev);
 	wakeup_source_unregister(__ws);
 
-	return ret;
+	return 0;
 }
 
 static inline void alarmtimer_rtc_timer_init(void)
@@ -483,35 +575,11 @@ u64 alarm_forward(struct alarm *alarm, ktime_t now, ktime_t interval)
 }
 EXPORT_SYMBOL_GPL(alarm_forward);
 
-static u64 __alarm_forward_now(struct alarm *alarm, ktime_t interval, bool throttle)
-{
-	struct alarm_base *base = &alarm_bases[alarm->type];
-	ktime_t now = base->gettime();
-
-	if (IS_ENABLED(CONFIG_HIGH_RES_TIMERS) && throttle) {
-		/*
-		 * Same issue as with posix_timer_fn(). Timers which are
-		 * periodic but the signal is ignored can starve the system
-		 * with a very small interval. The real fix which was
-		 * promised in the context of posix_timer_fn() never
-		 * materialized, but someone should really work on it.
-		 *
-		 * To prevent DOS fake @now to be 1 jiffie out which keeps
-		 * the overrun accounting correct but creates an
-		 * inconsistency vs. timer_gettime(2).
-		 */
-		ktime_t kj = NSEC_PER_SEC / HZ;
-
-		if (interval < kj)
-			now = ktime_add(now, kj);
-	}
-
-	return alarm_forward(alarm, now, interval);
-}
-
 u64 alarm_forward_now(struct alarm *alarm, ktime_t interval)
 {
-	return __alarm_forward_now(alarm, interval, false);
+	struct alarm_base *base = &alarm_bases[alarm->type];
+
+	return alarm_forward(alarm, base->gettime(), interval);
 }
 EXPORT_SYMBOL_GPL(alarm_forward_now);
 
@@ -585,10 +653,9 @@ static enum alarmtimer_restart alarm_handle_timer(struct alarm *alarm,
 	if (posix_timer_event(ptr, si_private) && ptr->it_interval) {
 		/*
 		 * Handle ignored signals and rearm the timer. This will go
-		 * away once we handle ignored signals proper. Ensure that
-		 * small intervals cannot starve the system.
+		 * away once we handle ignored signals proper.
 		 */
-		ptr->it_overrun += __alarm_forward_now(alarm, ptr->it_interval, true);
+		ptr->it_overrun += alarm_forward_now(alarm, ptr->it_interval);
 		++ptr->it_requeue_pending;
 		ptr->it_active = 1;
 		result = ALARMTIMER_RESTART;
@@ -619,7 +686,7 @@ static s64 alarm_timer_forward(struct k_itimer *timr, ktime_t now)
 {
 	struct alarm *alarm = &timr->it.alarm.alarmtimer;
 
-	return alarm_forward(alarm, now, timr->it_interval);
+	return alarm_forward(alarm, timr->it_interval, now);
 }
 
 /**
@@ -854,9 +921,9 @@ static int alarm_timer_nsleep(const clockid_t which_clock, int flags,
 	if (flags == TIMER_ABSTIME)
 		return -ERESTARTNOHAND;
 
+	restart->fn = alarm_timer_nsleep_restart;
 	restart->nanosleep.clockid = type;
 	restart->nanosleep.expires = exp;
-	set_restart_fn(restart, alarm_timer_nsleep_restart);
 	return ret;
 }
 
@@ -898,7 +965,8 @@ static struct platform_driver alarmtimer_driver = {
  */
 static int __init alarmtimer_init(void)
 {
-	int error;
+	struct platform_device *pdev;
+	int error = 0;
 	int i;
 
 	alarmtimer_rtc_timer_init();
@@ -921,7 +989,15 @@ static int __init alarmtimer_init(void)
 	if (error)
 		goto out_if;
 
+	pdev = platform_device_register_simple("alarmtimer", -1, NULL, 0);
+	if (IS_ERR(pdev)) {
+		error = PTR_ERR(pdev);
+		goto out_drv;
+	}
 	return 0;
+
+out_drv:
+	platform_driver_unregister(&alarmtimer_driver);
 out_if:
 	alarmtimer_rtc_interface_remove();
 	return error;
