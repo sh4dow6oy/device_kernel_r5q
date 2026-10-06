@@ -12,24 +12,19 @@
 
 #include <linux/muic/muic.h>
 #include <linux/muic/muic_notifier.h>
+#include <linux/ccic/usbpd_ext.h>
 
 #include <linux/ccic/pdic_notifier.h>
 #include <linux/battery/battery_notifier.h>
 #include <linux/ccic/ccic_notifier.h>
-
-
-#if (defined CONFIG_CCIC_NOTIFIER || defined CONFIG_DUAL_ROLE_USB_INTF)
-#include <linux/ccic/usbpd_ext.h>
-#endif
 
 /* switch device header */
 #if defined(CONFIG_SWITCH)
 #include <linux/switch.h>
 #endif /* CONFIG_SWITCH */
 
-#ifdef CONFIG_USB_HOST_NOTIFY
 #include <linux/usb_notify.h>
-#endif
+
 
 #include <linux/completion.h>
 #include <linux/ccic/s2mu107_misc.h>
