@@ -417,17 +417,18 @@ static void s2mu106_pr_swap(void *_data, int val)
 {
 	struct usbpd_data *data = (struct usbpd_data *) _data;
 	struct s2mu106_usbpd_data *pdic_data = data->phy_driver_data;
-	CC_NOTI_TYPEDEF pd_noti;
+	CC_NOTI_USB_STATUS_TYPEDEF pd_noti;
 
-	memset(&pd_noti, 0, sizeof(CC_NOTI_TYPEDEF));
+	memset(&pd_noti, 0, sizeof(CC_NOTI_USB_STATUS_TYPEDEF));
 
 	if (val == USBPD_SINK_OFF) {
 		pd_noti.event = PDIC_NOTIFY_EVENT_PD_PRSWAP_SNKTOSRC;
-		pd_noti.sink_status.selected_pdo_num = 0;
-		pd_noti.sink_status.available_pdo_num = 0;
-		pd_noti.sink_status.current_pdo_num = 0;
+		pd_noti.selected_pdo_num = 0;
+		pd_noti.available_pdo_num = 0;
+		pd_noti.current_pdo_num = 0;
+
 		ccic_event_work(pdic_data, CCIC_NOTIFY_DEV_BATTERY,
-			CCIC_NOTIFY_ID_POWER_STATUS, 0, &pd_noti);
+			CCIC_NOTIFY_ID_POWER_STATUS, 0, pd_noti.event);
 	} else if (val == USBPD_SOURCE_ON) {
 #if defined(CONFIG_DUAL_ROLE_USB_INTF)
 		pdic_data->power_role_dual = DUAL_ROLE_PROP_PR_SRC;
