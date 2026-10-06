@@ -34,6 +34,9 @@
 #if defined(CONFIG_MUIC_NOTIFIER)
 #include <linux/muic/muic_notifier.h>
 #endif /* CONFIG_MUIC_NOTIFIER */
+#if defined(CONFIG_BATTERY_NOTIFIER)
+#include <linux/battery/battery_notifier.h>
+#endif
 
 #if defined(CONFIG_PM_S2MU106)
 #include "../battery_v2/include/s2mu106_pmeter.h"
