@@ -39,6 +39,10 @@
 #include <linux/battery/battery_notifier.h>
 #endif
 
+#if defined(CONFIG_USB_TYPEC_MANAGER_NOTIFIER)
+#include <linux/usb/manager/usb_typec_manager_notifier.h>
+#endif
+
 #if defined(CONFIG_PM_S2MU106)
 #include "../battery_v2/include/s2mu106_pmeter.h"
 #else
