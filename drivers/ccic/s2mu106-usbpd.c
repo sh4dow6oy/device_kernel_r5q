@@ -418,7 +418,6 @@ static void s2mu106_pr_swap(void *_data, int val)
 {
 	struct usbpd_data *data = (struct usbpd_data *)_data;
 	struct s2mu106_usbpd_data *pdic_data = data->phy_driver_data;
-	PD_NOTI_TYPEDEF pd_noti = { 0 };
 
 	if (val == USBPD_SINK_OFF) {
 		pd_noti.event = PDIC_NOTIFY_EVENT_PD_PRSWAP_SNKTOSRC;
