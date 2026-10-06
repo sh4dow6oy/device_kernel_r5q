@@ -132,6 +132,8 @@ struct pdic_notifier_struct {
 	void *pusbpd;
 };
 
+extern struct pdic_notifier_struct pd_noti;
+
 extern void pdic_notifier_call(struct pdic_notifier_struct *value);
 extern int pdic_notifier_register(struct notifier_block *nb,
 		notifier_fn_t notifier, pdic_notifier_device_t listener);
