@@ -11,6 +11,7 @@
 #include <linux/delay.h>
 #include <linux/completion.h>
 #include <linux/ccic/usbpd.h>
+#include <linux/battery/battery_notifier.h>
 
 #include <linux/muic/muic.h>
 #if defined(CONFIG_MUIC_NOTIFIER)
