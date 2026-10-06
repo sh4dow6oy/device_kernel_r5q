@@ -1,7 +1,6 @@
 /*
-
-USB PD Driver - Device Policy Manager
-*/
+ *	USB PD Driver - Device Policy Manager
+ */
 
 #include <linux/device.h>
 #include <linux/workqueue.h>
@@ -19,10 +18,8 @@ USB PD Driver - Device Policy Manager
 #include <linux/battery/battery_notifier.h>
 #include <linux/ccic/ccic_notifier.h>
 
-/* switch device header /
-#if defined(CONFIG_SWITCH)
+/* switch device header */
 #include <linux/switch.h>
-#endif / CONFIG_SWITCH */
 
 #include <linux/usb_notify.h>
 
@@ -30,24 +27,13 @@ USB PD Driver - Device Policy Manager
 #include <linux/ccic/s2mu107_misc.h>
 
 /*
-
-ccic_device is used by usbpd_manager_send_dock_uevent()
-
-and must be visible regardless of CONFIG_BATTERY_SAMSUNG
-
-or CONFIG_USB_TYPEC_MANAGER_NOTIFIER.
-
-
-
-The actual definition must exist in another .c file.
-*/
+ * ccic_device is used by usbpd_manager_send_dock_uevent().
+ */
 extern struct device *ccic_device;
 
-#if defined(CONFIG_SWITCH)
 static struct switch_dev switch_dock = {
-.name = "ccic_dock",
+	.name = "ccic_dock",
 };
-#endif
 
 void usbpd_manager_select_pdo_cancel(struct device *dev);
 
@@ -63,19 +49,19 @@ extern void (*fp_select_pdo)(int num);
 #if defined(CONFIG_PDIC_PD30)
 extern int (*fp_sec_pd_select_pps)(int num, int ppsVol, int ppsCur);
 extern int (*fp_sec_pd_get_apdo_max_power)(unsigned int *pdo_pos,
-unsigned int *taMaxVol, unsigned int *taMaxCur,
-unsigned int *taMaxPwr);
+		unsigned int *taMaxVol, unsigned int *taMaxCur,
+		unsigned int *taMaxPwr);
 extern int (*fp_pps_enable)(int num, int ppsVol, int ppsCur, int enable);
 int (*fp_get_pps_voltage)(void);
 #endif
 
 void usbpd_manager_select_pdo(int num)
 {
-struct usbpd_data *pd_data = pd_noti.pusbpd;
-struct usbpd_manager_data *manager = &pd_data->manager;
-bool vbus_short;
+	struct usbpd_data *pd_data = pd_noti.pusbpd;
+	struct usbpd_manager_data *manager = &pd_data->manager;
+	bool vbus_short;
 #if defined(CONFIG_PDIC_PD30)
-int pps_enable = 0;
+	int pps_enable = 0;
 #endif
 	pd_data->phy_ops.get_vbus_short_check(pd_data, &vbus_short);
 
