@@ -11,16 +11,12 @@
 #include <linux/of_gpio.h>
 
 #include <linux/muic/muic.h>
-#if defined(CONFIG_MUIC_NOTIFIER)
 #include <linux/muic/muic_notifier.h>
-#endif /* CONFIG_MUIC_NOTIFIER */
 
 #include <linux/ccic/pdic_notifier.h>
 #include <linux/battery/battery_notifier.h>
-
-#if defined(CONFIG_CCIC_NOTIFIER)
 #include <linux/ccic/ccic_notifier.h>
-#endif
+
 
 #if (defined CONFIG_CCIC_NOTIFIER || defined CONFIG_DUAL_ROLE_USB_INTF)
 #include <linux/ccic/usbpd_ext.h>
@@ -60,9 +56,8 @@ extern int (*fp_sec_pd_get_apdo_max_power)(unsigned int *pdo_pos, unsigned int *
 extern int (*fp_pps_enable)(int num, int ppsVol, int ppsCur, int enable);
 int (*fp_get_pps_voltage)(void);
 #endif
-#if defined(CONFIG_CCIC_NOTIFIER)
+
 extern struct device *ccic_device;
-#endif
 
 void usbpd_manager_select_pdo(int num)
 {
