@@ -51,6 +51,9 @@ void usbpd_manager_select_pdo_cancel(struct device *dev);
 
 #ifdef CONFIG_BATTERY_SAMSUNG
 #ifdef CONFIG_USB_TYPEC_MANAGER_NOTIFIER
+
+extern struct pdic_notifier_struct pd_noti;
+
 extern void select_pdo(int num);
 void usbpd_manager_select_pdo(int num);
 extern void (*fp_select_pdo)(int num);
@@ -1301,6 +1304,8 @@ static void usbpd_manager_send_dock_intent(int type)
 #endif /* CONFIG_SWITCH */
 }
 
+#if defined(CONFIG_CCIC_NOTIFIER)
+
 void usbpd_manager_send_dock_uevent(u32 vid, u32 pid, int state)
 {
 	char switch_string[32];
@@ -1326,6 +1331,7 @@ void usbpd_manager_send_dock_uevent(u32 vid, u32 pid, int state)
 	kobject_uevent_env(&ccic_device->kobj, KOBJ_CHANGE, envp);
 }
 
+#endif
 void usbpd_manager_acc_detach_handler(struct work_struct *wk)
 {
 //	struct delayed_work *delay_work =
@@ -1579,9 +1585,11 @@ int usbpd_manager_evaluate_capability(struct usbpd_data *pd_data)
 	PDIC_SINK_STATUS *pdic_sink_status = &pd_noti.sink_status;
 #endif
 #endif
+
 	data_obj_type *pd_obj;
 
-#if defined(CONFIG_PDIC_PD30)
+#if defined(CONFIG_PDIC_PD30) && defined(CONFIG_BATTERY_SAMSUNG) && \
+	defined(CONFIG_USB_TYPEC_MANAGER_NOTIFIER)
 	pdic_sink_status->has_apdo = false;
 #endif
 
