@@ -65,79 +65,9 @@ static struct rtc_timer		rtctimer;
 static struct rtc_device	*rtcdev;
 static DEFINE_SPINLOCK(rtcdev_lock);
 
-static void alarmtimer_triggered_func(void *p)
-{
-	struct rtc_device *rtc = rtcdev;
-
-	if (!(rtc->irq_data & RTC_AF))
-		return;
-	__pm_wakeup_event(ws, 2 * MSEC_PER_SEC);
-}
-
-static struct rtc_task alarmtimer_rtc_task = {
-	.func = alarmtimer_triggered_func
-};
-
-/**
- * alarmtimer_get_rtcdev - Return selected rtcdevice
- *
- * This function returns the rtc device to use for wakealarms.
- * If one has not already been chosen, it checks to see if a
- * functional rtc device is available.
- */
-struct rtc_device *alarmtimer_get_rtcdev(void)
-{
-	unsigned long flags;
-	struct rtc_device *ret = NULL;
-
-	spin_lock_irqsave(&rtcdev_lock, flags);
-	ret = rtcdev;
-	spin_unlock_irqrestore(&rtcdev_lock, flags);
-
-	return ret;
-}
-EXPORT_SYMBOL_GPL(alarmtimer_get_rtcdev);
-
-static int alarmtimer_rtc_add_device(struct device *dev,
-				struct class_interface *class_intf)
-{
-	unsigned long flags;
-	struct rtc_device *rtc = to_rtc_device(dev);
-	struct wakeup_source *__ws;
-	int ret = 0;
-
-	if (rtcdev)
-		return -EBUSY;
-
-	if (!rtc->ops->set_alarm)
-		return -1;
-
-	__ws = wakeup_source_register(dev, "alarmtimer");
-
-	spin_lock_irqsave(&rtcdev_lock, flags);
-	if (!rtcdev) {
-		if (!try_module_get(rtc->owner)) {
-			ret = -1;
-			goto unlock;
-		}
-
-		ret = rtc_irq_register(rtc, &alarmtimer_rtc_task);
-		if (ret)
-			goto unlock;
-
-		rtcdev = rtc;
-		/* hold a reference so it doesn't go away */
-		get_device(dev);
-		ws = __ws;
-		__ws = NULL;
-	}
-
-unlock:
-	spin_unlock_irqrestore(&rtcdev_lock, flags);
-
-	wakeup_source_unregister(__ws);
-	return ret;
-}
+#if IS_ENABLED(CONFIG_SEC_PM)
+extern void log_suspend_abort_reason(const char *fmt, ...);
+#endif
 
 #ifdef CONFIG_RTC_AUTO_PWRON
 /* 0|1234|56|78|90|12 */
@@ -240,13 +170,63 @@ int alarm_set_alarm(char *alarm_data)
 }
 #endif /*CONFIG_RTC_AUTO_PWRON*/
 
-static void alarmtimer_rtc_remove_device(struct device *dev,
+/**
+ * alarmtimer_get_rtcdev - Return selected rtcdevice
+ *
+ * This function returns the rtc device to use for wakealarms.
+ * If one has not already been chosen, it checks to see if a
+ * functional rtc device is available.
+ */
+struct rtc_device *alarmtimer_get_rtcdev(void)
+{
+	unsigned long flags;
+	struct rtc_device *ret;
+
+	spin_lock_irqsave(&rtcdev_lock, flags);
+	ret = rtcdev;
+	spin_unlock_irqrestore(&rtcdev_lock, flags);
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(alarmtimer_get_rtcdev);
+
+static int alarmtimer_rtc_add_device(struct device *dev,
 				struct class_interface *class_intf)
 {
-	if (rtcdev && dev == &rtcdev->dev) {
-		rtc_irq_unregister(rtcdev, &alarmtimer_rtc_task);
-		rtcdev = NULL;
+	unsigned long flags;
+	struct rtc_device *rtc = to_rtc_device(dev);
+	struct wakeup_source *__ws;
+	int ret = 0;
+
+	if (rtcdev)
+		return -EBUSY;
+
+	if (!rtc->ops->set_alarm)
+		return -1;
+	if (!device_may_wakeup(rtc->dev.parent))
+		return -1;
+
+	__ws = wakeup_source_register(dev, "alarmtimer");
+
+	spin_lock_irqsave(&rtcdev_lock, flags);
+	if (!rtcdev) {
+		if (!try_module_get(rtc->owner)) {
+			ret = -1;
+			goto unlock;
+		}
+
+		rtcdev = rtc;
+		/* hold a reference so it doesn't go away */
+		get_device(dev);
+		ws = __ws;
+		__ws = NULL;
 	}
+unlock:
+	spin_unlock_irqrestore(&rtcdev_lock, flags);
+
+	wakeup_source_unregister(__ws);
+
+	return ret;
 }
 
 static inline void alarmtimer_rtc_timer_init(void)
@@ -256,7 +236,6 @@ static inline void alarmtimer_rtc_timer_init(void)
 
 static struct class_interface alarmtimer_rtc_interface = {
 	.add_dev = &alarmtimer_rtc_add_device,
-	.remove_dev = &alarmtimer_rtc_remove_device,
 };
 
 static int alarmtimer_rtc_interface_setup(void)
@@ -378,11 +357,8 @@ static int alarmtimer_suspend(struct device *dev)
 	struct rtc_device *rtc;
 	unsigned long flags;
 	struct rtc_time tm;
-#ifdef CONFIG_SEC_PM_DEBUG
-	pid_t pid = 0;
-	char task_comm[TASK_COMM_LEN] = {0,};
-	void * func = NULL;
-	uint64_t msec = 0;
+#if IS_ENABLED(CONFIG_SEC_PM)
+	struct alarm *min_alarm = NULL;
 #endif
 
 	spin_lock_irqsave(&freezer_delta_lock, flags);
@@ -413,23 +389,25 @@ static int alarmtimer_suspend(struct device *dev)
 			expires = next->expires;
 			min = delta;
 			type = i;
-#ifdef CONFIG_SEC_PM_DEBUG
-			pid = next->pid;
-			strncpy(task_comm, next->task_comm, TASK_COMM_LEN - 1);
-			func = next->func;
-#endif /* CONFIG_SEC_PM DEBUG */
+#if IS_ENABLED(CONFIG_SEC_PM)
+			min_alarm = container_of(next, struct alarm, node);
+#endif
 		}
 	}
 	if (min == 0)
 		return 0;
 
+#if IS_ENABLED(CONFIG_SEC_PM)
+	if (min_alarm)
+		pr_info("soonest alarm : %ps\n", min_alarm->function);
+#endif
+	
 	if (ktime_to_ns(min) < 2 * NSEC_PER_SEC) {
-		__pm_wakeup_event(ws, 2 * MSEC_PER_SEC);
-#ifdef CONFIG_SEC_PM_DEBUG
-	pr_err("%s: alarm will be expired in 2 secs[PID:%d(%s), %pf]\n",
-			__func__, pid, task_comm, func);
-
-#endif /* CONFIG_SEC_PM_DEBUG */
+#if IS_ENABLED(CONFIG_SEC_PM)
+		pr_info("alarmtimer suspending blocked by %ps\n", min_alarm->function);
+		log_suspend_abort_reason("alarmtimer suspending blocked by %ps\n", min_alarm->function);
+#endif
+		__pm_wakeup_event(ws, ktime_to_ms(min) + 1);
 		return -EBUSY;
 	}
 
@@ -440,11 +418,7 @@ static int alarmtimer_suspend(struct device *dev)
 	rtc_read_time(rtc, &tm);
 	now = rtc_tm_to_ktime(tm);
 	now = ktime_add(now, min);
-#if defined(CONFIG_SEC_PM_DEBUG)
-	msec = ktime_to_ms(min);
-	pr_info("alarm: will wake up after %llu msecs[PID: %d(%s), %pf]\n",
-		msec, pid, task_comm, func);
-#endif
+
 	/* Set alarm, if in the past reject suspend briefly to handle */
 	ret = rtc_timer_start(rtc, &rtctimer, now, 0);
 	if (ret < 0)
