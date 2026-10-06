@@ -341,7 +341,7 @@ void sec_bat_set_misc_event(struct sec_battery_info *battery,
 
 	if (battery->prev_misc_event != battery->misc_event) {
 		cancel_delayed_work(&battery->misc_event_work);
-		wake_lock(&battery->misc_event_wake_lock);
+		__pm_stay_awake(battery->misc_event_ws);
 		queue_delayed_work(battery->monitor_wqueue,
 			&battery->misc_event_work, 0);
 	}
@@ -365,7 +365,7 @@ void sec_bat_set_tx_event(struct sec_battery_info *battery,
 
 	if (temp != battery->tx_event) {
 		/* Assure receiving tx_event to App for sleep case */
-		wake_lock_timeout(&battery->tx_event_wake_lock, HZ * 2);
+		__pm_wakeup_event(battery->tx_event_ws, jiffies_to_msecs(HZ * 2));
 		power_supply_changed(battery->psy_bat);
 	}
 
@@ -1460,27 +1460,28 @@ static int sec_bat_check_pd_input_current(struct sec_battery_info *battery, int 
 #endif
 #endif
 
-static int sec_bat_check_afc_input_current(struct sec_battery_info *battery, int input_current)
+static int sec_bat_check_afc_input_current(struct sec_battery_info *battery)
 {
-	if (battery->current_event & SEC_BAT_CURRENT_EVENT_AFC) {
-		int work_delay = 0;
+	int work_delay = 0;
+	int input_current;
 
-		if (!is_wireless_type(battery->cable_type)) {
-			input_current = battery->pdata->pre_afc_input_current; // 1000mA
-			work_delay = battery->pdata->pre_afc_work_delay;
-		} else {
-			input_current = battery->pdata->pre_wc_afc_input_current;
-			/* do not reduce this time, this is for noble pad */
-			work_delay = battery->pdata->pre_wc_afc_work_delay;
-		}
-
-		wake_lock(&battery->afc_wake_lock);
-		if (!delayed_work_pending(&battery->afc_work))
-			queue_delayed_work(battery->monitor_wqueue,
-				&battery->afc_work , msecs_to_jiffies(work_delay));
-
-		pr_info("%s: change input_current(%d), cable_type(%d)\n", __func__, input_current, battery->cable_type);
+	sec_bat_set_current_event(battery, SEC_BAT_CURRENT_EVENT_AFC,
+			(SEC_BAT_CURRENT_EVENT_CHG_LIMIT | SEC_BAT_CURRENT_EVENT_AFC));
+	if (!is_wireless_type(battery->cable_type)) {
+		input_current = battery->pdata->pre_afc_input_current; // 1000mA
+		work_delay = battery->pdata->pre_afc_work_delay;
+	} else {
+		input_current = battery->pdata->pre_wc_afc_input_current;
+		/* do not reduce this time, this is for noble pad */
+		work_delay = battery->pdata->pre_wc_afc_work_delay;
 	}
+	sec_vote(battery->input_vote, VOTER_VBUS_CHANGE, true, input_current);
+	__pm_stay_awake(battery->afc_ws);
+	if (!delayed_work_pending(&battery->afc_work))
+		queue_delayed_work(battery->monitor_wqueue,
+				&battery->afc_work, msecs_to_jiffies(work_delay));
+
+	pr_info("%s: change input_current(%d), cable_type(%d)\n", __func__, input_current, battery->cable_type);
 
 	return input_current;
 }
@@ -1764,16 +1765,6 @@ int sec_bat_set_charging_current(struct sec_battery_info *battery)
 				if (charging_current > battery->pdata->swelling_low_temp_current_3rd) {
 					charging_current = battery->pdata->swelling_low_temp_current_3rd;
 				}
-			} else if (battery->swelling_low_temp_4th_ctrl && (battery->current_event & SEC_BAT_CURRENT_EVENT_LOW_TEMP_SWELLING_4TH)) {
-				if (charging_current > battery->pdata->swelling_low_temp_current_4th) {
-					charging_current = battery->pdata->swelling_low_temp_current_4th;
-				}
-#if defined(CONFIG_DIRECT_CHARGING)
-			} else if (battery->swelling_low_temp_5th_ctrl && (battery->current_event & SEC_BAT_CURRENT_EVENT_LOW_TEMP_SWELLING_5TH)) {
-				if (charging_current > battery->pdata->swelling_low_temp_current_5th && (battery->pd_list.num_apdo > 0)) {
-					charging_current = battery->pdata->swelling_low_temp_current_5th;
-				}
-#endif
 			}
 
 			/* usb unconfigured or suspend*/
@@ -2267,7 +2258,7 @@ static bool sec_bat_battery_cable_check(struct sec_battery_info *battery)
 		SEC_BATTERY_CABLE_CHECK_POLLING) {
 		if (sec_bat_get_cable_type(battery,
 			battery->pdata->cable_source_type)) {
-			wake_lock(&battery->cable_wake_lock);
+			__pm_stay_awake(battery->cable_wake_lock);
 			queue_delayed_work(battery->monitor_wqueue,
 					   &battery->cable_work, 0);
 		}
@@ -2315,7 +2306,7 @@ static bool sec_bat_ovp_uvlo_result(
 			__func__, health);
 		battery->is_recharging = false;
 		battery->health_check_count = DEFAULT_HEALTH_CHECK_COUNT;
-		wake_lock_timeout(&battery->vbus_wake_lock, HZ * 10);
+		__pm_wakeup_event(battery->vbus_wake_lock, jiffies_to_msecs(HZ * 10));
 		/* Enable charging anyway to check actual DC's health */
 		val.intval = SEC_BAT_CHG_MODE_CHARGING_OFF;
 		psy_do_property(battery->pdata->charger_name, set,
@@ -2357,7 +2348,7 @@ static bool sec_bat_ovp_uvlo_result(
 #endif
 			/* Take the wakelock during 10 seconds
 			   when over-voltage status is detected	 */
-			wake_lock_timeout(&battery->vbus_wake_lock, HZ * 10);
+			__pm_wakeup_event(battery->vbus_wake_lock, jiffies_to_msecs(HZ * 10));
 			break;
 		}
 		power_supply_changed(battery->psy_bat);
@@ -2682,21 +2673,20 @@ static void sec_bat_swelling_check(struct sec_battery_info *battery)
 
 			if (temperature >= swelling_high_block) {
 #if defined(CONFIG_BATTERY_CISD)
-				if (is_wireless_type(battery->cable_type) || (battery->cable_type == SEC_BATTERY_CABLE_WIRELESS_FAKE)) {
-					battery->cisd.data[CISD_DATA_WC_HIGH_TEMP_SWELLING]++;
-					battery->cisd.data[CISD_DATA_WC_HIGH_TEMP_SWELLING_PER_DAY]++;
-				} else {
-					battery->cisd.data[CISD_DATA_HIGH_TEMP_SWELLING]++;
-					battery->cisd.data[CISD_DATA_HIGH_TEMP_SWELLING_PER_DAY]++;
-				}
-#endif
-				sec_bat_set_current_event(battery, SEC_BAT_CURRENT_EVENT_HIGH_TEMP_SWELLING,
-					SEC_BAT_CURRENT_EVENT_SWELLING_MODE);
+			if (is_wireless_fake_type(battery->cable_type)) {
+				battery->cisd.data[CISD_DATA_WC_HIGH_TEMP_SWELLING]++;
+				battery->cisd.data[CISD_DATA_WC_HIGH_TEMP_SWELLING_PER_DAY]++;
+			} else {
+				battery->cisd.data[CISD_DATA_HIGH_TEMP_SWELLING]++;
+				battery->cisd.data[CISD_DATA_HIGH_TEMP_SWELLING_PER_DAY]++;
 			}
+#endif
+			sec_bat_set_current_event(battery, SEC_BAT_CURRENT_EVENT_HIGH_TEMP_SWELLING,
+				SEC_BAT_CURRENT_EVENT_SWELLING_MODE);
 			en_swelling = true;
 		} else if ((temperature <= battery->pdata->swelling_low_temp_block_2nd) &&
 			!(battery->current_event & SEC_BAT_CURRENT_EVENT_LOW_TEMP_SWELLING_2ND)) {
-			pr_info("%s: 2nd low temperature swelling step!! reduce current\n", __func__);
+			pr_info("%s: 2nd low temperature swelling step!!  reduce current\n", __func__);
 			sec_bat_set_current_event(battery, SEC_BAT_CURRENT_EVENT_LOW_TEMP_SWELLING_2ND,
 				SEC_BAT_CURRENT_EVENT_SWELLING_MODE);
 			if (battery->pdata->swelling_drop_float_voltage_lowtemp){
@@ -2713,57 +2703,29 @@ static void sec_bat_swelling_check(struct sec_battery_info *battery)
 			sec_bat_set_current_event(battery, SEC_BAT_CURRENT_EVENT_LOW_TEMP_SWELLING,
 						  SEC_BAT_CURRENT_EVENT_SWELLING_MODE);
 		} else if (battery->swelling_low_temp_3rd_ctrl && (temperature <= battery->pdata->swelling_low_temp_block_3rd) &&
-			!(battery->current_event & (SEC_BAT_CURRENT_EVENT_LOW_TEMP_SWELLING | SEC_BAT_CURRENT_EVENT_LOW_TEMP_SWELLING_2ND | SEC_BAT_CURRENT_EVENT_LOW_TEMP_SWELLING_3RD))) {
+			!(battery->current_event & SEC_BAT_CURRENT_EVENT_LOW_TEMP_MODE)) {
 			pr_info("%s: 3rd low temperature swelling step!!  reduce current\n", __func__);
 			sec_bat_set_current_event(battery, SEC_BAT_CURRENT_EVENT_LOW_TEMP_SWELLING_3RD,
 				SEC_BAT_CURRENT_EVENT_SWELLING_MODE);
-		} else if (battery->swelling_low_temp_4th_ctrl && (temperature <= battery->pdata->swelling_low_temp_block_4th) &&
-			!(battery->current_event & (SEC_BAT_CURRENT_EVENT_LOW_TEMP_SWELLING | SEC_BAT_CURRENT_EVENT_LOW_TEMP_SWELLING_2ND | SEC_BAT_CURRENT_EVENT_LOW_TEMP_SWELLING_3RD | SEC_BAT_CURRENT_EVENT_LOW_TEMP_SWELLING_4TH))) {
-			pr_info("%s: 4th low temperature swelling step!! reduce current\n", __func__);
-			sec_bat_set_current_event(battery, SEC_BAT_CURRENT_EVENT_LOW_TEMP_SWELLING_4TH,
-				SEC_BAT_CURRENT_EVENT_SWELLING_MODE);
-		} else if (battery->swelling_low_temp_5th_ctrl && (temperature <= battery->pdata->swelling_low_temp_block_5th) &&
-			!(battery->current_event & SEC_BAT_CURRENT_EVENT_LOW_TEMP_MODE)) {
-			pr_info("%s: 5th low temperature swelling step!! reduce current\n", __func__);
-			sec_bat_set_current_event(battery, SEC_BAT_CURRENT_EVENT_LOW_TEMP_SWELLING_5TH,
-						SEC_BAT_CURRENT_EVENT_SWELLING_MODE);
-		} else if (battery->swelling_low_temp_5th_ctrl && (temperature >= battery->pdata->swelling_low_temp_recov_5th) &&
-			(battery->current_event & SEC_BAT_CURRENT_EVENT_LOW_TEMP_MODE)) {
-			pr_info("%s: normal temperature recover from 5th current\n", __func__);
-			sec_bat_set_current_event(battery, 0, SEC_BAT_CURRENT_EVENT_LOW_TEMP_MODE);
-#if defined(CONFIG_STEP_CHARGING)
-			sec_bat_reset_step_charging(battery);
-#endif
-		} else if (battery->swelling_low_temp_4th_ctrl && (temperature >= battery->pdata->swelling_low_temp_recov_4th) &&
-			(battery->current_event & (SEC_BAT_CURRENT_EVENT_LOW_TEMP_SWELLING | SEC_BAT_CURRENT_EVENT_LOW_TEMP_SWELLING_2ND | SEC_BAT_CURRENT_EVENT_LOW_TEMP_SWELLING_3RD | SEC_BAT_CURRENT_EVENT_LOW_TEMP_SWELLING_4TH))) {
-			pr_info("%s: upto 4th low temperature swelling recovery temp! 5th low temp swelling current set\n", __func__);
-			sec_bat_set_current_event(battery, SEC_BAT_CURRENT_EVENT_LOW_TEMP_SWELLING_5TH,
-						SEC_BAT_CURRENT_EVENT_LOW_TEMP_MODE);
 		} else if (battery->swelling_low_temp_3rd_ctrl && (temperature >= battery->pdata->swelling_low_temp_recov_3rd) &&
-			(battery->current_event & (SEC_BAT_CURRENT_EVENT_LOW_TEMP_SWELLING | SEC_BAT_CURRENT_EVENT_LOW_TEMP_SWELLING_2ND | SEC_BAT_CURRENT_EVENT_LOW_TEMP_SWELLING_3RD))) {
-			if (battery->swelling_low_temp_4th_ctrl) {
-				pr_info("%s: upto 3rd low temperature swelling recovery temp! 4th low temp swelling current set\n", __func__);
-				sec_bat_set_current_event(battery, SEC_BAT_CURRENT_EVENT_LOW_TEMP_SWELLING_4TH,
-							SEC_BAT_CURRENT_EVENT_SWELLING_MODE);
-			} else {
-				pr_info("%s: normal temperature recover current\n", __func__);
-				sec_bat_set_current_event(battery, 0, SEC_BAT_CURRENT_EVENT_LOW_TEMP_MODE);
-			}
+			(battery->current_event & SEC_BAT_CURRENT_EVENT_LOW_TEMP_MODE)) {
+			pr_info("%s: normal temperature temperature recover current\n", __func__);
+			sec_bat_set_current_event(battery, 0, SEC_BAT_CURRENT_EVENT_LOW_TEMP_MODE);
 		} else if ((temperature >= battery->pdata->swelling_low_temp_recov_1st) &&
 			(battery->current_event & (SEC_BAT_CURRENT_EVENT_LOW_TEMP_SWELLING | SEC_BAT_CURRENT_EVENT_LOW_TEMP_SWELLING_2ND))) {
-			if (battery->swelling_low_temp_3rd_ctrl) {
-				pr_info("%s: upto 1st low temperature swelling recovery temp! 3rd low temp swelling current set\n", __func__);
-				sec_bat_set_current_event(battery, SEC_BAT_CURRENT_EVENT_LOW_TEMP_SWELLING_3RD,
-							 SEC_BAT_CURRENT_EVENT_SWELLING_MODE);
-			} else {
-				pr_info("%s: normal temperature recover current\n", __func__);
-				sec_bat_set_current_event(battery, 0, SEC_BAT_CURRENT_EVENT_LOW_TEMP_MODE);
-			}
+				if (battery->swelling_low_temp_3rd_ctrl) {
+					pr_info("%s: upto 1st low temperature swelling recovery temp! 3rd low temp swelling current set\n", __func__);
+					sec_bat_set_current_event(battery, SEC_BAT_CURRENT_EVENT_LOW_TEMP_SWELLING_3RD,
+								  SEC_BAT_CURRENT_EVENT_SWELLING_MODE);
+				} else {
+					pr_info("%s: normal temperature temperature recover current\n", __func__);
+					sec_bat_set_current_event(battery, 0, SEC_BAT_CURRENT_EVENT_LOW_TEMP_MODE);
+				}
 		} else if ((temperature >= battery->pdata->swelling_low_temp_recov_2nd) &&
 			(battery->current_event & SEC_BAT_CURRENT_EVENT_LOW_TEMP_SWELLING_2ND)) {
-			pr_info("%s: upto 2nd low temperature swelling recovery temp! 1st low temp swelling current set\n", __func__);
-			sec_bat_set_current_event(battery, SEC_BAT_CURRENT_EVENT_LOW_TEMP_SWELLING,
-						  SEC_BAT_CURRENT_EVENT_SWELLING_MODE);
+				pr_info("%s: upto 2nd low temperature swelling recovery temp! 1st low temp swelling current set\n", __func__);
+				sec_bat_set_current_event(battery, SEC_BAT_CURRENT_EVENT_LOW_TEMP_SWELLING,
+							  SEC_BAT_CURRENT_EVENT_SWELLING_MODE);
 		}
 	}
 
