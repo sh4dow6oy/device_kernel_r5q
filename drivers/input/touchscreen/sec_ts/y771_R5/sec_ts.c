@@ -14,6 +14,16 @@ struct sec_ts_data *tsp_info;
 
 #include "sec_ts.h"
 
+#ifndef input_info
+#define input_info(force, dev, fmt, ...) \
+	dev_info(dev, fmt, ##__VA_ARGS__)
+#endif
+
+#ifndef input_err
+#define input_err(force, dev, fmt, ...) \
+	dev_err(dev, fmt, ##__VA_ARGS__)
+#endif
+
 struct sec_ts_data *ts_dup;
 bool shutdown_is_on_going_tsp;
 int layer_data[TYPE_RAWDATA_MAX];
