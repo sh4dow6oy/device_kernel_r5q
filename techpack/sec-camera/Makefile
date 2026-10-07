@@ -2,12 +2,12 @@
 
 # auto-detect subdirs
 ifeq ($(CONFIG_ARCH_SM8150), y)
-include $(srctree)/techpack/camera-msmnile/config/msmnilecamera.conf
+include $(srctree)/techpack/sec-camera/config/msmnilecamera.conf
 endif
 
 ifeq ($(CONFIG_ARCH_SM8150), y)
 LINUXINCLUDE    += \
-		-include $(srctree)/techpack/camera-msmnile/config/msmnilecameraconf.h
+		-include $(srctree)/techpack/sec-camera/config/msmnilecameraconf.h
 endif
 
 ifdef CONFIG_SPECTRA_CAMERA
