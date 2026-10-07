@@ -465,10 +465,13 @@ static int sock_map_fd(struct socket *sock, int flags)
  *	On failure returns %NULL.
  */
 
-struct socket *sock_from_file(struct file *file)
+struct socket *sock_from_file(struct file *file, int *err)
 {
 	if (file->f_op == &socket_file_ops)
 		return file->private_data;	/* set in sock_map_fd */
+
+	if (err)
+		*err = -ENOTSOCK;
 
 	return NULL;
 }
