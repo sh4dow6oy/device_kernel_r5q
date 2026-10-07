@@ -1,6 +1,13 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
-/*
- * Copyright (c) 2015-2019, 2021, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2018, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #ifndef _SDE_HW_DSPP_H
@@ -158,97 +165,6 @@ struct sde_hw_dspp_ops {
 	void (*ad_read_intr_resp)(struct sde_hw_dspp *ctx, u32 event,
 			u32 *resp_in, u32 *resp_out);
 
-	/**
-	 * setup_ltm_init - setup LTM INIT
-	 * @ctx: Pointer to dspp context
-	 * @cfg: Pointer to configuration
-	 */
-	void (*setup_ltm_init)(struct sde_hw_dspp *ctx, void *cfg);
-
-	/**
-	 * setup_ltm_roi - setup LTM ROI
-	 * @ctx: Pointer to dspp context
-	 * @cfg: Pointer to configuration
-	 */
-	void (*setup_ltm_roi)(struct sde_hw_dspp *ctx, void *cfg);
-
-	/**
-	 * setup_ltm_vlut - setup LTM VLUT
-	 * @ctx: Pointer to dspp context
-	 * @cfg: Pointer to configuration
-	 */
-	void (*setup_ltm_vlut)(struct sde_hw_dspp *ctx, void *cfg);
-
-	/**
-	 * setup_ltm_hist_ctrl - setup LTM histogram control
-	 * @ctx: Pointer to dspp context
-	 * @cfg: Pointer to configuration
-	 * @enable: feature enable/disable value
-	 * @iova: aligned hist buffer address
-	 */
-	void (*setup_ltm_hist_ctrl)(struct sde_hw_dspp *ctx, void *cfg,
-				    bool enable, u64 iova);
-
-	/**
-	 * setup_ltm_hist_buffer - setup LTM histogram buffer
-	 * @ctx: Pointer to dspp context
-	 * @iova: aligned hist buffer address
-	 */
-	void (*setup_ltm_hist_buffer)(struct sde_hw_dspp *ctx, u64 iova);
-
-	/**
-	 * setup_ltm_thresh - setup LTM histogram thresh
-	 * @ctx: Pointer to dspp context
-	 * @cfg: Pointer to configuration
-	 */
-	void (*setup_ltm_thresh)(struct sde_hw_dspp *ctx, void *cfg);
-
-	/**
-	 * ltm_read_intr_status - function to read ltm interrupt status
-	 * @ctx: Pointer to dspp context
-	 * @status: Pointer to u32 where ltm status value is dumped.
-	 */
-	void (*ltm_read_intr_status)(struct sde_hw_dspp *ctx, u32 *status);
-
-	/**
-	 * validate_rc_mask -  Validate RC mask configuration
-	 * @ctx: Pointer to dspp context.
-	 * @cfg: Pointer to configuration.
-	 * Return: 0 on success, non-zero otherwise.
-	 */
-	int (*validate_rc_mask)(struct sde_hw_dspp *ctx, void *cfg);
-
-	/**
-	 * setup_rc_mask -  Setup RC mask configuration
-	 * @ctx: Pointer to dspp context.
-	 * @cfg: Pointer to configuration.
-	 * Return: 0 on success, non-zero otherwise.
-	 */
-	int (*setup_rc_mask)(struct sde_hw_dspp *ctx, void *cfg);
-
-	/**
-	 * validate_rc_pu_roi -  Validate RC regions in during partial update.
-	 * @ctx: Pointer to dspp context.
-	 * @cfg: Pointer to configuration.
-	 * Return: 0 on success, non-zero otherwise.
-	 */
-	int (*validate_rc_pu_roi)(struct sde_hw_dspp *ctx, void *cfg);
-
-	/**
-	 * setup_rc_pu_roi -  Setup RC regions in during partial update.
-	 * @ctx: Pointer to dspp context.
-	 * @cfg: Pointer to configuration.
-	 * Return: 0 on success, non-zero otherwise.
-	 */
-	int (*setup_rc_pu_roi)(struct sde_hw_dspp *ctx, void *cfg);
-
-	/**
-	 * setup_rc_data -  Program RC mask data
-	 * @ctx: Pointer to dspp context.
-	 * @cfg: Pointer to configuration.
-	 * Return: 0 on success, non-zero otherwise.
-	 */
-	int (*setup_rc_data)(struct sde_hw_dspp *ctx, void *cfg);
 };
 
 /**

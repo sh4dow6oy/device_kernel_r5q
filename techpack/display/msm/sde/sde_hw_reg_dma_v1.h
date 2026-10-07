@@ -1,6 +1,13 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
-/*
- * Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 #ifndef _SDE_HW_REG_DMA_V1_H
 #define _SDE_HW_REG_DMA_V1_H
@@ -18,12 +25,6 @@ int init_v1(struct sde_hw_reg_dma *reg_dma);
  * @reg_dma - reg_dma hw info structure exposing capabilities.
  */
 int init_v11(struct sde_hw_reg_dma *reg_dma);
-
-/**
- * init_v12() - initialize the reg dma v12 driver by installing v12 ops
- * @reg_dma - reg_dma hw info structure exposing capabilities.
- */
-int init_v12(struct sde_hw_reg_dma *reg_dma);
 
 /**
  * deinit_v1() - free up any resources allocated during the v1 reg dma init

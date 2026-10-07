@@ -1,9 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2015-2020, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
-
-#include <linux/iopoll.h>
 
 #include "sde_kms.h"
 #include "sde_hw_catalog.h"
@@ -248,34 +253,11 @@ static void sde_hw_lm_setup_misr(struct sde_hw_mixer *ctx,
 	SDE_REG_WRITE(c, LM_MISR_CTRL, config);
 }
 
-static int sde_hw_lm_collect_misr(struct sde_hw_mixer *ctx, bool nonblock,
-		u32 *misr_value)
+static u32 sde_hw_lm_collect_misr(struct sde_hw_mixer *ctx)
 {
 	struct sde_hw_blk_reg_map *c = &ctx->hw;
-	u32 ctrl = 0;
 
-	if (!misr_value)
-		return -EINVAL;
-
-	ctrl = SDE_REG_READ(c, LM_MISR_CTRL);
-	if (!nonblock) {
-		if (ctrl & MISR_CTRL_ENABLE) {
-			int rc;
-
-			rc = readl_poll_timeout(c->base_off + c->blk_off +
-					LM_MISR_CTRL, ctrl,
-					(ctrl & MISR_CTRL_STATUS) > 0, 500,
-					84000);
-			if (rc)
-				return rc;
-		} else {
-			return -EINVAL;
-		}
-	}
-
-	*misr_value  = SDE_REG_READ(c, LM_MISR_SIGNATURE);
-
-	return 0;
+	return SDE_REG_READ(c, LM_MISR_SIGNATURE);
 }
 
 static void _setup_mixer_ops(struct sde_mdss_cfg *m,
@@ -284,8 +266,12 @@ static void _setup_mixer_ops(struct sde_mdss_cfg *m,
 {
 	ops->setup_mixer_out = sde_hw_lm_setup_out;
 	if (IS_SDM845_TARGET(m->hwversion) || IS_SDM670_TARGET(m->hwversion) ||
-			IS_SDE_MAJOR_SAME(m->hwversion, SDE_HW_VER_500) ||
-			IS_SDE_MAJOR_SAME(m->hwversion, SDE_HW_VER_600))
+			IS_SM8150_TARGET(m->hwversion) ||
+			IS_SDMSHRIKE_TARGET(m->hwversion) ||
+			IS_SM6150_TARGET(m->hwversion) ||
+			IS_SDMMAGPIE_TARGET(m->hwversion) ||
+			IS_SDMTRINKET_TARGET(m->hwversion) ||
+			IS_ATOLL_TARGET(m->hwversion))
 		ops->setup_blend_config = sde_hw_lm_setup_blend_config_sdm845;
 	else
 		ops->setup_blend_config = sde_hw_lm_setup_blend_config;

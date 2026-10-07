@@ -1,6 +1,14 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
-/*
- * Copyright (c) 2016-2019, 2021, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2018, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
 
 #ifndef _SDE_COLOR_PROCESSING_H
@@ -41,25 +49,6 @@ static const struct drm_prop_enum_list sde_hist_modes[] = {
 	{HIST_ENABLED, "hist_on"},
 };
 
-/*
- * LTM HISTOGRAM modes
- * @LTM_HIST_DISABLED          Histogram disabled
- * @LTM_HIST_ENABLED           Histogram enabled
- */
-enum ltm_hist_modes {
-	LTM_HIST_DISABLED,
-	LTM_HIST_ENABLED
-};
-
-/**
- * struct drm_prop_enum_list - drm structure for creating enum property and
- *                             enumerating values
- */
-static const struct drm_prop_enum_list sde_ltm_hist_modes[] = {
-	{LTM_HIST_DISABLED, "ltm_hist_off"},
-	{LTM_HIST_ENABLED, "ltm_hist_on"},
-};
-
 /**
  * sde_cp_crtc_init(): Initialize color processing lists for a crtc.
  *                     Should be called during crtc initialization.
@@ -93,15 +82,6 @@ void sde_cp_crtc_destroy_properties(struct drm_crtc *crtc);
  */
 int sde_cp_crtc_set_property(struct drm_crtc *crtc,
 				struct drm_property *property, uint64_t val);
-/**
- * sde_cp_crtc_check_properties: Verify color processing properties for a crtc.
- *                               Should be called during atomic check call.
- * @crtc: Pointer to crtc.
- * @state: Pointer to crtc state.
- * @returns: 0 on success, non-zero otherwise
- */
-int sde_cp_crtc_check_properties(struct drm_crtc *crtc,
-					struct drm_crtc_state *state);
 
 /**
  * sde_cp_crtc_apply_properties: Enable/disable properties
@@ -172,51 +152,4 @@ void sde_cp_crtc_post_ipc(struct drm_crtc *crtc);
  */
 int sde_cp_hist_interrupt(struct drm_crtc *crtc_drm, bool en,
 	struct sde_irq_callback *hist_irq);
-
-/**
- * sde_cp_ltm_hist_interrupt: API to enable/disable LTM hist interrupt
- * @crtc: Pointer to crtc.
- * @en: Variable to enable/disable interrupt.
- * @irq: Pointer to irq callback
- */
-int sde_cp_ltm_hist_interrupt(struct drm_crtc *crtc_drm, bool en,
-	struct sde_irq_callback *hist_irq);
-
-/**
- * sde_cp_ltm_wb_pb_interrupt: API to enable/disable LTM wb_pb interrupt
- * @crtc: Pointer to crtc.
- * @en: Variable to enable/disable interrupt.
- * @irq: Pointer to irq callback
- */
-int sde_cp_ltm_wb_pb_interrupt(struct drm_crtc *crtc_drm, bool en,
-	struct sde_irq_callback *hist_irq);
-
-/**
- * sde_cp_ltm_off_event_handler: API to enable/disable LTM off notification
- * @crtc: Pointer to crtc.
- * @en: Variable to enable/disable notification.
- * @irq: Pointer to irq callback
- */
-int sde_cp_ltm_off_event_handler(struct drm_crtc *crtc_drm, bool en,
-	struct sde_irq_callback *hist_irq);
-
-/**
- * sde_cp_mode_switch_prop_dirty: API marks mode dependent features as dirty
- * @crtc_drm: Pointer to crtc.
- */
-void sde_cp_mode_switch_prop_dirty(struct drm_crtc *crtc_drm);
-
-/**
- * sde_cp_crtc_enable(): enable color processing info in the crtc.
- *                     Should be called during crtc enable.
- * @crtc:  Pointer to drm_crtc.
- */
-void sde_cp_crtc_enable(struct drm_crtc *crtc);
-
-/**
- * sde_cp_crtc_disable(): disable color processing info in the crtc.
- *                     Should be called during crtc disable.
- * @crtc:  Pointer to drm_crtc.
- */
-void sde_cp_crtc_disable(struct drm_crtc *crtc);
 #endif /*_SDE_COLOR_PROCESSING_H */

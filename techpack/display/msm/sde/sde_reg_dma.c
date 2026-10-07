@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #define pr_fmt(fmt)	"[drm:%s:%d] " fmt, __func__, __LINE__
@@ -103,12 +110,8 @@ int sde_reg_dma_init(void __iomem *addr, struct sde_mdss_cfg *m,
 			DRM_DEBUG("init v1 dma ops failed\n");
 		break;
 	case REG_DMA_VER_1_1:
-		rc = init_v11(&reg_dma);
-		if (rc)
-			DRM_DEBUG("init v11 dma ops failed\n");
-		break;
 	case REG_DMA_VER_1_2:
-		rc = init_v12(&reg_dma);
+		rc = init_v11(&reg_dma);
 		if (rc)
 			DRM_DEBUG("init v11 dma ops failed\n");
 		break;

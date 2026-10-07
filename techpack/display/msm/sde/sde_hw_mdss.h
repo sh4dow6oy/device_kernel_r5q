@@ -1,6 +1,13 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
-/*
- * Copyright (c) 2015-2019, 2021, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2020, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #ifndef _SDE_HW_MDSS_H
@@ -38,6 +45,8 @@
 
 #define MAX_DSI_DISPLAYS		2
 #define MAX_DATA_PATH_PER_DSIPLAY	2
+
+#define SDE_AD4_REG_LEN		0x484
 
 enum sde_format_flags {
 	SDE_FORMAT_FLAG_YUV_BIT,
@@ -103,14 +112,10 @@ enum sde_hw_blk_type {
 	SDE_HW_BLK_INTF,
 	SDE_HW_BLK_WB,
 	SDE_HW_BLK_DSC,
+	SDE_HW_BLK_ROT,
 	SDE_HW_BLK_MERGE_3D,
 	SDE_HW_BLK_QDSS,
 	SDE_HW_BLK_MAX,
-};
-
-enum sde_uidle {
-	UIDLE = 0x1,
-	UIDLE_MAX,
 };
 
 enum sde_mdp {
@@ -171,25 +176,12 @@ enum sde_stage {
 	SDE_STAGE_10,
 	SDE_STAGE_MAX
 };
-
 enum sde_dspp {
 	DSPP_0 = 1,
 	DSPP_1,
 	DSPP_2,
 	DSPP_3,
 	DSPP_MAX
-};
-
-enum sde_ltm {
-	LTM_0 = DSPP_0,
-	LTM_1,
-	LTM_MAX
-};
-
-enum sde_rc {
-	RC_0 = DSPP_0,
-	RC_1,
-	RC_MAX
 };
 
 enum sde_ds {
@@ -321,6 +313,13 @@ enum sde_iommu_domain {
 enum sde_rot {
 	ROT_0 = 1,
 	ROT_MAX
+};
+
+enum sde_inline_rot {
+	INLINE_ROT_NONE,
+	INLINE_ROT0_SSPP,
+	INLINE_ROT0_WB,
+	INLINE_ROT_MAX
 };
 
 enum sde_merge_3d {
@@ -523,9 +522,8 @@ struct sde_mdss_color {
 #define SDE_DBG_MASK_ROT      (1 << 12)
 #define SDE_DBG_MASK_DS       (1 << 13)
 #define SDE_DBG_MASK_REGDMA   (1 << 14)
-#define SDE_DBG_MASK_UIDLE    (1 << 15)
+#define SDE_DBG_MASK_QDSS     (1 << 15)
 #define SDE_DBG_MASK_SID      (1 << 15)
-#define SDE_DBG_MASK_QDSS     (1 << 16)
 
 /**
  * struct sde_hw_cp_cfg: hardware dspp/lm feature payload.
@@ -537,9 +535,6 @@ struct sde_mdss_color {
  * @mixer_info: mixer info pointer associated with lm.
  * @displayv: height of the display.
  * @displayh: width of the display.
- * @dspp[DSPP_MAX]: array of hw_dspp pointers associated with crtc.
- * @broadcast_disabled: flag indicating if broadcast should be avoided when
- *			using LUTDMA
  */
 struct sde_hw_cp_cfg {
 	void *payload;
@@ -550,8 +545,6 @@ struct sde_hw_cp_cfg {
 	void *mixer_info;
 	u32 displayv;
 	u32 displayh;
-	struct sde_hw_dspp *dspp[DSPP_MAX];
-	bool broadcast_disabled;
 };
 
 /**
@@ -598,6 +591,7 @@ struct sde_sspp_index_info {
  * struct sde_splash_data - Struct contains details of resources and hw blocks
  * used in continuous splash on a specific display.
  * @cont_splash_enabled:  Stores the cont_splash status (enabled/disabled)
+ * @single_flush_en: Stores if the single flush is enabled
  * @encoder:	Pointer to the drm encoder object used for this display
  * @splash:     Pointer to struct sde_splash_mem used for this display
  * @ctl_ids:	Stores the valid MDSS ctl block ids for the current mode
@@ -611,6 +605,7 @@ struct sde_sspp_index_info {
  */
 struct sde_splash_display {
 	bool cont_splash_enabled;
+	bool single_flush_en;
 	struct drm_encoder *encoder;
 	struct sde_splash_mem *splash;
 	u8 ctl_ids[MAX_DATA_PATH_PER_DSIPLAY];
@@ -652,7 +647,6 @@ struct sde_splash_data {
  *                           needs to be above the read pointer
  * @start_pos:	The position from which the start_threshold value is added
  * @rd_ptr_irq:	The read pointer line at which interrupt has to be generated
- * @wr_ptr_irq:	The write pointer line at which interrupt has to be generated
  * @hw_vsync_mode:	Sync with external frame sync input
  */
 struct sde_hw_tear_check {
@@ -663,7 +657,6 @@ struct sde_hw_tear_check {
 	u32 sync_threshold_continue;
 	u32 start_pos;
 	u32 rd_ptr_irq;
-	u32 wr_ptr_irq;
 	u8 hw_vsync_mode;
 };
 
@@ -681,22 +674,16 @@ struct sde_hw_autorefresh {
 /**
  * struct sde_hw_pp_vsync_info - Struct contains parameters to configure
  *        read and write pointers for command mode panels
- * @pp_idx:		Ping-pong block index
- * @intf_idx:		Interface block index
  * @rd_ptr_init_val:	Value of rd pointer at vsync edge
  * @rd_ptr_frame_count:	num frames sent since enabling interface
  * @rd_ptr_line_count:	current line on panel (rd ptr)
  * @wr_ptr_line_count:	current line within pp fifo (wr ptr)
- * @intf_frame_count:	num frames read from intf
  */
 struct sde_hw_pp_vsync_info {
-	u32 pp_idx;
-	u32 intf_idx;
 	u32 rd_ptr_init_val;
 	u32 rd_ptr_frame_count;
 	u32 rd_ptr_line_count;
 	u32 wr_ptr_line_count;
-	u32 intf_frame_count;
 };
 
 #endif  /* _SDE_HW_MDSS_H */

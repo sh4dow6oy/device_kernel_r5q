@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2015-2020, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 #define pr_fmt(fmt)	"[drm:%s:%d] " fmt, __func__, __LINE__
 
@@ -76,10 +83,7 @@ void sde_reg_write(struct sde_hw_blk_reg_map *c,
 	if (c->log_mask & sde_hw_util_log_mask)
 		SDE_DEBUG_DRIVER("[%s:0x%X] <= 0x%X\n",
 				name, c->blk_off + reg_off, val);
-	SDE_EVT32_REGWRITE(c->blk_off, reg_off, val);
 	writel_relaxed(val, c->base_off + c->blk_off + reg_off);
-	SDE_REG_LOG(c->log_mask ? ilog2(c->log_mask)+1 : 0,
-			val, c->blk_off + reg_off);
 }
 
 int sde_reg_read(struct sde_hw_blk_reg_map *c, u32 reg_off)
@@ -547,45 +551,4 @@ uint32_t sde_copy_formats(
 	dst_list[cur_pos].fourcc_format = 0;
 
 	return i;
-}
-
-/**
- * sde_get_linetime   - returns the line time for a given mode
- * @mode:          pointer to drm mode to calculate the line time
- * @comp_ratio:    compression ratio
- * Return:         line time of display mode in nS
- */
-uint32_t sde_get_linetime(struct drm_display_mode *mode, int comp_ratio)
-{
-	u64 pclk_rate;
-	u32 pclk_period;
-	u32 line_time;
-
-	pclk_rate = mode->clock; /* pixel clock in kHz */
-	if (pclk_rate == 0) {
-		SDE_ERROR("pclk is 0, cannot calculate line time\n");
-		return 0;
-	}
-
-	pclk_period = DIV_ROUND_UP_ULL(1000000000ull, pclk_rate);
-	if (pclk_period == 0) {
-		SDE_ERROR("pclk period is 0\n");
-		return 0;
-	}
-
-	/*
-	 * Line time calculation based on Pixel clock, HTOTAL, and comp_ratio.
-	 * Final unit is in ns.
-	 */
-	line_time = DIV_ROUND_UP(mult_frac(pclk_period, mode->htotal,
-			comp_ratio), 1000);
-	if (line_time == 0) {
-		SDE_ERROR("line time calculation is 0\n");
-		return 0;
-	}
-
-	pr_debug("clk_rate=%lldkHz, clk_period=%d, linetime=%dns, htotal=%d\n",
-			pclk_rate, pclk_period, line_time, mode->htotal);
-
-	return line_time;
 }

@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #define pr_fmt(fmt)	"[drm:%s:%d] " fmt, __func__, __LINE__
@@ -27,7 +34,7 @@ static int _sde_vbif_wait_for_xin_halt(struct sde_hw_vbif *vbif, u32 xin_id)
 	int rc;
 
 	if (!vbif || !vbif->cap || !vbif->ops.get_halt_ctrl) {
-		SDE_ERROR("invalid arguments vbif %d\n", !vbif);
+		SDE_ERROR("invalid arguments vbif %d\n", vbif != 0);
 		return -EINVAL;
 	}
 
@@ -174,7 +181,7 @@ static u32 _sde_vbif_get_ot_limit(struct sde_hw_vbif *vbif,
 	u32 val;
 
 	if (!vbif || !vbif->cap) {
-		SDE_ERROR("invalid arguments vbif %d\n", !vbif);
+		SDE_ERROR("invalid arguments vbif %d\n", vbif != 0);
 		return -EINVAL;
 	}
 
@@ -285,6 +292,7 @@ void sde_vbif_set_ot_limit(struct sde_kms *sde_kms,
 		mdp->ops.setup_clk_force_ctrl(mdp, params->clk_ctrl, false);
 exit:
 	mutex_unlock(&vbif->mutex);
+	return;
 }
 
 void mdp_vbif_lock(struct platform_device *parent_pdev, bool enable)
@@ -431,6 +439,7 @@ void sde_vbif_set_qos_remap(struct sde_kms *sde_kms,
 	}
 
 	qos_tbl = &vbif->cap->qos_tbl[params->client_type];
+
 	if (!qos_tbl->npriority_lvl || !qos_tbl->priority_lvl) {
 		SDE_DEBUG("qos tbl not defined\n");
 		return;
@@ -584,7 +593,7 @@ int sde_debugfs_vbif_init(struct sde_kms *sde_kms, struct dentry *debugfs_root)
 		debugfs_vbif = debugfs_create_dir(vbif_name,
 				sde_kms->debugfs_vbif);
 
-		debugfs_create_u32("features", 0400, debugfs_vbif,
+		debugfs_create_u32("features", 0600, debugfs_vbif,
 			(u32 *)&vbif->features);
 
 		debugfs_create_u32("xin_halt_timeout", 0400, debugfs_vbif,

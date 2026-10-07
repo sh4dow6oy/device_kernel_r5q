@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2018, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #define pr_fmt(fmt)	"[drm:%s:%d] " fmt, __func__, __LINE__
@@ -10,6 +17,10 @@
 
 #include "sde_kms.h"
 #include "sde_formats.h"
+
+#if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
+#include "ss_dsi_panel_common.h"
+#endif
 
 #define SDE_UBWC_META_MACRO_W_H		16
 #define SDE_UBWC_META_BLOCK_SIZE	256
@@ -642,16 +653,6 @@ static const struct sde_format sde_format_map_tp10_ubwc[] = {
 		SDE_FETCH_UBWC, 4, SDE_TILE_HEIGHT_NV12),
 };
 
-bool sde_format_is_tp10_ubwc(const struct sde_format *fmt)
-{
-	if (SDE_FORMAT_IS_YUV(fmt) && SDE_FORMAT_IS_DX(fmt) &&
-			SDE_FORMAT_IS_UBWC(fmt) &&
-			(fmt->num_planes == 4) && fmt->unpack_tight)
-		return true;
-	else
-		return false;
-}
-
 /* _sde_get_v_h_subsample_rate - Get subsample rates for all formats we support
  *   Note: Not using the drm_format_*_subsampling since we have formats
  */
@@ -1020,6 +1021,15 @@ static int _sde_format_populate_addrs_ubwc(
 		layout->plane_addr[3] = 0;
 	}
 done:
+
+#if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
+	if (sec_debug_is_enabled()) {
+		ss_image_logging_update(base_addr,
+			layout->width, layout->height,
+			layout->format->base.pixel_format);
+	}
+#endif
+
 	return 0;
 }
 
@@ -1343,40 +1353,4 @@ uint32_t sde_populate_formats(
 	}
 
 	return i;
-}
-
-int sde_format_validate_fmt(struct msm_kms *kms,
-	const struct sde_format *sde_fmt,
-	const struct sde_format_extended *fmt_list)
-{
-	const struct sde_format *fmt_tmp;
-	bool valid_format = false;
-	int ret = 0;
-
-	if (!sde_fmt || !fmt_list) {
-		SDE_ERROR("invalid fmt:%d list:%d\n",
-			!sde_fmt, !fmt_list);
-		ret = -EINVAL;
-		goto exit;
-	}
-
-	while (fmt_list->fourcc_format) {
-		fmt_tmp = sde_get_sde_format_ext(fmt_list->fourcc_format,
-					fmt_list->modifier);
-		if (fmt_tmp
-		  && (fmt_tmp->base.pixel_format == sde_fmt->base.pixel_format)
-		  && (fmt_tmp->fetch_mode == sde_fmt->fetch_mode)) {
-			valid_format = true;
-			break;
-		}
-		++fmt_list;
-	}
-
-	if (!valid_format) {
-		SDE_ERROR("fmt:%d mode:%d not found within the list!\n",
-			sde_fmt->base.pixel_format, sde_fmt->fetch_mode);
-		ret = -EINVAL;
-	}
-exit:
-	return ret;
 }

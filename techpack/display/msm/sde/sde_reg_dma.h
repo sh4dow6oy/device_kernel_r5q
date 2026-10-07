@@ -1,6 +1,13 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
-/*
- * Copyright (c) 2017-2019, 2021, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #ifndef _SDE_REG_DMA_H
@@ -54,10 +61,6 @@ enum sde_reg_dma_read_sel {
  * @SIX_ZONE: six zone
  * @HSIC: Hue, saturation and contrast
  * @GC: gamma correction
- * @LTM_INIT: LTM INIT
- * @LTM_ROI: LTM ROI
- * @LTM_VLUT: LTM VLUT
- * @RC_DATA: Rounded corner data
  * @REG_DMA_FEATURES_MAX: invalid selection
  */
 enum sde_reg_dma_features {
@@ -73,10 +76,6 @@ enum sde_reg_dma_features {
 	SIX_ZONE,
 	HSIC,
 	GC,
-	LTM_INIT,
-	LTM_ROI,
-	LTM_VLUT,
-	RC_DATA,
 	REG_DMA_FEATURES_MAX,
 };
 
@@ -133,8 +132,6 @@ enum sde_reg_dma_setup_ops {
 	REG_DMA_SETUP_OPS_MAX,
 };
 
-#define REG_DMA_BLK_MAX 32
-
 /**
  * enum sde_reg_dma_blk - defines blocks for which reg dma op should be
  *                        performed
@@ -156,8 +153,6 @@ enum sde_reg_dma_setup_ops {
  * @DMA3: select dma3 block
  * @SSPP_IGC: select sspp igc block
  * @DSPP_IGC: select dspp igc block
- * @LTM0: select LTM0 block
- * @LTM1: select LTM1 block
  * @MDSS: select mdss block
  */
 enum sde_reg_dma_blk {
@@ -179,8 +174,6 @@ enum sde_reg_dma_blk {
 	DMA3  = BIT(15),
 	SSPP_IGC = BIT(16),
 	DSPP_IGC = BIT(17),
-	LTM0 = BIT(18),
-	LTM1 = BIT(19),
 	MDSS  = BIT(31)
 };
 

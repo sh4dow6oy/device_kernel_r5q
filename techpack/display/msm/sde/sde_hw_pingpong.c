@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2015-2020, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2020, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/iopoll.h>
@@ -176,7 +183,6 @@ static int sde_hw_pp_setup_te_config(struct sde_hw_pingpong *pp,
 	SDE_REG_WRITE(c, PP_SYNC_CONFIG_HEIGHT, te->sync_cfg_height);
 	SDE_REG_WRITE(c, PP_VSYNC_INIT_VAL, te->vsync_init_val);
 	SDE_REG_WRITE(c, PP_RD_PTR_IRQ, te->rd_ptr_irq);
-	SDE_REG_WRITE(c, PP_WR_PTR_IRQ, te->wr_ptr_irq);
 	SDE_REG_WRITE(c, PP_START_POS, te->start_pos);
 	SDE_REG_WRITE(c, PP_SYNC_THRESH,
 			((te->sync_threshold_continue << 16) |

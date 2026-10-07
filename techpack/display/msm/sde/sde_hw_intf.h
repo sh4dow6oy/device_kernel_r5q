@@ -1,6 +1,13 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
-/*
- * Copyright (c) 2015-2020, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2018, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #ifndef _SDE_HW_INTF_H
@@ -50,11 +57,6 @@ struct intf_status {
 	u32 line_count;		/* current line count including blanking */
 };
 
-struct intf_tear_status {
-	u32 read_count;		/* frame & line count for tear init value */
-	u32 write_count;	/* frame & line count for tear write */
-};
-
 struct intf_avr_params {
 	u32 default_fps;
 	u32 min_fps;
@@ -95,8 +97,7 @@ struct sde_hw_intf_ops {
 	void (*setup_misr)(struct sde_hw_intf *intf,
 			bool enable, u32 frame_count);
 
-	int (*collect_misr)(struct sde_hw_intf *intf,
-			bool nonblock, u32 *misr_value);
+	u32 (*collect_misr)(struct sde_hw_intf *intf);
 
 	/**
 	 * returns the current scan line count of the display
@@ -182,12 +183,6 @@ struct sde_hw_intf_ops {
 	 */
 	void (*avr_ctrl)(struct sde_hw_intf *intf,
 			const struct intf_avr_params *avr_params);
-
-	/**
-	 * Check the intf tear check status and reset it to start_pos
-	 */
-	int (*check_and_reset_tearcheck)(struct sde_hw_intf *intf,
-			struct intf_tear_status *status);
 };
 
 struct sde_hw_intf {
