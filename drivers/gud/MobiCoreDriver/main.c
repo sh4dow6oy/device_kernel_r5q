@@ -18,6 +18,7 @@
 #include <linux/debugfs.h>
 #include <linux/reboot.h>
 #include <linux/suspend.h>
+#include <linux/of.h>
 
 #include "public/mc_user.h"
 #include "public/mc_admin.h"	/* MC_ADMIN_DEVNODE */
