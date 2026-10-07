@@ -1,0 +1,2 @@
+obj-$(CONFIG_SPECTRA_CAMERA_RENOVATION) += ife_csid_hw/
+obj-$(CONFIG_SPECTRA_CAMERA_RENOVATION) += vfe_hw/
