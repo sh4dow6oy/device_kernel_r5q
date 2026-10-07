@@ -1,6 +1,13 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
-/*
- * Copyright (c) 2016-2021, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2020, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #ifndef SDE_DBG_H_
@@ -34,8 +41,6 @@ enum sde_dbg_evtlog_flag {
 	SDE_EVTLOG_CRITICAL = BIT(0),
 	SDE_EVTLOG_IRQ = BIT(1),
 	SDE_EVTLOG_VERBOSE = BIT(2),
-	SDE_EVTLOG_EXTERNAL = BIT(3),
-	SDE_EVTLOG_REGWRITE = BIT(4),
 	SDE_EVTLOG_ALWAYS = -1
 };
 
@@ -50,50 +55,25 @@ enum sde_dbg_dump_context {
 	SDE_DBG_DUMP_CLK_ENABLED_CTX,
 };
 
-/*
- * Define blocks for register write logging.
- */
-#define SDE_REG_LOG_DEFAULT  0
-#define SDE_REG_LOG_NONE     1
-#define SDE_REG_LOG_CDM      2
-#define SDE_REG_LOG_DSPP     3
-#define SDE_REG_LOG_INTF     4
-#define SDE_REG_LOG_LM       5
-#define SDE_REG_LOG_CTL      6
-#define SDE_REG_LOG_PINGPONG 7
-#define SDE_REG_LOG_SSPP     8
-#define SDE_REG_LOG_WB       9
-#define SDE_REG_LOG_TOP     10
-#define SDE_REG_LOG_VBIF    11
-#define SDE_REG_LOG_DSC     12
-#define SDE_REG_LOG_ROT     13
-#define SDE_REG_LOG_DS      14
-#define SDE_REG_LOG_REGDMA  15
-#define SDE_REG_LOG_UIDLE   16
-#define SDE_REG_LOG_SID     16
-#define SDE_REG_LOG_QDSS    17
-/*
- * 0-32 are reserved for sde_reg_write due to log masks
- * Additional blocks are assigned from 33 to avoid conflict
- */
-#define SDE_REG_LOG_RSCC    33
-
-#define SDE_EVTLOG_DEFAULT_ENABLE (SDE_EVTLOG_CRITICAL | SDE_EVTLOG_IRQ | \
-		SDE_EVTLOG_EXTERNAL)
+#ifdef CONFIG_DRM_SDE_EVTLOG_DEBUG
+#define SDE_EVTLOG_DEFAULT_ENABLE (SDE_EVTLOG_CRITICAL | SDE_EVTLOG_IRQ)
+#else
+#define SDE_EVTLOG_DEFAULT_ENABLE 0
+#endif
 
 /*
  * evtlog will print this number of entries when it is called through
  * sysfs node or panic. This prevents kernel log from evtlog message
  * flood.
  */
-#define SDE_EVTLOG_PRINT_ENTRY	256
+#define SDE_EVTLOG_PRINT_ENTRY	1024
 
 /*
  * evtlog keeps this number of entries in memory for debug purpose. This
  * number must be greater than print entry to prevent out of bound evtlog
  * entry array access.
  */
-#define SDE_EVTLOG_ENTRY	(SDE_EVTLOG_PRINT_ENTRY * 32)
+#define SDE_EVTLOG_ENTRY	(SDE_EVTLOG_PRINT_ENTRY * 8)
 #define SDE_EVTLOG_MAX_DATA 15
 #define SDE_EVTLOG_BUF_MAX 512
 #define SDE_EVTLOG_BUF_ALIGN 32
@@ -111,7 +91,6 @@ struct sde_dbg_evtlog_log {
 	u32 data[SDE_EVTLOG_MAX_DATA];
 	u32 data_cnt;
 	int pid;
-	u8 cpu;
 };
 
 /**
@@ -131,43 +110,6 @@ struct sde_dbg_evtlog {
 };
 
 extern struct sde_dbg_evtlog *sde_dbg_base_evtlog;
-
-/*
- * reglog keeps this number of entries in memory for debug purpose. This
- * number must be greater than number of possible writes in at least one
- * single commit.
- */
-#define SDE_REGLOG_ENTRY 1024
-
-struct sde_dbg_reglog_log {
-	s64 time;
-	u32 pid;
-	u32 addr;
-	u32 val;
-	u8 blk_id;
-};
-
-/**
- * @last_dump: Index of last entry to be output during reglog dumps
- * @filter_list: Linked list of currently active filter strings
- */
-struct sde_dbg_reglog {
-	struct sde_dbg_reglog_log logs[SDE_REGLOG_ENTRY];
-	u32 first;
-	u32 last;
-	u32 last_dump;
-	atomic64_t curr;
-	u32 next;
-	u32 enable;
-	u32 enable_mask;
-};
-
-extern struct sde_dbg_reglog *sde_dbg_base_reglog;
-
-/**
- * SDE_REG_LOG - Write register write to the register log
- */
-#define SDE_REG_LOG(blk_id, val, addr) sde_reglog_log(blk_id, val, addr)
 
 /**
  * SDE_EVT32 - Write a list of 32bit values to the event log, default area
@@ -191,21 +133,6 @@ extern struct sde_dbg_reglog *sde_dbg_base_reglog;
  */
 #define SDE_EVT32_IRQ(...) sde_evtlog_log(sde_dbg_base_evtlog, __func__, \
 		__LINE__, SDE_EVTLOG_IRQ, ##__VA_ARGS__, \
-		SDE_EVTLOG_DATA_LIMITER)
-
-/**
- * SDE_EVT32_EXTERNAL - Write a list of 32bit values for external display events
- * ... - variable arguments
- */
-#define SDE_EVT32_EXTERNAL(...) sde_evtlog_log(sde_dbg_base_evtlog, __func__, \
-		__LINE__, SDE_EVTLOG_EXTERNAL, ##__VA_ARGS__, \
-		SDE_EVTLOG_DATA_LIMITER)
-/**
- * SDE_EVT32_REGWRITE - Write a list of 32bit values for register writes logging
- * ... - variable arguments
- */
-#define SDE_EVT32_REGWRITE(...) sde_evtlog_log(sde_dbg_base_evtlog, __func__, \
-		__LINE__, SDE_EVTLOG_REGWRITE, ##__VA_ARGS__, \
 		SDE_EVTLOG_DATA_LIMITER)
 
 /**
@@ -248,7 +175,6 @@ extern struct sde_dbg_reglog *sde_dbg_base_reglog;
 #define SDE_DBG_CTRL(...) sde_dbg_ctrl(__func__, ##__VA_ARGS__, \
 		SDE_DBG_DUMP_DATA_LIMITER)
 
-
 /**
  * sde_evtlog_init - allocate a new event log object
  * Returns:	evtlog or -ERROR
@@ -256,24 +182,11 @@ extern struct sde_dbg_reglog *sde_dbg_base_reglog;
 struct sde_dbg_evtlog *sde_evtlog_init(void);
 
 /**
- * sde_reglog_init - allocate a new reg log object
- * Returns:	reglog or -ERROR
- */
-struct sde_dbg_reglog *sde_reglog_init(void);
-
-/**
  * sde_evtlog_destroy - destroy previously allocated event log
  * @evtlog:	pointer to evtlog
  * Returns:	none
  */
 void sde_evtlog_destroy(struct sde_dbg_evtlog *evtlog);
-
-/**
- * sde_reglog_destroy - destroy previously allocated reg log
- * @reglog:	pointer to reglog
- * Returns:	none
- */
-void sde_reglog_destroy(struct sde_dbg_reglog *reglog);
 
 /**
  * sde_evtlog_log - log an entry into the event log.
@@ -287,15 +200,6 @@ void sde_reglog_destroy(struct sde_dbg_reglog *reglog);
  */
 void sde_evtlog_log(struct sde_dbg_evtlog *evtlog, const char *name, int line,
 		int flag, ...);
-
-/**
- * sde_reglog_log - log an entry into the reg log.
- *      log collection may be enabled/disabled entirely via debugfs
- *      log area collection may be filtered by user provided flags via debugfs.
- * @reglog:     pointer to evtlog
- * Returns:     none
- */
-void sde_reglog_log(u8 blk_id, u32 val, u32 addr);
 
 /**
  * sde_evtlog_dump_all - print all entries in event log to kernel log
@@ -335,9 +239,11 @@ void sde_dbg_init_dbg_buses(u32 hwversion);
 /**
  * sde_dbg_init - initialize global sde debug facilities: evtlog, regdump
  * @dev:		device handle
+ * @power_ctrl:		power control callback structure for enabling clocks
+ *			during register dumping
  * Returns:		0 or -ERROR
  */
-int sde_dbg_init(struct device *dev);
+int sde_dbg_init(struct device *dev, struct sde_dbg_power_ctrl *power_ctrl);
 
 /**
  * sde_dbg_debugfs_register - register entries at the given debugfs dir
@@ -446,6 +352,12 @@ void sde_evtlog_set_filter(struct sde_dbg_evtlog *evtlog, char *filter);
 int sde_evtlog_get_filter(struct sde_dbg_evtlog *evtlog, int index,
 		char *buf, size_t bufsz);
 
+#if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
+void ss_sde_dbg_debugfs_open(void);
+ssize_t ss_sde_evtlog_dump_read(struct file *file, char __user *buff,
+		size_t count, loff_t *ppos);
+#endif
+
 #ifndef CONFIG_DRM_SDE_RSC
 static inline void sde_rsc_debug_dump(u32 mux_sel)
 {
@@ -453,7 +365,7 @@ static inline void sde_rsc_debug_dump(u32 mux_sel)
 #else
 /**
  * sde_rsc_debug_dump - sde rsc debug dump status
- * @mux_sel:»       select mux on rsc debug bus
+ * @mux_sel:	select mux on rsc debug bus
  */
 void sde_rsc_debug_dump(u32 mux_sel);
 #endif

@@ -1,16 +1,29 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2012-2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
 
-#include <linux/usb/usbpd.h>
+#define pr_fmt(fmt)	"[drm-dp] %s: " fmt, __func__
+
 #include <linux/slab.h>
 #include <linux/device.h>
 #include <linux/delay.h>
 
 #include "dp_usbpd.h"
-#include "dp_debug.h"
+#ifdef CONFIG_SEC_DISPLAYPORT
+#include "secdp.h"
+#endif
 
+#ifndef CONFIG_SEC_DISPLAYPORT
 /* DP specific VDM commands */
 #define DP_USBPD_VDM_STATUS	0x10
 #define DP_USBPD_VDM_CONFIGURE	0x11
@@ -67,7 +80,17 @@ struct dp_usbpd_private {
 	enum dp_usbpd_alt_mode alt_mode;
 	u32 dp_usbpd_config;
 };
+#else
+struct dp_usbpd_private {
+	bool forced_disconnect;
+	u32 vdo;
+	struct device *dev;
+	struct dp_hpd_cb *dp_cb;
+	struct dp_usbpd dp_usbpd;
+};
+#endif
 
+#ifndef CONFIG_SEC_DISPLAYPORT
 static const char *dp_usbpd_pin_name(u8 pin)
 {
 	switch (pin) {
@@ -122,7 +145,7 @@ static void dp_usbpd_init_port(enum dp_usbpd_port *port, u32 in_port)
 	default:
 		*port = DP_USBPD_PORT_NONE;
 	}
-	DP_DEBUG("port:%s\n", dp_usbpd_port_name(*port));
+	pr_debug("port:%s\n", dp_usbpd_port_name(*port));
 }
 
 static void dp_usbpd_get_capabilities(struct dp_usbpd_private *pd)
@@ -152,13 +175,13 @@ static void dp_usbpd_get_status(struct dp_usbpd_private *pd)
 	status->base.hpd_high  = (buf & BIT(7)) ? true : false;
 	status->base.hpd_irq   = (buf & BIT(8)) ? true : false;
 
-	DP_DEBUG("low_pow_st = %d, adaptor_dp_en = %d, multi_func = %d\n",
+	pr_debug("low_pow_st = %d, adaptor_dp_en = %d, multi_func = %d\n",
 			status->low_pow_st, status->adaptor_dp_en,
 			status->base.multi_func);
-	DP_DEBUG("usb_config_req = %d, exit_dp_mode = %d, hpd_high =%d\n",
+	pr_debug("usb_config_req = %d, exit_dp_mode = %d, hpd_high =%d\n",
 			status->usb_config_req,
 			status->exit_dp_mode, status->base.hpd_high);
-	DP_DEBUG("hpd_irq = %d\n", status->base.hpd_irq);
+	pr_debug("hpd_irq = %d\n", status->base.hpd_irq);
 
 	dp_usbpd_init_port(&status->port, port);
 }
@@ -188,14 +211,14 @@ static u32 dp_usbpd_gen_config_pkt(struct dp_usbpd_private *pd)
 	if (pin == DP_USBPD_PIN_MAX)
 		pin = DP_USBPD_PIN_C;
 
-	DP_DEBUG("pin assignment: %s\n", dp_usbpd_pin_name(pin));
+	pr_debug("pin assignment: %s\n", dp_usbpd_pin_name(pin));
 
 	config |= BIT(pin) << 8;
 
 	config |= (dp_ver << 2);
 	config |= ufp_d_config;
 
-	DP_DEBUG("config = 0x%x\n", config);
+	pr_debug("config = 0x%x\n", config);
 	return config;
 }
 
@@ -231,7 +254,7 @@ static void dp_usbpd_send_event(struct dp_usbpd_private *pd,
 			SVDM_CMD_TYPE_INITIATOR, 0x1, &config, 0x1);
 		break;
 	default:
-		DP_ERR("unknown event:%d\n", event);
+		pr_err("unknown event:%d\n", event);
 	}
 }
 
@@ -242,11 +265,11 @@ static void dp_usbpd_connect_cb(struct usbpd_svid_handler *hdlr,
 
 	pd = container_of(hdlr, struct dp_usbpd_private, svid_handler);
 	if (!pd) {
-		DP_ERR("get_usbpd phandle failed\n");
+		pr_err("get_usbpd phandle failed\n");
 		return;
 	}
 
-	DP_DEBUG("peer_usb_comm: %d\n", peer_usb_comm);
+	pr_debug("peer_usb_comm: %d\n", peer_usb_comm);
 	pd->dp_usbpd.base.peer_usb_comm = peer_usb_comm;
 	dp_usbpd_send_event(pd, DP_USBPD_EVT_DISCOVER);
 }
@@ -257,13 +280,13 @@ static void dp_usbpd_disconnect_cb(struct usbpd_svid_handler *hdlr)
 
 	pd = container_of(hdlr, struct dp_usbpd_private, svid_handler);
 	if (!pd) {
-		DP_ERR("get_usbpd phandle failed\n");
+		pr_err("get_usbpd phandle failed\n");
 		return;
 	}
 
 	pd->alt_mode = DP_USBPD_ALT_MODE_NONE;
 	pd->dp_usbpd.base.alt_mode_cfg_done = false;
-	DP_DEBUG("\n");
+	pr_debug("\n");
 
 	if (pd->dp_cb && pd->dp_cb->disconnect)
 		pd->dp_cb->disconnect(pd->dev);
@@ -275,32 +298,32 @@ static int dp_usbpd_validate_callback(u8 cmd,
 	int ret = 0;
 
 	if (cmd_type == SVDM_CMD_TYPE_RESP_NAK) {
-		DP_ERR("error: NACK\n");
+		pr_err("error: NACK\n");
 		ret = -EINVAL;
 		goto end;
 	}
 
 	if (cmd_type == SVDM_CMD_TYPE_RESP_BUSY) {
-		DP_ERR("error: BUSY\n");
+		pr_err("error: BUSY\n");
 		ret = -EBUSY;
 		goto end;
 	}
 
 	if (cmd == USBPD_SVDM_ATTENTION) {
 		if (cmd_type != SVDM_CMD_TYPE_INITIATOR) {
-			DP_ERR("error: invalid cmd type for attention\n");
+			pr_err("error: invalid cmd type for attention\n");
 			ret = -EINVAL;
 			goto end;
 		}
 
 		if (!num_vdos) {
-			DP_ERR("error: no vdo provided\n");
+			pr_err("error: no vdo provided\n");
 			ret = -EINVAL;
 			goto end;
 		}
 	} else {
 		if (cmd_type != SVDM_CMD_TYPE_RESP_ACK) {
-			DP_ERR("error: invalid cmd type\n");
+			pr_err("error: invalid cmd type\n");
 			ret = -EINVAL;
 		}
 	}
@@ -329,7 +352,7 @@ static int dp_usbpd_get_ss_lanes(struct dp_usbpd_private *pd)
 			if (rc != -EBUSY)
 				break;
 
-			DP_WARN("USB busy, retry\n");
+			pr_warn("USB busy, retry\n");
 
 			/* wait for hw recommended delay for usb */
 			msleep(20);
@@ -349,11 +372,11 @@ static void dp_usbpd_response_cb(struct usbpd_svid_handler *hdlr, u8 cmd,
 
 	pd = container_of(hdlr, struct dp_usbpd_private, svid_handler);
 
-	DP_DEBUG("callback -> cmd: %s, *vdos = 0x%x, num_vdos = %d\n",
+	pr_debug("callback -> cmd: %s, *vdos = 0x%x, num_vdos = %d\n",
 				dp_usbpd_cmd_name(cmd), *vdos, num_vdos);
 
 	if (dp_usbpd_validate_callback(cmd, cmd_type, num_vdos)) {
-		DP_DEBUG("invalid callback received\n");
+		pr_debug("invalid callback received\n");
 		return;
 	}
 
@@ -403,7 +426,6 @@ static void dp_usbpd_response_cb(struct usbpd_svid_handler *hdlr, u8 cmd,
 	case DP_USBPD_VDM_CONFIGURE:
 		pd->alt_mode |= DP_USBPD_ALT_MODE_CONFIGURE;
 		pd->dp_usbpd.base.alt_mode_cfg_done = true;
-		pd->forced_disconnect = false;
 		dp_usbpd_get_status(pd);
 
 		pd->dp_usbpd.base.orientation =
@@ -411,7 +433,7 @@ static void dp_usbpd_response_cb(struct usbpd_svid_handler *hdlr, u8 cmd,
 
 		rc = dp_usbpd_get_ss_lanes(pd);
 		if (rc) {
-			DP_ERR("failed to get SuperSpeed lanes\n");
+			pr_err("failed to get SuperSpeed lanes\n");
 			break;
 		}
 
@@ -419,10 +441,11 @@ static void dp_usbpd_response_cb(struct usbpd_svid_handler *hdlr, u8 cmd,
 			pd->dp_cb->configure(pd->dev);
 		break;
 	default:
-		DP_ERR("unknown cmd: %d\n", cmd);
+		pr_err("unknown cmd: %d\n", cmd);
 		break;
 	}
 }
+#endif
 
 static int dp_usbpd_simulate_connect(struct dp_hpd *dp_hpd, bool hpd)
 {
@@ -431,10 +454,12 @@ static int dp_usbpd_simulate_connect(struct dp_hpd *dp_hpd, bool hpd)
 	struct dp_usbpd_private *pd;
 
 	if (!dp_hpd) {
-		DP_ERR("invalid input\n");
+		pr_err("invalid input\n");
 		rc = -EINVAL;
 		goto error;
 	}
+
+	pr_debug("+++\n");
 
 	dp_usbpd = container_of(dp_hpd, struct dp_usbpd, base);
 	pd = container_of(dp_usbpd, struct dp_usbpd_private, dp_usbpd);
@@ -443,7 +468,7 @@ static int dp_usbpd_simulate_connect(struct dp_hpd *dp_hpd, bool hpd)
 	pd->forced_disconnect = !hpd;
 	pd->dp_usbpd.base.alt_mode_cfg_done = hpd;
 
-	DP_DEBUG("hpd_high=%d, forced_disconnect=%d, orientation=%d\n",
+	pr_debug("hpd_high=%d, forced_disconnect=%d, orientation=%d\n",
 			dp_usbpd->base.hpd_high, pd->forced_disconnect,
 			pd->dp_usbpd.base.orientation);
 	if (hpd)
@@ -463,22 +488,28 @@ static int dp_usbpd_simulate_attention(struct dp_hpd *dp_hpd, int vdo)
 
 	dp_usbpd = container_of(dp_hpd, struct dp_usbpd, base);
 	if (!dp_usbpd) {
-		DP_ERR("invalid input\n");
+		pr_err("invalid input\n");
 		rc = -EINVAL;
 		goto error;
 	}
 
+	pr_debug("+++\n");
+
 	pd = container_of(dp_usbpd, struct dp_usbpd_private, dp_usbpd);
 
 	pd->vdo = vdo;
+#ifndef CONFIG_SEC_DISPLAYPORT
 	dp_usbpd_get_status(pd);
+#endif
 
 	if (pd->dp_cb && pd->dp_cb->attention)
 		pd->dp_cb->attention(pd->dev);
+
 error:
 	return rc;
 }
 
+#ifndef CONFIG_SEC_DISPLAYPORT
 int dp_usbpd_register(struct dp_hpd *dp_hpd)
 {
 	struct dp_usbpd *dp_usbpd;
@@ -494,7 +525,7 @@ int dp_usbpd_register(struct dp_hpd *dp_hpd)
 
 	rc = usbpd_register_svid(usbpd->pd, &usbpd->svid_handler);
 	if (rc)
-		DP_ERR("pd registration failed\n");
+		pr_err("pd registration failed\n");
 
 	return rc;
 }
@@ -508,20 +539,21 @@ static void dp_usbpd_wakeup_phy(struct dp_hpd *dp_hpd, bool wakeup)
 	usbpd = container_of(dp_usbpd, struct dp_usbpd_private, dp_usbpd);
 
 	if (!usbpd->pd) {
-		DP_ERR("usbpd pointer invalid");
+		pr_err("usbpd pointer invalid");
 		return;
 	}
 
 	usbpd_vdm_in_suspend(usbpd->pd, wakeup);
 }
+#endif
 
-struct dp_hpd *dp_usbpd_get(struct device *dev, struct dp_hpd_cb *cb)
+struct dp_hpd *dp_usbpd_init(struct device *dev, struct usbpd *pd,
+		struct dp_hpd_cb *cb)
 {
 	int rc = 0;
-	const char *pd_phandle = "qcom,dp-usbpd-detection";
-	struct usbpd *pd = NULL;
 	struct dp_usbpd_private *usbpd;
 	struct dp_usbpd *dp_usbpd;
+#ifndef CONFIG_SEC_DISPLAYPORT
 	struct usbpd_svid_handler svid_handler = {
 		.svid		= USB_C_DP_SID,
 		.vdm_received	= NULL,
@@ -530,18 +562,12 @@ struct dp_hpd *dp_usbpd_get(struct device *dev, struct dp_hpd_cb *cb)
 		.disconnect	= &dp_usbpd_disconnect_cb,
 	};
 
-	if (!cb) {
-		DP_ERR("invalid cb data\n");
+	if (IS_ERR(pd) || !cb) {
+		pr_err("invalid data\n");
 		rc = -EINVAL;
 		goto error;
 	}
-
-	pd = devm_usbpd_get_by_phandle(dev, pd_phandle);
-	if (IS_ERR(pd)) {
-		DP_ERR("usbpd phandle failed (%ld)\n", PTR_ERR(pd));
-		rc = PTR_ERR(pd);
-		goto error;
-	}
+#endif
 
 	usbpd = devm_kzalloc(dev, sizeof(*usbpd), GFP_KERNEL);
 	if (!usbpd) {
@@ -550,22 +576,26 @@ struct dp_hpd *dp_usbpd_get(struct device *dev, struct dp_hpd_cb *cb)
 	}
 
 	usbpd->dev = dev;
+#ifndef CONFIG_SEC_DISPLAYPORT
 	usbpd->pd = pd;
 	usbpd->svid_handler = svid_handler;
+#endif
 	usbpd->dp_cb = cb;
 
 	dp_usbpd = &usbpd->dp_usbpd;
 	dp_usbpd->base.simulate_connect = dp_usbpd_simulate_connect;
 	dp_usbpd->base.simulate_attention = dp_usbpd_simulate_attention;
+#ifndef CONFIG_SEC_DISPLAYPORT
 	dp_usbpd->base.register_hpd = dp_usbpd_register;
 	dp_usbpd->base.wakeup_phy = dp_usbpd_wakeup_phy;
+#endif
 
 	return &dp_usbpd->base;
 error:
 	return ERR_PTR(rc);
 }
 
-void dp_usbpd_put(struct dp_hpd *dp_hpd)
+void dp_usbpd_deinit(struct dp_hpd *dp_hpd)
 {
 	struct dp_usbpd *dp_usbpd;
 	struct dp_usbpd_private *usbpd;
@@ -576,7 +606,9 @@ void dp_usbpd_put(struct dp_hpd *dp_hpd)
 
 	usbpd = container_of(dp_usbpd, struct dp_usbpd_private, dp_usbpd);
 
+#ifndef CONFIG_SEC_DISPLAYPORT
 	usbpd_unregister_svid(usbpd->pd, &usbpd->svid_handler);
+#endif
 
 	devm_kfree(usbpd->dev, usbpd);
 }

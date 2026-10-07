@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2010-2020, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2010-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #define pr_fmt(fmt)	"[sde-hdcp1x] %s: " fmt, __func__
@@ -14,8 +21,13 @@
 #include <linux/msm_hdcp.h>
 #include <drm/drm_dp_helper.h>
 #include "sde_hdcp.h"
+#include "hdmi.xml.h"
 #include "video/msm_hdmi_hdcp_mgr.h"
 #include "dp/dp_reg.h"
+
+#ifdef CONFIG_SEC_DISPLAYPORT_ENG
+#include <linux/secdp_logger.h>
+#endif
 
 #define SDE_HDCP_STATE_NAME (sde_hdcp_state_name(hdcp->hdcp_state))
 
@@ -207,7 +219,6 @@ struct sde_hdcp_1x {
 	bool reauth;
 	bool ksv_ready;
 	bool force_encryption;
-	atomic_t abort;
 	enum sde_hdcp_state hdcp_state;
 	struct HDCP_V2V1_MSG_TOPOLOGY current_tp;
 	struct delayed_work hdcp_auth_work;
@@ -1057,18 +1068,16 @@ static void sde_hdcp_1x_auth_work(struct work_struct *work)
 		return;
 	}
 
-	if (atomic_read(&hdcp->abort)) {
-		rc = -EINVAL;
-		goto end;
-	}
-
 	hdcp->sink_r0_ready = false;
 	hdcp->reauth = false;
 	hdcp->ksv_ready = false;
 
 	io = hdcp->init_data.core_io;
 	/* Enabling Software DDC for HDMI and REF timer for DP */
-	if (hdcp->init_data.client_id == HDCP_CLIENT_DP) {
+	if (hdcp->init_data.client_id == HDCP_CLIENT_HDMI)
+		DSS_REG_W_ND(io, REG_HDMI_DDC_ARBITRATION, DSS_REG_R(io,
+				REG_HDMI_DDC_ARBITRATION) & ~(BIT(4)));
+	else if (hdcp->init_data.client_id == HDCP_CLIENT_DP) {
 		io = hdcp->init_data.dp_aux;
 		DSS_REG_W(io, DP_DP_HPD_REFTIMER, 0x10013);
 	}
@@ -1105,6 +1114,9 @@ static void sde_hdcp_1x_auth_work(struct work_struct *work)
 	 * Disabling software DDC before going into part3 to make sure
 	 * there is no Arbitration between software and hardware for DDC
 	 */
+	if (hdcp->init_data.client_id == HDCP_CLIENT_HDMI)
+		DSS_REG_W_ND(io, REG_HDMI_DDC_ARBITRATION, DSS_REG_R(io,
+				REG_HDMI_DDC_ARBITRATION) | (BIT(4)));
 end:
 	if (rc && !sde_hdcp_1x_state(HDCP_STATE_INACTIVE))
 		hdcp->hdcp_state = HDCP_STATE_AUTH_FAIL;
@@ -1490,17 +1502,6 @@ irq_not_handled:
 	return -EINVAL;
 }
 
-static void sde_hdcp_1x_abort(void *data, bool abort)
-{
-	struct sde_hdcp_1x *hdcp = data;
-
-	atomic_set(&hdcp->abort, abort);
-	cancel_delayed_work_sync(&hdcp->hdcp_auth_work);
-	flush_workqueue(hdcp->workq);
-	if (sde_hdcp_1x_state(HDCP_STATE_AUTHENTICATING))
-		hdcp->hdcp_state = HDCP_STATE_AUTH_FAIL;
-}
-
 void *sde_hdcp_1x_init(struct sde_hdcp_init_data *init_data)
 {
 	struct sde_hdcp_1x *hdcp = NULL;
@@ -1513,7 +1514,6 @@ void *sde_hdcp_1x_init(struct sde_hdcp_init_data *init_data)
 		.feature_supported = sde_hdcp_1x_feature_supported,
 		.force_encryption = sde_hdcp_1x_force_encryption,
 		.sink_support = sde_hdcp_1x_sink_support,
-		.abort = sde_hdcp_1x_abort,
 		.off = sde_hdcp_1x_off
 	};
 

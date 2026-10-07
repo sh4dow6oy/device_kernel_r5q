@@ -1,15 +1,25 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
 
 #ifndef _DP_USBPD_H_
 #define _DP_USBPD_H_
 
-#include <linux/types.h>
-#include "dp_hpd.h"
+#include <linux/usb/usbpd.h>
 
-struct device;
+#include <linux/types.h>
+#include <linux/device.h>
+#include "dp_hpd.h"
 
 /**
  * enum dp_usbpd_port - usb/dp port type
@@ -47,9 +57,10 @@ struct dp_usbpd {
 };
 
 /**
- * dp_usbpd_get() - setup usbpd module
+ * dp_usbpd_init() - initialize the usbpd module
  *
  * @dev: device instance of the caller
+ * @pd: handle for the usbpd driver data
  * @cb: struct containing callback function pointers.
  *
  * This function allows the client to initialize the usbpd
@@ -58,7 +69,15 @@ struct dp_usbpd {
  * sink/usb device. This module will notify the client using
  * the callback functions about the connection and status.
  */
-struct dp_hpd *dp_usbpd_get(struct device *dev, struct dp_hpd_cb *cb);
+struct dp_hpd *dp_usbpd_init(struct device *dev, struct usbpd *pd,
+		struct dp_hpd_cb *cb);
 
-void dp_usbpd_put(struct dp_hpd *pd);
+/**
+ * dp_usbpd_deinit() - deinitialize the usbpd module
+ *
+ * @pd: pointer to the dp_hpd base module
+ *
+ * This function will cleanup the usbpd module
+ */
+void dp_usbpd_deinit(struct dp_hpd *pd);
 #endif /* _DP_USBPD_H_ */

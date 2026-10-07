@@ -1,6 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2012-2015, 2017-2019 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2015, 2017, 2018, The Linux Foundation.
+ * All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/clk.h>
@@ -9,7 +17,6 @@
 #include <linux/regulator/consumer.h>
 #include <linux/delay.h>
 #include <linux/sde_io_util.h>
-#include "sde_dbg.h"
 
 #define MAX_I2C_CMDS  16
 void dss_reg_w(struct dss_io_data *io, u32 offset, u32 value, u32 debug)
@@ -34,9 +41,7 @@ void dss_reg_w(struct dss_io_data *io, u32 offset, u32 value, u32 debug)
 		DEV_DBG("[%08x] => %08x [%08x]\n",
 			(u32)(unsigned long)(io->base + offset),
 			value, in_val);
-		SDE_EVT32_REGWRITE(io->base, offset, value, in_val);
 	}
-	SDE_REG_LOG(SDE_REG_LOG_RSCC, value, offset);
 } /* dss_reg_w */
 EXPORT_SYMBOL(dss_reg_w);
 
@@ -460,6 +465,10 @@ int msm_dss_enable_clk(struct dss_clk *clk_arry, int num_clk, int enable)
 			}
 
 			if (rc) {
+				/*
+				 * Upon failure start from index 0 in
+				 * the clk_array
+				 */
 				msm_dss_enable_clk(clk_arry, i, false);
 				break;
 			}

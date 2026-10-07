@@ -1,7 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
- * Copyright (c) 2016-2021, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2018, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #define pr_fmt(fmt)	"sde_dbg:[%s] " fmt, __func__
@@ -13,7 +19,6 @@
 #include <linux/uaccess.h>
 #include <linux/dma-buf.h>
 #include <linux/slab.h>
-#include <linux/sched/clock.h>
 
 #include "sde_dbg.h"
 #include "sde_trace.h"
@@ -76,12 +81,11 @@ void sde_evtlog_log(struct sde_dbg_evtlog *evtlog, const char *name, int line,
 		goto exit;
 
 	log = &evtlog->logs[evtlog->curr];
-	log->time = local_clock();
+	log->time = ktime_to_us(ktime_get());
 	log->name = name;
 	log->line = line;
 	log->data_cnt = 0;
 	log->pid = current->pid;
-	log->cpu = raw_smp_processor_id();
 
 	va_start(args, flag);
 	for (i = 0; i < SDE_EVTLOG_MAX_DATA; i++) {
@@ -100,26 +104,6 @@ void sde_evtlog_log(struct sde_dbg_evtlog *evtlog, const char *name, int line,
 	trace_sde_evtlog(name, line, log->data_cnt, log->data);
 exit:
 	spin_unlock_irqrestore(&evtlog->spin_lock, flags);
-}
-
-void sde_reglog_log(u8 blk_id, u32 val, u32 addr)
-{
-	struct sde_dbg_reglog_log *log;
-	struct sde_dbg_reglog *reglog = sde_dbg_base_reglog;
-	int index;
-
-	if (!reglog)
-		return;
-
-	index = abs(atomic64_inc_return(&reglog->curr) % SDE_REGLOG_ENTRY);
-
-	log = &reglog->logs[index];
-	log->blk_id = blk_id;
-	log->val = val;
-	log->addr = addr;
-	log->time = local_clock();
-	log->pid = current->pid;
-	reglog->last++;
 }
 
 /* always dump the last entries which are not dumped yet */
@@ -187,8 +171,8 @@ ssize_t sde_evtlog_dump_to_buffer(struct sde_dbg_evtlog *evtlog,
 	}
 
 	off += snprintf((evtlog_buf + off), (evtlog_buf_size - off),
-		"=>[%-8d:%-11llu:%9llu][%-4d]:[%-4d]:", evtlog->first,
-		log->time, (log->time - prev_log->time), log->pid, log->cpu);
+		"=>[%-8d:%-11llu:%9llu][%-4d]:", evtlog->first,
+		log->time, (log->time - prev_log->time), log->pid);
 
 	for (i = 0; i < log->data_cnt; i++)
 		off += snprintf((evtlog_buf + off), (evtlog_buf_size - off),
@@ -211,7 +195,7 @@ void sde_evtlog_dump_all(struct sde_dbg_evtlog *evtlog)
 
 	while (sde_evtlog_dump_to_buffer(evtlog, buf, sizeof(buf),
 				update_last_entry, false)) {
-		pr_info("%s\n", buf);
+		pr_info("%s", buf);
 		update_last_entry = false;
 	}
 }
@@ -220,7 +204,7 @@ struct sde_dbg_evtlog *sde_evtlog_init(void)
 {
 	struct sde_dbg_evtlog *evtlog;
 
-	evtlog = vzalloc(sizeof(*evtlog));
+	evtlog = kzalloc(sizeof(*evtlog), GFP_KERNEL);
 	if (!evtlog)
 		return ERR_PTR(-ENOMEM);
 
@@ -230,19 +214,6 @@ struct sde_dbg_evtlog *sde_evtlog_init(void)
 	INIT_LIST_HEAD(&evtlog->filter_list);
 
 	return evtlog;
-}
-
-struct sde_dbg_reglog *sde_reglog_init(void)
-{
-	struct sde_dbg_reglog *reglog;
-
-	reglog = vzalloc(sizeof(*reglog));
-	if (!reglog)
-		return ERR_PTR(-ENOMEM);
-
-	atomic64_set(&reglog->curr, 0);
-
-	return reglog;
 }
 
 int sde_evtlog_get_filter(struct sde_dbg_evtlog *evtlog, int index,
@@ -344,13 +315,5 @@ void sde_evtlog_destroy(struct sde_dbg_evtlog *evtlog)
 		list_del(&filter_node->list);
 		kfree(filter_node);
 	}
-	vfree(evtlog);
-}
-
-void sde_reglog_destroy(struct sde_dbg_reglog *reglog)
-{
-	if (!reglog)
-		return;
-
-	vfree(reglog);
+	kfree(evtlog);
 }
