@@ -501,7 +501,7 @@ struct socket *sockfd_lookup(int fd, int *err)
 		return NULL;
 	}
 
-	sock = sock_from_file(file);
+	sock = sock_from_file(file, err);
 	if (!sock) {
 		*err = -ENOTSOCK;
 		fput(file);
@@ -517,7 +517,7 @@ static struct socket *sockfd_lookup_light(int fd, int *err, int *fput_needed)
 
 	*err = -EBADF;
 	if (f.file) {
-		sock = sock_from_file(f.file);
+		sock = sock_from_file(f.file, err);
 		if (likely(sock)) {
 			*fput_needed = f.flags & FDPUT_FPUT;
 			return sock;
