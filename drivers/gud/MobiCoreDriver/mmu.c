@@ -370,14 +370,14 @@ struct tee_mmu *tee_mmu_create(struct mm_struct *mm,
 			long gup_ret;
 
 			/* Buffer was allocated in user space */
-			down_read(&mm->mmap_sem);
+			mmap_read_lock(mm);
 			gup_ret = gup_local(mm, (uintptr_t)reader,
 					    pages_nr, 1, pages);
 			if ((gup_ret == -EFAULT) && !write) {
 				gup_ret = gup_local(mm, (uintptr_t)reader,
 						    pages_nr, 0, pages);
 			}
-			up_read(&mm->mmap_sem);
+			mmap_read_unlock(mm);
 			if (gup_ret < 0) {
 				ret = gup_ret;
 				mc_dev_err("failed to get user pages @%p: %d",
@@ -389,7 +389,7 @@ struct tee_mmu *tee_mmu_create(struct mm_struct *mm,
 			if (gup_ret != pages_nr) {
 				mc_dev_err("failed to get user pages: %ld",
 					   gup_ret);
-				release_pages(pages, gup_ret, 0);
+				release_pages(pages, gup_ret);
 				ret = -EINVAL;
 				goto end;
 			}
