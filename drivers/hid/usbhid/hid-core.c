@@ -44,6 +44,8 @@
 
 #define DRIVER_DESC "USB HID core driver"
 
+#undef dev_dbg
+#define dev_dbg dev_err
 /*
  * Module parameters.
  */
@@ -55,10 +57,6 @@ MODULE_PARM_DESC(mousepoll, "Polling interval of mice");
 static unsigned int hid_jspoll_interval;
 module_param_named(jspoll, hid_jspoll_interval, uint, 0644);
 MODULE_PARM_DESC(jspoll, "Polling interval of joysticks");
-
-static unsigned int hid_kbpoll_interval;
-module_param_named(kbpoll, hid_kbpoll_interval, uint, 0644);
-MODULE_PARM_DESC(kbpoll, "Polling interval of keyboards");
 
 static unsigned int ignoreled;
 module_param_named(ignoreled, ignoreled, uint, 0644);
@@ -99,16 +97,20 @@ static int hid_start_in(struct hid_device *hid)
 		} else {
 			clear_bit(HID_NO_BANDWIDTH, &usbhid->iofl);
 		}
+#ifdef CONFIG_USB_DEBUG_DETAILED_LOG
+		usbhid->in_err_isr = 0;
+		hid_info(hid, "%s submit urb rc=%d\n", __func__, rc);
+#endif
 	}
 	spin_unlock_irqrestore(&usbhid->lock, flags);
 	return rc;
 }
 
 /* I/O retry timer routine */
-static void hid_retry_timeout(struct timer_list *t)
+static void hid_retry_timeout(unsigned long _hid)
 {
-	struct usbhid_device *usbhid = from_timer(usbhid, t, io_retry);
-	struct hid_device *hid = usbhid->hid;
+	struct hid_device *hid = (struct hid_device *) _hid;
+	struct usbhid_device *usbhid = hid->driver_data;
 
 	dev_dbg(&usbhid->intf->dev, "retrying intr urb\n");
 	if (hid_start_in(hid))
@@ -284,9 +286,25 @@ static void hid_irq_in(struct urb *urb)
 			break;
 		usbhid_mark_busy(usbhid);
 		if (!test_bit(HID_RESUME_RUNNING, &usbhid->iofl)) {
-			hid_input_report(urb->context, HID_INPUT_REPORT,
+			status = hid_input_report(urb->context, HID_INPUT_REPORT,
 					 urb->transfer_buffer,
 					 urb->actual_length, 1);
+#ifdef CONFIG_USB_DEBUG_DETAILED_LOG
+			if (status == 0) {
+				if (usbhid->in_err_isr) {
+					usbhid->in_err_isr = 0;
+					hid_info(urb->dev,
+					"usbhid: %s: recover report\n", __func__);
+				}
+			} else {
+				usbhid->in_err_isr++;
+				if (usbhid->in_err_isr < 5)
+					hid_err(urb->dev,
+					"usbhid: %s: err=%d err_isr=%lu length=%d\n",
+					__func__, status, usbhid->in_err_isr
+						, urb->actual_length);
+			}
+#endif
 			/*
 			 * autosuspend refused while keys are pressed
 			 * because most keyboards don't wake up when
@@ -299,6 +317,9 @@ static void hid_irq_in(struct urb *urb)
 		}
 		break;
 	case -EPIPE:		/* stall */
+#ifdef CONFIG_USB_DEBUG_DETAILED_LOG
+		hid_err(urb->dev, "usbhid: %s: stall\n", __func__);
+#endif
 		usbhid_mark_busy(usbhid);
 		clear_bit(HID_IN_RUNNING, &usbhid->iofl);
 		set_bit(HID_CLEAR_HALT, &usbhid->iofl);
@@ -307,12 +328,20 @@ static void hid_irq_in(struct urb *urb)
 	case -ECONNRESET:	/* unlink */
 	case -ENOENT:
 	case -ESHUTDOWN:	/* unplug */
+#ifdef CONFIG_USB_DEBUG_DETAILED_LOG
+		hid_err(urb->dev, "usbhid: %s: unlink %d\n",
+					__func__, urb->status);
+#endif
 		clear_bit(HID_IN_RUNNING, &usbhid->iofl);
 		return;
 	case -EILSEQ:		/* protocol error or unplug */
 	case -EPROTO:		/* protocol error or unplug */
 	case -ETIME:		/* protocol error or unplug */
 	case -ETIMEDOUT:	/* Should never happen, but... */
+#ifdef CONFIG_USB_DEBUG_DETAILED_LOG
+		hid_err(urb->dev, "usbhid: %s: protocol error %d\n",
+					__func__, urb->status);
+#endif
 		usbhid_mark_busy(usbhid);
 		clear_bit(HID_IN_RUNNING, &usbhid->iofl);
 		hid_io_error(hid);
@@ -480,7 +509,6 @@ static void hid_ctrl(struct urb *urb)
 {
 	struct hid_device *hid = urb->context;
 	struct usbhid_device *usbhid = hid->driver_data;
-	unsigned long flags;
 	int unplug = 0, status = urb->status;
 
 	switch (status) {
@@ -502,7 +530,7 @@ static void hid_ctrl(struct urb *urb)
 		hid_warn(urb->dev, "ctrl urb status %d received\n", status);
 	}
 
-	spin_lock_irqsave(&usbhid->lock, flags);
+	spin_lock(&usbhid->lock);
 
 	if (unplug) {
 		usbhid->ctrltail = usbhid->ctrlhead;
@@ -512,13 +540,13 @@ static void hid_ctrl(struct urb *urb)
 		if (usbhid->ctrlhead != usbhid->ctrltail &&
 				hid_submit_ctrl(hid) == 0) {
 			/* Successfully submitted next urb in queue */
-			spin_unlock_irqrestore(&usbhid->lock, flags);
+			spin_unlock(&usbhid->lock);
 			return;
 		}
 	}
 
 	clear_bit(HID_CTRL_RUNNING, &usbhid->iofl);
-	spin_unlock_irqrestore(&usbhid->lock, flags);
+	spin_unlock(&usbhid->lock);
 	usb_autopm_put_interface_async(usbhid->intf);
 	wake_up(&usbhid->wait);
 }
@@ -736,6 +764,10 @@ static int usbhid_open(struct hid_device *hid)
 
  Done:
 	mutex_unlock(&usbhid->mutex);
+#ifdef CONFIG_USB_DEBUG_DETAILED_LOG
+	if (res < 0)
+		hid_err(hid, "%s error res %d\n", __func__, res);
+#endif
 	return res;
 }
 
@@ -987,14 +1019,15 @@ static int usbhid_parse(struct hid_device *hid)
 	struct usb_host_interface *interface = intf->cur_altsetting;
 	struct usb_device *dev = interface_to_usbdev (intf);
 	struct hid_descriptor *hdesc;
-	struct hid_class_descriptor *hcdesc;
-	__u8 fixed_opt_descriptors_size;
 	u32 quirks = 0;
 	unsigned int rsize = 0;
 	char *rdesc;
-	int ret;
+	int ret, n;
+	int num_descriptors;
+	size_t offset = offsetof(struct hid_descriptor, desc);
 
-	quirks = hid_lookup_quirk(hid);
+	quirks = usbhid_lookup_quirk(le16_to_cpu(dev->descriptor.idVendor),
+			le16_to_cpu(dev->descriptor.idProduct));
 
 	if (quirks & HID_QUIRK_IGNORE)
 		return -ENODEV;
@@ -1014,33 +1047,20 @@ static int usbhid_parse(struct hid_device *hid)
 		return -ENODEV;
 	}
 
-	if (!hdesc->bNumDescriptors ||
-	    hdesc->bLength != sizeof(*hdesc) +
-			      (hdesc->bNumDescriptors - 1) * sizeof(*hcdesc)) {
-		dbg_hid("hid descriptor invalid, bLen=%hhu bNum=%hhu\n",
-			hdesc->bLength, hdesc->bNumDescriptors);
-
-		/*
-		 * Some devices may expose a wrong number of descriptors compared
-		 * to the provided length.
-		 * However, we ignore the optional hid class descriptors entirely
-		 * so we can safely recompute the proper field.
-		 */
-		if (hdesc->bLength >= sizeof(*hdesc)) {
-			fixed_opt_descriptors_size = hdesc->bLength - sizeof(*hdesc);
-
-			hid_warn(intf, "fixing wrong optional hid class descriptors count\n");
-			hdesc->bNumDescriptors = fixed_opt_descriptors_size / sizeof(*hcdesc) + 1;
-		} else {
-			return -EINVAL;
-		}
+	if (hdesc->bLength < sizeof(struct hid_descriptor)) {
+		dbg_hid("hid descriptor is too short\n");
+		return -EINVAL;
 	}
 
 	hid->version = le16_to_cpu(hdesc->bcdHID);
 	hid->country = hdesc->bCountryCode;
 
-	if (hdesc->rpt_desc.bDescriptorType == HID_DT_REPORT)
-		rsize = le16_to_cpu(hdesc->rpt_desc.wDescriptorLength);
+	num_descriptors = min_t(int, hdesc->bNumDescriptors,
+	       (hdesc->bLength - offset) / sizeof(struct hid_class_descriptor));
+
+	for (n = 0; n < num_descriptors; n++)
+		if (hdesc->desc[n].bDescriptorType == HID_DT_REPORT)
+			rsize = le16_to_cpu(hdesc->desc[n].wDescriptorLength);
 
 	if (!rsize || rsize > HID_MAX_DESCRIPTOR_SIZE) {
 		dbg_hid("weird size of report descriptor (%u)\n", rsize);
@@ -1067,11 +1087,6 @@ static int usbhid_parse(struct hid_device *hid)
 		dbg_hid("parsing report descriptor failed\n");
 		goto err;
 	}
-
-	if (hdesc->bNumDescriptors > 1)
-		hid_warn(intf,
-			"%u unsupported optional hid class descriptors\n",
-			(int)(hdesc->bNumDescriptors - 1));
 
 	hid->quirks |= quirks;
 
@@ -1130,9 +1145,7 @@ static int usbhid_start(struct hid_device *hid)
 				hid->name, endpoint->bInterval, interval);
 		}
 
-		/* Change the polling interval of mice, joysticks
-		 * and keyboards.
-		 */
+		/* Change the polling interval of mice and joysticks. */
 		switch (hid->collection->usage) {
 		case HID_GD_MOUSE:
 			if (hid_mousepoll_interval > 0)
@@ -1141,10 +1154,6 @@ static int usbhid_start(struct hid_device *hid)
 		case HID_GD_JOYSTICK:
 			if (hid_jspoll_interval > 0)
 				interval = hid_jspoll_interval;
-			break;
-		case HID_GD_KEYBOARD:
-			if (hid_kbpoll_interval > 0)
-				interval = hid_kbpoll_interval;
 			break;
 		}
 
@@ -1387,8 +1396,8 @@ static int usbhid_probe(struct usb_interface *intf, const struct usb_device_id *
 	hid->bus = BUS_USB;
 	hid->vendor = le16_to_cpu(dev->descriptor.idVendor);
 	hid->product = le16_to_cpu(dev->descriptor.idProduct);
-	hid->version = le16_to_cpu(dev->descriptor.bcdDevice);
 	hid->name[0] = 0;
+	hid->quirks = usbhid_lookup_quirk(hid->vendor, hid->product);
 	if (intf->cur_altsetting->desc.bInterfaceProtocol ==
 			USB_INTERFACE_PROTOCOL_MOUSE)
 		hid->type = HID_TYPE_USBMOUSE;
@@ -1432,7 +1441,7 @@ static int usbhid_probe(struct usb_interface *intf, const struct usb_device_id *
 
 	init_waitqueue_head(&usbhid->wait);
 	INIT_WORK(&usbhid->reset_work, hid_reset);
-	timer_setup(&usbhid->io_retry, hid_retry_timeout, 0);
+	setup_timer(&usbhid->io_retry, hid_retry_timeout, (unsigned long) hid);
 	spin_lock_init(&usbhid->lock);
 	mutex_init(&usbhid->mutex);
 
@@ -1541,7 +1550,7 @@ static int hid_post_reset(struct usb_interface *intf)
 	 * configuration descriptors passed, we already know that
 	 * the size of the HID report descriptor has not changed.
 	 */
-	rdesc = kmalloc(hid->dev_rsize, GFP_NOIO);
+	rdesc = kmalloc(hid->dev_rsize, GFP_KERNEL);
 	if (!rdesc)
 		return -ENOMEM;
 
@@ -1701,7 +1710,7 @@ static int __init hid_init(void)
 {
 	int retval = -ENOMEM;
 
-	retval = hid_quirks_init(quirks_param, BUS_USB, MAX_USBHID_BOOT_QUIRKS);
+	retval = usbhid_quirks_init(quirks_param);
 	if (retval)
 		goto usbhid_quirks_init_fail;
 	retval = usb_register(&hid_driver);
@@ -1711,7 +1720,7 @@ static int __init hid_init(void)
 
 	return 0;
 usb_register_fail:
-	hid_quirks_exit(BUS_USB);
+	usbhid_quirks_exit();
 usbhid_quirks_init_fail:
 	return retval;
 }
@@ -1719,7 +1728,7 @@ usbhid_quirks_init_fail:
 static void __exit hid_exit(void)
 {
 	usb_deregister(&hid_driver);
-	hid_quirks_exit(BUS_USB);
+	usbhid_quirks_exit();
 }
 
 module_init(hid_init);
