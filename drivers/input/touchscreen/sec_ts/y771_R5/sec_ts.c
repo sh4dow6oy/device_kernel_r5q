@@ -3100,16 +3100,16 @@ static void sec_ts_reset_work(struct work_struct *work)
 		return;
 	}
 
-	if (ts->input_dev_touch->disabled) {
+	if (ts->input_dev->disabled) {
 		input_err(true, &ts->client->dev, "%s: call input_close\n", __func__);
 
-		if (ts->lowpower_mode || ts->ed_enable || ts->fod_lp_mode) {
+		if (ts->lowpower_mode || ts->ed_enable) {
 			ret = sec_ts_set_lowpowermode(ts, TO_LOWPOWER_MODE);
 			if (ret < 0) {
 				input_err(true, &ts->client->dev, "%s: failed to reset, ret:%d\n", __func__, ret);
 				ts->reset_is_on_going = false;
 				cancel_delayed_work(&ts->reset_work);
-				if (!shutdown_is_on_going_tsp)
+				if (!ts->shutdown_is_on_going)
 					schedule_delayed_work(&ts->reset_work, msecs_to_jiffies(TOUCH_RESET_DWORK_TIME));
 				mutex_unlock(&ts->modechange);
 				wake_unlock(&ts->wakelock);
