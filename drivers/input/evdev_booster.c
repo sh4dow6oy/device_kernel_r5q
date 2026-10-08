@@ -80,13 +80,13 @@ int get_device_type(struct evdev_client *dev, unsigned int *keyId, int *cur_idx,
 	/* Initializing device type before finding the proper device type. */
 	dev->device_type = dev_type;
 
-	for (i = *cur_idx; i != head; i = (i+1) & (dev->bufsize - 1)) {
+	for (i = *cur_idx; i != head; i=(i+1) & (dev->bufsize - 1)) {
 		pr_booster("%s Type : %d, Code : %d, Value : %d, Head : %d, idx : %d\n",
 			"Input Data || ", dev->buffer[i].type,
 			dev->buffer[i].code, dev->buffer[i].value,
 			head, i);
 
-		if (dev->buffer[i].type == EV_SYN || dev->buffer[i].code == SYN_REPORT) {
+		if ( dev->buffer[i].type == EV_SYN || dev->buffer[i].code == SYN_REPORT) {
 			break;
 		}
 
@@ -179,7 +179,7 @@ int get_device_type(struct evdev_client *dev, unsigned int *keyId, int *cur_idx,
 			}
 		}
 
-		if (dev_type != NONE_TYPE_DEVICE) {
+		if (dev_type != NONE_TYPE_DEVICE ) {
 			*keyId = create_uniq_id(dev->buffer[i].type, dev->buffer[i].code, uniq_slot);
 			ret_val = chk_boost_on_off(dev, target_idx, dev_type);
 			pr_booster("Dev type Find(%d), KeyID(%d), enable(%d), Target(%d)\n",
@@ -201,8 +201,7 @@ int get_device_type(struct evdev_client *dev, unsigned int *keyId, int *cur_idx,
 }
 
 // ********** Detect Events ********** //
-void input_booster(struct evdev_client *dev, int dev_head)
-{
+void input_booster(struct evdev_client* dev, int dev_head) {
 	int dev_type = 0;
 	int keyId = 0;
 	unsigned int uniqId = 0;
@@ -222,7 +221,7 @@ void input_booster(struct evdev_client *dev, int dev_head)
 	}
 
 	head = dev_head;
-	cur_idx = (head - dev->ev_cnt) & (dev->bufsize - 1);
+	cur_idx = (head- dev->ev_cnt) & (dev->bufsize - 1);
 
 	while (cur_idx != head) {
 		keyId = 0;
@@ -243,7 +242,7 @@ void input_booster(struct evdev_client *dev, int dev_head)
 		}
 
 		if (cnt == 0 && dev->evdev->handle.dev != NULL) {
-			while (dev->evdev->handle.dev->name[cnt] != '\0') {
+			while(dev->evdev->handle.dev->name[cnt] != '\0') {
 				ib_trigger[trigger_cnt].dev_name[cnt] = dev->evdev->handle.dev->name[cnt];
 				cnt++;
 			}
