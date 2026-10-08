@@ -1,4 +1,3 @@
-```c
 /*
  * sec_cmd.c - samsung factory command driver
  *
