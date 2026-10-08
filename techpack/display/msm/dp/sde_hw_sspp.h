@@ -687,3 +687,4 @@ struct sde_hw_pipe *sde_hw_sspp_init(enum sde_sspp idx,
 void sde_hw_sspp_destroy(struct sde_hw_pipe *ctx);
 
 #endif /*_SDE_HW_SSPP_H */
+
