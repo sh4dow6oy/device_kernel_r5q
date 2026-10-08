@@ -94,6 +94,8 @@ static bool match_index(struct hid_usage *usage,
 typedef bool (*hid_usage_cmp_t)(struct hid_usage *usage,
 				unsigned int cur_idx, unsigned int val);
 
+extern bool lcd_is_on;
+
 static struct hid_usage *hidinput_find_key(struct hid_device *hid,
 					   hid_usage_cmp_t match,
 					   unsigned int value,
@@ -173,6 +175,9 @@ static int hidinput_setkeycode(struct input_dev *dev,
 		*old_keycode = usage->type == EV_KEY ?
 				usage->code : KEY_RESERVED;
 		usage->code = ke->keycode;
+
+		if (usage->code > KEY_MAX || *old_keycode > KEY_MAX)
+			return -EINVAL;
 
 		clear_bit(*old_keycode, dev->keybit);
 		set_bit(usage->code, dev->keybit);
@@ -333,8 +338,6 @@ static const struct hid_device_id hid_battery_quirks[] = {
 	  HID_BATTERY_QUIRK_IGNORE },
 	{ HID_BLUETOOTH_DEVICE(USB_VENDOR_ID_LOGITECH,
 		USB_DEVICE_ID_LOGITECH_DINOVO_EDGE_KBD),
-	  HID_BATTERY_QUIRK_IGNORE },
-	{ HID_USB_DEVICE(USB_VENDOR_ID_ELAN, USB_DEVICE_ID_ASUS_UX550_TOUCHSCREEN),
 	  HID_BATTERY_QUIRK_IGNORE },
 	{}
 };
@@ -824,15 +827,6 @@ static void hidinput_configure_usage(struct hid_input *hidinput, struct hid_fiel
 			map_key_clear(BTN_STYLUS);
 			break;
 
-		case 0x45: /* ERASER */
-			/*
-			 * This event is reported when eraser tip touches the surface.
-			 * Actual eraser (BTN_TOOL_RUBBER) is set by Invert usage when
-			 * tool gets in proximity.
-			 */
-			map_key_clear(BTN_TOUCH);
-			break;
-
 		case 0x46: /* TabletPick */
 		case 0x5a: /* SecondaryBarrelSwitch */
 			map_key_clear(BTN_STYLUS2);
@@ -1146,31 +1140,8 @@ mapped:
 
 	set_bit(usage->type, input->evbit);
 
-	/*
-	 * This part is *really* controversial:
-	 * - HID aims at being generic so we should do our best to export
-	 *   all incoming events
-	 * - HID describes what events are, so there is no reason for ABS_X
-	 *   to be mapped to ABS_Y
-	 * - HID is using *_MISC+N as a default value, but nothing prevents
-	 *   *_MISC+N to overwrite a legitimate even, which confuses userspace
-	 *   (for instance ABS_MISC + 7 is ABS_MT_SLOT, which has a different
-	 *   processing)
-	 *
-	 * If devices still want to use this (at their own risk), they will
-	 * have to use the quirk HID_QUIRK_INCREMENT_USAGE_ON_DUPLICATE, but
-	 * the default should be a reliable mapping.
-	 */
-	while (usage->code <= max && test_and_set_bit(usage->code, bit)) {
-		if (device->quirks & HID_QUIRK_INCREMENT_USAGE_ON_DUPLICATE) {
-			usage->code = find_next_zero_bit(bit,
-							 max + 1,
-							 usage->code);
-		} else {
-			device->status |= HID_STAT_DUP_DETECTED;
-			goto ignore;
-		}
-	}
+	while (usage->code <= max && test_and_set_bit(usage->code, bit))
+		usage->code = find_next_zero_bit(bit, max + 1, usage->code);
 
 	if (usage->code > max)
 		goto ignore;
@@ -1247,12 +1218,6 @@ void hidinput_hid_event(struct hid_device *hid, struct hid_field *field, struct 
 		return;
 
 	input = field->hidinput->input;
-
-	if (usage->type == EV_ABS &&
-	    (((*quirks & HID_QUIRK_X_INVERT) && usage->code == ABS_X) ||
-	     ((*quirks & HID_QUIRK_Y_INVERT) && usage->code == ABS_Y))) {
-		value = field->logical_maximum - value;
-	}
 
 	if (usage->hat_min < usage->hat_max || usage->hat_dir) {
 		int hat_dir = usage->hat_dir;
@@ -1478,6 +1443,12 @@ static void hidinput_led_worker(struct work_struct *work)
 	if (!buf)
 		return;
 
+	if (!lcd_is_on) {
+        printk(KERN_DEBUG "lcd is OFF, don't report LED event\n");
+		kfree(buf);
+		return;
+	}
+
 	hid_output_report(report, buf);
 	/* synchronous output report */
 	ret = hid_hw_output_report(hid, buf, len);
@@ -1554,59 +1525,15 @@ static void report_features(struct hid_device *hid)
 		}
 }
 
-static struct hid_input *hidinput_allocate(struct hid_device *hid,
-					   unsigned int application)
+static struct hid_input *hidinput_allocate(struct hid_device *hid)
 {
 	struct hid_input *hidinput = kzalloc(sizeof(*hidinput), GFP_KERNEL);
 	struct input_dev *input_dev = input_allocate_device();
-	const char *suffix = NULL;
-
-	if (!hidinput || !input_dev)
-		goto fail;
-
-	if ((hid->quirks & HID_QUIRK_INPUT_PER_APP) &&
-	    hid->maxapplication > 1) {
-		switch (application) {
-		case HID_GD_KEYBOARD:
-			suffix = "Keyboard";
-			break;
-		case HID_GD_KEYPAD:
-			suffix = "Keypad";
-			break;
-		case HID_GD_MOUSE:
-			suffix = "Mouse";
-			break;
-		case HID_DG_STYLUS:
-			suffix = "Pen";
-			break;
-		case HID_DG_TOUCHSCREEN:
-			suffix = "Touchscreen";
-			break;
-		case HID_DG_TOUCHPAD:
-			suffix = "Touchpad";
-			break;
-		case HID_GD_SYSTEM_CONTROL:
-			suffix = "System Control";
-			break;
-		case HID_CP_CONSUMER_CONTROL:
-			suffix = "Consumer Control";
-			break;
-		case HID_GD_WIRELESS_RADIO_CTLS:
-			suffix = "Wireless Radio Control";
-			break;
-		case HID_GD_SYSTEM_MULTIAXIS:
-			suffix = "System Multi Axis";
-			break;
-		default:
-			break;
-		}
-	}
-
-	if (suffix) {
-		hidinput->name = kasprintf(GFP_KERNEL, "%s %s",
-					   hid->name, suffix);
-		if (!hidinput->name)
-			goto fail;
+	if (!hidinput || !input_dev) {
+		kfree(hidinput);
+		input_free_device(input_dev);
+		hid_err(hid, "Out of memory during hid input probe\n");
+		return NULL;
 	}
 
 	input_set_drvdata(input_dev, hid);
@@ -1616,7 +1543,7 @@ static struct hid_input *hidinput_allocate(struct hid_device *hid,
 	input_dev->setkeycode = hidinput_setkeycode;
 	input_dev->getkeycode = hidinput_getkeycode;
 
-	input_dev->name = hidinput->name ? hidinput->name : hid->name;
+	input_dev->name = hid->name;
 	input_dev->phys = hid->phys;
 	input_dev->uniq = hid->uniq;
 	input_dev->id.bustype = hid->bus;
@@ -1624,20 +1551,10 @@ static struct hid_input *hidinput_allocate(struct hid_device *hid,
 	input_dev->id.product = hid->product;
 	input_dev->id.version = hid->version;
 	input_dev->dev.parent = &hid->dev;
-
 	hidinput->input = input_dev;
-	hidinput->application = application;
 	list_add_tail(&hidinput->list, &hid->inputs);
 
-	INIT_LIST_HEAD(&hidinput->reports);
-
 	return hidinput;
-
-fail:
-	kfree(hidinput);
-	input_free_device(input_dev);
-	hid_err(hid, "Out of memory during hid input probe\n");
-	return NULL;
 }
 
 static bool hidinput_has_been_populated(struct hid_input *hidinput)
@@ -1683,7 +1600,6 @@ static void hidinput_cleanup_hidinput(struct hid_device *hid,
 
 	list_del(&hidinput->list);
 	input_free_device(hidinput->input);
-	kfree(hidinput->name);
 
 	for (k = HID_INPUT_REPORT; k <= HID_OUTPUT_REPORT; k++) {
 		if (k == HID_OUTPUT_REPORT &&
@@ -1716,19 +1632,6 @@ static struct hid_input *hidinput_match(struct hid_report *report)
 	return NULL;
 }
 
-static struct hid_input *hidinput_match_application(struct hid_report *report)
-{
-	struct hid_device *hid = report->device;
-	struct hid_input *hidinput;
-
-	list_for_each_entry(hidinput, &hid->inputs, list) {
-		if (hidinput->application == report->application)
-			return hidinput;
-	}
-
-	return NULL;
-}
-
 static inline void hidinput_configure_usages(struct hid_input *hidinput,
 					     struct hid_report *report)
 {
@@ -1751,13 +1654,10 @@ int hidinput_connect(struct hid_device *hid, unsigned int force)
 	struct hid_driver *drv = hid->driver;
 	struct hid_report *report;
 	struct hid_input *next, *hidinput = NULL;
-	unsigned int application;
 	int i, k;
 
 	INIT_LIST_HEAD(&hid->inputs);
 	INIT_WORK(&hid->led_work, hidinput_led_worker);
-
-	hid->status &= ~HID_STAT_DUP_DETECTED;
 
 	if (!force) {
 		for (i = 0; i < hid->maxcollection; i++) {
@@ -1784,20 +1684,15 @@ int hidinput_connect(struct hid_device *hid, unsigned int force)
 			if (!report->maxfield)
 				continue;
 
-			application = report->application;
-
 			/*
 			 * Find the previous hidinput report attached
 			 * to this report id.
 			 */
 			if (hid->quirks & HID_QUIRK_MULTI_INPUT)
 				hidinput = hidinput_match(report);
-			else if (hid->maxapplication > 1 &&
-				 (hid->quirks & HID_QUIRK_INPUT_PER_APP))
-				hidinput = hidinput_match_application(report);
 
 			if (!hidinput) {
-				hidinput = hidinput_allocate(hid, application);
+				hidinput = hidinput_allocate(hid);
 				if (!hidinput)
 					goto out_unwind;
 			}
@@ -1806,23 +1701,20 @@ int hidinput_connect(struct hid_device *hid, unsigned int force)
 
 			if (hid->quirks & HID_QUIRK_MULTI_INPUT)
 				hidinput->report = report;
-
-			list_add_tail(&report->hidinput_list,
-				      &hidinput->reports);
 		}
 	}
 
 	list_for_each_entry_safe(hidinput, next, &hid->inputs, list) {
-		if (drv->input_configured &&
-		    drv->input_configured(hid, hidinput))
-			goto out_unwind;
-
-		if (!hidinput_has_been_populated(hidinput)) {
+		if ((hid->quirks & HID_QUIRK_NO_EMPTY_INPUT) &&
+		    !hidinput_has_been_populated(hidinput)) {
 			/* no need to register an input device not populated */
 			hidinput_cleanup_hidinput(hid, hidinput);
 			continue;
 		}
 
+		if (drv->input_configured &&
+		    drv->input_configured(hid, hidinput))
+			goto out_unwind;
 		if (input_register_device(hidinput->input))
 			goto out_unwind;
 		hidinput->registered = true;
@@ -1832,10 +1724,6 @@ int hidinput_connect(struct hid_device *hid, unsigned int force)
 		hid_err(hid, "No inputs registered, leaving\n");
 		goto out_unwind;
 	}
-
-	if (hid->status & HID_STAT_DUP_DETECTED)
-		hid_dbg(hid,
-			"Some usages could not be mapped, please use HID_QUIRK_INCREMENT_USAGE_ON_DUPLICATE if this is legitimate.\n");
 
 	return 0;
 
@@ -1859,7 +1747,6 @@ void hidinput_disconnect(struct hid_device *hid)
 			input_unregister_device(hidinput->input);
 		else
 			input_free_device(hidinput->input);
-		kfree(hidinput->name);
 		kfree(hidinput);
 	}
 
@@ -1870,4 +1757,3 @@ void hidinput_disconnect(struct hid_device *hid)
 	cancel_work_sync(&hid->led_work);
 }
 EXPORT_SYMBOL_GPL(hidinput_disconnect);
-
