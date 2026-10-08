@@ -3100,21 +3100,23 @@ static void sec_ts_reset_work(struct work_struct *work)
 		return;
 	}
 
-	if (ts->input_dev->disabled) {
-		input_err(true, &ts->client->dev, "%s: call input_close\n", __func__);
+if (ts->input_closed) {
+	input_err(true, &ts->client->dev, "%s: call input_close\n", __func__);
 
-		if (ts->lowpower_mode || ts->ed_enable) {
-			ret = sec_ts_set_lowpowermode(ts, TO_LOWPOWER_MODE);
-			if (ret < 0) {
-				input_err(true, &ts->client->dev, "%s: failed to reset, ret:%d\n", __func__, ret);
-				ts->reset_is_on_going = false;
-				cancel_delayed_work(&ts->reset_work);
-				if (!ts->shutdown_is_on_going)
-					schedule_delayed_work(&ts->reset_work, msecs_to_jiffies(TOUCH_RESET_DWORK_TIME));
-				mutex_unlock(&ts->modechange);
-				wake_unlock(&ts->wakelock);
-				return;
-			}
+	if (ts->lowpower_mode || ts->ed_enable) {
+		ret = sec_ts_set_lowpowermode(ts, TO_LOWPOWER_MODE);
+		if (ret < 0) {
+			input_err(true, &ts->client->dev,
+				"%s: failed to reset, ret:%d\n", __func__);
+			ts->reset_is_on_going = false;
+			cancel_delayed_work(&ts->reset_work);
+			if (!ts->shutdown_is_on_going)
+				schedule_delayed_work(&ts->reset_work,
+					msecs_to_jiffies(TOUCH_RESET_DWORK_TIME));
+			mutex_unlock(&ts->modechange);
+			wake_unlock(&ts->wakelock);
+			return;
+		}
 
 			sec_ts_set_aod_rect(ts);
 		} else {
