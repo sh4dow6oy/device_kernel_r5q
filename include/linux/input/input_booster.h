@@ -4,7 +4,6 @@
 
 #include <linux/pm_qos.h>
 #include <linux/of.h>
-#include <linux/cpufreq.h>
 #include <linux/kernel.h>
 #include <linux/workqueue.h>
 #include <linux/input.h>
