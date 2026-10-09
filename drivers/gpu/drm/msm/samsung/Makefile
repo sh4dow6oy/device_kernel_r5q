@@ -1,6 +1,8 @@
-ccflags-y := -Iinclude/drm -Idrivers/gpu/drm/msm -Idrivers/gpu/drm/msm/dsi-staging
-ccflags-y += -Idrivers/gpu/drm/msm/sde
-ccflags-y += -Idrivers/gpu/drm/msm/samsung
+subdir-ccflags-y += -I$(srctree)/include/drm
+subdir-ccflags-y += -I$(srctree)/drivers/gpu/drm/msm
+subdir-ccflags-y += -I$(srctree)/drivers/gpu/drm/msm/dsi-staging
+subdir-ccflags-y += -I$(srctree)/drivers/gpu/drm/msm/sde
+subdir-ccflags-y += -I$(srctree)/drivers/gpu/drm/msm/samsung
 
 obj-y += ss_dsi_panel_sysfs.o
 obj-y += ss_dsi_panel_debug.o
@@ -12,10 +14,8 @@ obj-y += ss_flash_table_data_common.o
 obj-y += ss_dpui_common.o
 obj-y += ss_ddi_poc_common.o
 
-# obj-$(CONFIG_SAMSUNG_DEBUG_DISPLAY) += dlog.o
-
 # TO SUPPORT SPI INTERFACE
-obj-y  += ss_ddi_spi_common.o
+obj-y += ss_ddi_spi_common.o
 
 # COPR
 obj-y += ss_copr_common.o
@@ -23,11 +23,7 @@ obj-y += ss_copr_common.o
 # Self Display
 obj-y += SELF_DISPLAY/
 
-#
-# panel directory make file
-#
-
-# TO SUPPORT PBA BOOINT
+# TO SUPPORT PBA BOOTING
 obj-y += PBA_BOOTING/ss_dsi_panel_PBA_BOOTING_fhd.o
 obj-y += PBA_BOOTING_DSI1/ss_dsi_panel_PBA_BOOTING_fhd_dsi1.o
 
@@ -61,7 +57,7 @@ obj-$(CONFIG_PANEL_S6E3HA8_AMB638RD01_WQHD) += S6E3HA8_AMB638RD01/
 # WINNER sub panel
 obj-$(CONFIG_PANEL_S6E3FA7_AMB458WJ01_HD) += S6E3FA7_AMB458WJ01/
 
-# ASTAR panel (sub panel for WINNER bringup board)
+# ASTAR panel
 obj-$(CONFIG_PANEL_S6E3FA7_AMS628RF01_FHD) += S6E3FA7_AMS628RF01/
 
 # JACKPOT panel & BEYOND0 temp panel
@@ -79,7 +75,7 @@ obj-$(CONFIG_PANEL_S6E3FA7_AMB628TR01_FHD) += S6E3FA7_AMB628TR01/
 # DAVINCI2 P-hole DSC panel - 3040
 obj-$(CONFIG_PANEL_S6E3HA9_AMB675TG01_WQHD) += S6E3HA9_AMB675TG01/
 
-# bloom sub panel
+# BLOOM sub panel
 obj-$(CONFIG_PANEL_S6E36W3_AMB114EU09) += S6E36W3_AMB114EU09/
 
 # R3 panel
