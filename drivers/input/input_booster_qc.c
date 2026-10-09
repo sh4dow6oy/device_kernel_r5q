@@ -1,5 +1,4 @@
 #include <linux/input/input_booster.h>
-#include <linux/cpufreq.h>
 #include <linux/msm-bus.h>
 #include <linux/msm-bus-board.h>
 
