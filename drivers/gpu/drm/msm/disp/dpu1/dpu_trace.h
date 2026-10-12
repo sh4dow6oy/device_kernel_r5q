@@ -1002,8 +1002,10 @@ TRACE_EVENT(dpu_core_perf_update_clk,
 #endif /* _DPU_TRACE_H_ */
 
 /* This part must be outside protection */
+#endif /* _DPU_TRACE_H_ */
+
 #undef TRACE_INCLUDE_PATH
-#define TRACE_INCLUDE_PATH .
+#define TRACE_INCLUDE_PATH ../../drivers/gpu/drm/msm/disp/dpu1
 
 #undef TRACE_INCLUDE_FILE
 #define TRACE_INCLUDE_FILE dpu_trace
