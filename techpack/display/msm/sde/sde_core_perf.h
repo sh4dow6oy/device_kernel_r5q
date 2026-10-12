@@ -159,6 +159,5 @@ int sde_core_perf_debugfs_init(struct sde_core_perf *perf,
 
 int ss_set_max_sde_core_clk(struct drm_device *ddev);
 int ss_set_normal_sde_core_clk(struct drm_device *ddev);
-#endif
 
 #endif /* _SDE_CORE_PERF_H_ */
