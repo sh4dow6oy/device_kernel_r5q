@@ -1304,7 +1304,6 @@ int sde_core_perf_debugfs_init(struct sde_core_perf *perf,
 }
 #endif
 
-#if defined(CONFIG_DISPLAY_SAMSUNG)
 int ss_set_max_sde_core_clk(struct drm_device *ddev)
 {
 	struct sde_kms *sde_kms;
