@@ -1004,4 +1004,6 @@ TRACE_EVENT(dpu_core_perf_update_clk,
 /* This part must be outside protection */
 #undef TRACE_INCLUDE_PATH
 #define TRACE_INCLUDE_PATH .
+
+#undef TRACE_INCLUDE_FILE		
 #include <trace/define_trace.h>
