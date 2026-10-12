@@ -15,6 +15,7 @@
 #include "sde_wb.h"
 #include "sde_vbif.h"
 #include "sde_crtc.h"
+#include "sde_core_perf.h"
 
 #define to_sde_encoder_phys_wb(x) \
 	container_of(x, struct sde_encoder_phys_wb, base)
