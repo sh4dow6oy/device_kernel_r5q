@@ -746,8 +746,7 @@ int sde_power_resource_enable(struct sde_power_handle *phandle, bool enable)
 				goto vreg_err;
 			}
 		}
-		reg_log_dump(__func__, __LINE__);
-
+		
 		rc = msm_dss_enable_vreg(mp->vreg_config, mp->num_vreg,
 				enable);
 		if (rc) {
@@ -755,14 +754,12 @@ int sde_power_resource_enable(struct sde_power_handle *phandle, bool enable)
 			goto vreg_err;
 		}
 
-		reg_log_dump(__func__, __LINE__);
 		rc = sde_power_scale_reg_bus(phandle, VOTE_INDEX_LOW, true);
 		if (rc) {
 			pr_err("failed to set reg bus vote rc=%d\n", rc);
 			goto reg_bus_hdl_err;
 		}
 
-		reg_log_dump(__func__, __LINE__);
 		SDE_EVT32_VERBOSE(enable, SDE_EVTLOG_FUNC_CASE1);
 		rc = sde_power_rsc_update(phandle, true);
 		if (rc) {
@@ -770,7 +767,6 @@ int sde_power_resource_enable(struct sde_power_handle *phandle, bool enable)
 			goto rsc_err;
 		}
 
-		reg_log_dump(__func__, __LINE__);
 		rc = msm_dss_enable_clk(mp->clk_config, mp->num_clk, enable);
 		if (rc) {
 			pr_err("clock enable failed rc:%d\n", rc);
@@ -779,7 +775,6 @@ int sde_power_resource_enable(struct sde_power_handle *phandle, bool enable)
 
 		sde_power_event_trigger_locked(phandle,
 				SDE_POWER_EVENT_POST_ENABLE);
-		reg_log_dump(__func__, __LINE__);
 
 	} else {
 		sde_power_event_trigger_locked(phandle,
