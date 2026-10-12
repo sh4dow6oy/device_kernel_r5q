@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0
 ccflags-y := -Idrivers/gpu/drm/msm
-ccflags-y += -Idrivers/gpu/drm/msm/disp/dpu1
+ccflags-y += -I$(srctree)/drivers/gpu/drm/msm/disp/dpu1
 ccflags-$(CONFIG_DRM_MSM_DSI) += -Idrivers/gpu/drm/msm/dsi
 
 msm-y := \
