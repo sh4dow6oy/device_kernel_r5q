@@ -856,24 +856,19 @@ static int _sde_kms_release_splash_buffer(struct sde_kms *sde_kms,
 		return -EINVAL;
 	}
 
+#if (defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO))  && defined(CONFIG_SEC_DEBUG)
+	if (sec_debug_is_enabled()) {
+		pr_info("skip to free splash memory\n");
+		return 0;
+	}
+#else
 	/* leave ramdump memory only if base address matches */
 	if (ramdump_base == mem_addr &&
-#if defined(CONFIG_DISPLAY_SAMSUNG)
-			/* case 1) upload mode: release splash memory except disp_rdump_memory
-			 *         which is used for framebuffer in upload mode bootloader
-			 * case 2) None-upload mode: release whole splash memory
-			 *         which is used for framebuffer in normal booitng mode bootloader
-			 */
-			sec_debug_is_enabled() &&
-#endif
 			ramdump_buffer_size <= splash_buffer_size) {
 		mem_addr +=  ramdump_buffer_size;
 		splash_buffer_size -= ramdump_buffer_size;
 	}
-
-	if (!ramdump_base)
-		_sde_clear_boot_config(boot_cfg);
-
+#endif
 	pfn_start = mem_addr >> PAGE_SHIFT;
 	pfn_end = (mem_addr + splash_buffer_size) >> PAGE_SHIFT;
 
@@ -886,7 +881,7 @@ static int _sde_kms_release_splash_buffer(struct sde_kms *sde_kms,
 	for (pfn_idx = pfn_start; pfn_idx < pfn_end; pfn_idx++)
 		free_reserved_page(pfn_to_page(pfn_idx));
 
-#if defined(CONFIG_DISPLAY_SAMSUNG)
+#if defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
 	SDE_INFO("release splash buffer: addr: %x, size: %x, sec_debug: %d\n",
 			mem_addr, splash_buffer_size, sec_debug_is_enabled());
 #endif
