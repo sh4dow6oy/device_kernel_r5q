@@ -731,7 +731,6 @@ int sde_power_resource_enable(struct sde_power_handle *phandle, bool enable)
 	sde_power_rsc_client_init(phandle);
 
 	if (enable) {
-		reg_log_dump(__func__, __LINE__);
 		sde_power_event_trigger_locked(phandle,
 				SDE_POWER_EVENT_PRE_ENABLE);
 
