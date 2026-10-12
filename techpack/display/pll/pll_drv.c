@@ -22,7 +22,6 @@ int mdss_pll_resource_enable(struct mdss_pll_resources *pll_res, bool enable)
 	int rc = 0;
 	int changed = 0;
 
-	reg_log_dump(__func__, __LINE__);
 	if (!pll_res) {
 		pr_err("Invalid input parameters\n");
 		return -EINVAL;
@@ -234,8 +233,6 @@ static int mdss_pll_probe(struct platform_device *pdev)
 		pr_err("MDSS pll driver only supports device tree probe\n");
 		return -ENOTSUPP;
 	}
-
-	reg_log_dump(__func__, __LINE__);
 
 	label = of_get_property(pdev->dev.of_node, "label", NULL);
 	if (!label)
