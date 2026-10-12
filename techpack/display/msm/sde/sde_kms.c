@@ -302,13 +302,11 @@ static int sde_kms_enable_vblank(struct msm_kms *kms, struct drm_crtc *crtc)
 
 static void sde_kms_disable_vblank(struct msm_kms *kms, struct drm_crtc *crtc)
 {
-#if defined(CONFIG_DISPLAY_SAMSUNG) // case 04436106
-	int ret = 0;
-#endif
+int ret = 0;
 
-	SDE_ATRACE_BEGIN("sde_kms_disable_vblank");
-	ret = sde_crtc_vblank(crtc, false);
-	SDE_ATRACE_END("sde_kms_disable_vblank");
+SDE_ATRACE_BEGIN("sde_kms_disable_vblank");
+ret = sde_crtc_vblank(crtc, false);
+SDE_ATRACE_END("sde_kms_disable_vblank");
 
 #if defined(CONFIG_DISPLAY_SAMSUNG) // case 04436106
 	SS_XLOG_VSYNC(ret);
@@ -877,7 +875,9 @@ static int _sde_kms_release_splash_buffer(struct sde_kms *sde_kms,
 		SDE_ERROR("continuous splash memory free failed:%d\n", ret);
 		return ret;
 	}
-	free_memsize_reserved(mem_addr, splash_buffer_size);
+	
+	/* free_memsize_reserved() - implementare indisponibilă în acest kernel */
+	
 	for (pfn_idx = pfn_start; pfn_idx < pfn_end; pfn_idx++)
 		free_reserved_page(pfn_to_page(pfn_idx));
 
