@@ -891,16 +891,14 @@ int dsi_display_check_status(struct drm_connector *connector, void *display,
 		panel->esd_config.esd_enabled = false;
 	}
 
-	/* Unmask error interrupts if check passed*/
+	/* Unmask error interrupts if check passed */
 	if (rc > 0) {
-		LCD_ERR("status_mode = %d\n", status_mode);
 		dsi_display_set_ctrl_esd_check_flag(dsi_display, false);
-		dsi_display_mask_ctrl_error_interrupts(dsi_display, mask,
-							false);
+		dsi_display_mask_ctrl_error_interrupts(dsi_display,
+						       mask, false);
 	}
-
 	dsi_display_clk_ctrl(dsi_display->dsi_clk_handle,
-		DSI_ALL_CLKS, DSI_CLK_OFF);
+			     DSI_ALL_CLKS, DSI_CLK_OFF);
 
 exit:
 	/* Handle Panel failures during display disable sequence */
@@ -5067,7 +5065,6 @@ int dsi_display_cont_splash_config(void *dsi_display)
 	}
 #endif
 
-	reg_log_dump(__func__, __LINE__);
 	/* Update splash status for clock manager */
 	dsi_display_clk_mngr_update_splash_status(display->clk_mngr,
 				display->is_cont_splash_enabled);
@@ -5076,7 +5073,6 @@ int dsi_display_cont_splash_config(void *dsi_display)
 	/* Set up ctrl isr before enabling core clk */
 	dsi_display_ctrl_isr_configure(display, true);
 
-	reg_log_dump(__func__, __LINE__);
 	/* Vote for Core clk and link clk. Votes on ctrl and phy
 	 * regulator are inplicit from  pre clk on callback
 	 */
@@ -5088,7 +5084,6 @@ int dsi_display_cont_splash_config(void *dsi_display)
 		goto clk_manager_update;
 	}
 
-	reg_log_dump(__func__, __LINE__);
 	/* Vote on panel regulator will be removed during suspend path */
 	rc = dsi_pwr_enable_regulator(&display->panel->power_info, true);
 	if (rc) {
@@ -5096,7 +5091,6 @@ int dsi_display_cont_splash_config(void *dsi_display)
 				display->panel->name, rc);
 		goto clks_disabled;
 	}
-	reg_log_dump(__func__, __LINE__);
 
 	dsi_config_host_engine_state_for_cont_splash(display);
 	mutex_unlock(&display->display_lock);
@@ -5108,7 +5102,6 @@ int dsi_display_cont_splash_config(void *dsi_display)
 	ss_early_display_init(display->panel->panel_private);
 #endif
 
-	reg_log_dump(__func__, __LINE__);
 	return rc;
 
 clks_disabled:
