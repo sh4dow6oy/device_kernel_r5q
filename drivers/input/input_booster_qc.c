@@ -6,15 +6,15 @@ u32 bus_hdl = 0;
 struct pm_qos_request lpm_bias_pm_qos_request;
 int release_value[MAX_RES_COUNT];
 #define BUF_MAX	1024
-#define MBPS_TO_BPS	1024 *1024
+#define MBPS_TO_BPS	(1024 * 1024)
 
 #define MHZ_TO_BPS(mhz, w) ((uint64_t)mhz * 1000 * 1000 * w)
 #define CEILING_POS(X) ((X-(uint64_t)(X)) > 0 ? (uint64_t)(X+1) : (uint64_t)(X))
 #define BPS_TO_MHZ(BPS, W) (CELIING_POS((BPS / 1000 / 1000 / W)))
 
-#if defined(CONFIG_ARCH_KONA)
-#define NUM_BUS_TABLE 13
-#define BUS_W 4	/* SM8250 DDR Voting('w' for DDR is 4) */
+#if defined(CONFIG_ARCH_SM8150)
+#define NUM_BUS_TABLE 12
+#define BUS_W 4	/* SM8150 DDR Voting('w' for DDR is 4) */
 
 void set_hmp(int level);
 
@@ -25,16 +25,14 @@ int ab_ib_bus_vectors[NUM_BUS_TABLE][2] = {
 	{0, 451},	/* 3 */
 	{0, 547},	/* 4 */
 	{0, 681},	/* 5 */
-
 	{0, 768},	/* 6 */
 	{0, 1017},	/* 7 */
-	{0, 1353},	/* 8 */
+	{0, 1296},	/* 8 */
 	{0, 1555},	/* 9 */
-	{0, 1804},	/* 10 */
-	{0, 2092},	/* 11 */
-	{0, 2736}	/* 12 */
+	{0, 1803},	/* 10 */
+	{0, 2092}	/* 11 */
 };
-#else	//CONFIG_ARCH_KONA
+#else	//CONFIG_ARCH_SM8150
 #define NUM_BUS_TABLE 1
 #define BUS_W 0
 
@@ -42,7 +40,6 @@ int ab_ib_bus_vectors[NUM_BUS_TABLE][2] = {
 	{0, 0},		/* 0 */
 };
 #endif	//set null for other chipset
-
 
 struct msm_bus_vectors touch_reg_bus_vectors[NUM_BUS_TABLE];
 struct msm_bus_paths touch_reg_bus_usecases[ARRAY_SIZE(touch_reg_bus_vectors)];
@@ -52,7 +49,8 @@ struct msm_bus_scale_pdata touch_reg_bus_scale_table = {
 	.name = "touch_bw",
 };
 
-void fill_bus_vector(void) {
+void fill_bus_vector(void)
+{
 	int i = 0;
 	for (i = 0; i < NUM_BUS_TABLE; i++) {
 		touch_reg_bus_vectors[i].src = MSM_BUS_MASTER_AMPSS_M0;
@@ -62,7 +60,8 @@ void fill_bus_vector(void) {
 	}
 }
 
-int trans_freq_to_idx(int request_ddr_freq) {
+int trans_freq_to_idx(int request_ddr_freq)
+{
 	int i = 0;
 
 	if (request_ddr_freq <= 0) {
@@ -84,19 +83,19 @@ int trans_freq_to_idx(int request_ddr_freq) {
 	return 0;
 }
 
-void ib_set_booster(int* qos_values)
+void ib_set_booster(int *qos_values)
 {
 	int value = -1;
 	int ddr_new_value = 0;
-	int res_type =0;
+	int res_type = 0;
 
-	for(res_type = 0; res_type < MAX_RES_COUNT; res_type++) {
+	for (res_type = 0; res_type < MAX_RES_COUNT; res_type++) {
 		value = qos_values[res_type];
 
 		if (value <= 0)
 			continue;
 
-		switch(res_type) {
+		switch (res_type) {
 		case CPUFREQ:
 			set_freq_limit(DVFS_TOUCH_ID, value);
 			pr_booster("ib_set_booster :: cpufreq value : %d", value);
@@ -120,47 +119,39 @@ void ib_set_booster(int* qos_values)
 	}
 }
 
-void ib_release_booster(long *rel_flags)
+void ib_release_booster(int res_id)
 {
 	//cpufreq : -1, ddrfreq : 0, HMP : 0, lpm_bias = 0
-	int flag;
-	int ddr_new_value = 0;
-	int value;
-	int res_type = 0;
+	int ddr_new_value;
+	int value = release_value[res_id];
 
-	for (res_type = 0; res_type < MAX_RES_COUNT; res_type++) {
-		flag = rel_flags[res_type];
-		if (flag <= 0)
-			continue;
+	pr_booster("Res_ID(%d), Rel_Val(%d)", res_id, value);
 
-		value = release_value[res_type];
-
-		switch (res_type) {
-		case CPUFREQ:
-			set_freq_limit(DVFS_TOUCH_ID, value);
-			break;
-		case DDRFREQ:
-			ddr_new_value = trans_freq_to_idx(value);
-			msm_bus_scale_client_update_request(bus_hdl, ddr_new_value);
-			break;
-		case HMPBOOST:
-			set_hmp(value);
-			break;
-		case LPMBIAS:
-			pm_qos_update_request(&lpm_bias_pm_qos_request, value);
-			break;
-		default:
-			break;
-		}
+	switch (res_id) {
+	case CPUFREQ:
+		set_freq_limit(DVFS_TOUCH_ID, value);
+		break;
+	case DDRFREQ:
+		ddr_new_value = trans_freq_to_idx(value);
+		msm_bus_scale_client_update_request(bus_hdl, ddr_new_value);
+		break;
+	case HMPBOOST:
+		set_hmp(value);
+		break;
+	case LPMBIAS:
+		pm_qos_update_request(&lpm_bias_pm_qos_request, value);
+		break;
+	default:
+		break;
 	}
 }
 
-void input_booster_init_vendor(int* release_val)
+void input_booster_init_vendor(int *release_val)
 {
 	int i = 0;
 
 	pm_qos_add_request(&lpm_bias_pm_qos_request,
-		PM_QOS_BIAS_HYST, PM_QOS_BIAS_HYST_DEFAULT_VALUE);
+		PM_QOS_HIST_BIAS, PM_QOS_DEFAULT_VALUE);
 
 	fill_bus_vector();
 	for (i = 0; i < touch_reg_bus_scale_table.num_usecases; i++) {
@@ -175,9 +166,9 @@ void input_booster_init_vendor(int* release_val)
 	}
 }
 
-void input_booster_exit_vendor()
+void input_booster_exit_vendor(void)
 {
-	//msm_bus_scale_unregister_client(bus_hdl);
+	msm_bus_scale_unregister_client(bus_hdl);
 	pm_qos_remove_request(&lpm_bias_pm_qos_request);
 }
 
