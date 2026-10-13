@@ -1,6 +1,13 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
-/*
- * Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2017, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #ifndef _SDE_FORMATS_H
@@ -141,26 +148,5 @@ uint32_t sde_format_get_framebuffer_size(
 		const uint32_t height,
 		const uint32_t *pitches,
 		const uint64_t modifier);
-
-/**
- * sde_format_is_tp10_ubwc - check if the format is tp10 ubwc
- * @format:            DRM pixel format
- *
- * Return: returns true if the format is tp10 ubwc, otherwise false.
- */
-bool sde_format_is_tp10_ubwc(const struct sde_format *fmt);
-
-/**
- * sde_format_validate_fmt - validates if the format "sde_fmt" is within
- *	the list "fmt_list"
- * @kms: pointer to the kms object
- * @sde_fmt: pointer to the format to look within the list
- * @fmt_list: list where driver will loop to look for the 'sde_fmt' format.
- * @result: returns 0 if the format is found, otherwise will return an
- *	error code.
- */
-int sde_format_validate_fmt(struct msm_kms *kms,
-	const struct sde_format *sde_fmt,
-	const struct sde_format_extended *fmt_list);
 
 #endif /*_SDE_FORMATS_H */

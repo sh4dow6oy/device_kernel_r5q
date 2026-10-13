@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include "sde_hw_mdss.h"
@@ -47,7 +54,9 @@ static void sde_hw_dsc_config(struct sde_hw_dsc *hw_dsc,
 		bool ich_reset_override)
 {
 	u32 data;
+	int bpp, lsb;
 	u32 initial_lines = dsc->initial_lines;
+	bool is_cmd_mode = !(mode & BIT(2));
 	struct sde_hw_blk_reg_map *dsc_c = &hw_dsc->hw;
 
 	SDE_REG_WRITE(dsc_c, DSC_COMMON_MODE, mode);
@@ -56,9 +65,18 @@ static void sde_hw_dsc_config(struct sde_hw_dsc *hw_dsc,
 	if (ich_reset_override)
 		data = 3 << 28;
 
+	if (is_cmd_mode)
+		initial_lines += 1;
+
 	data |= (initial_lines << 20);
 	data |= (dsc->slice_last_group_size << 18);
-	data |= (dsc->bpp << 12);
+	/* bpp is 6.4 format, 4 LSBs bits are for fractional part */
+	lsb = dsc->bpp % 4;
+	bpp = dsc->bpp / 4;
+	bpp *= 4;	/* either 8 or 12 */
+	bpp <<= 4;
+	bpp |= lsb;
+	data |= (bpp << 8);
 	data |= (dsc->block_pred_enable << 7);
 	data |= (dsc->line_buf_depth << 3);
 	data |= (dsc->enable_422 << 2);
