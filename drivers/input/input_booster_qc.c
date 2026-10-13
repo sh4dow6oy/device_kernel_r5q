@@ -1,6 +1,7 @@
 #include <linux/input/input_booster.h>
 #include <linux/msm-bus.h>
 #include <linux/msm-bus-board.h>
+#include <linux/cpufreq.h>
 
 u32 bus_hdl = 0;
 struct pm_qos_request lpm_bias_pm_qos_request;
