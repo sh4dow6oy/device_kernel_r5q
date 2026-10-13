@@ -213,11 +213,8 @@ config PANEL_S6E3FA9_AMB667UM01_FHD
 	depends on DISPLAY_SAMSUNG
 	bool "LSI S6E3FA9 LDI"
 	default n
-	help
-	  LSI S6E3FA9 LDI 1080_2400 FHD non-DSC panel.
-	  This is attached to A91 project.
-	  Now, it will also attached to CANVAS1 board as 2nd temporary UB.
-	  This doesn't support VRR.
+	---help---
+	LSI S6E3FA9 LDI 1080_2400 R5
 
 config PANEL_S6E3FAB_AMB643VW01_FHD
 	depends on DISPLAY_SAMSUNG
