@@ -172,7 +172,6 @@ void input_booster_exit_vendor(void)
 	pm_qos_remove_request(&lpm_bias_pm_qos_request);
 }
 
-#ifndef CONFIG_CPU_FREQ_LIMIT_USERSPACE
 #define DVFS_TOUCH_ID	0
 int set_freq_limit(unsigned long id, unsigned int freq)
 {
