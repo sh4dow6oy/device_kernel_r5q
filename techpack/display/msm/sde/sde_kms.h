@@ -35,7 +35,6 @@
 #include "sde_hw_interrupts.h"
 #include "sde_hw_wb.h"
 #include "sde_hw_top.h"
-#include "sde_hw_uidle.h"
 #include "sde_rm.h"
 #include "sde_power_handle.h"
 #include "sde_irq.h"
@@ -106,7 +105,7 @@
 #define SDE_NAME_SIZE  12
 
 /* timeout in frames waiting for frame done */
-#if defined(CONFIG_DISPLAY_SAMSUNG)
+#if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
 /* case 03134585
  * sometimes, it is delayed for hundreds miliseconds
  * to call sde_crtc_frame_event_work(), by scheduling.
@@ -179,34 +178,16 @@ enum sde_kms_sui_misr_state {
 	SUI_MISR_DISABLE_REQ
 };
 
-/*
- * @FRAME_DONE_WAIT_DEFAULT:	waits for frame N pp_done interrupt before
- *                              triggering frame N+1.
- * @FRAME_DONE_WAIT_SERIALIZE:	serialize pp_done and ctl_start irq for frame
- *                              N without next frame trigger wait.
- * @FRAME_DONE_WAIT_POSTED_START: Do not wait for pp_done interrupt for any
- *                              frame. Wait will trigger only for error case.
- */
-enum frame_trigger_mode_type {
-	FRAME_DONE_WAIT_DEFAULT,
-	FRAME_DONE_WAIT_SERIALIZE,
-	FRAME_DONE_WAIT_POSTED_START,
-};
-
 /**
  * struct sde_kms_smmu_state_data: stores the smmu state and transition type
  * @state: current state of smmu context banks
- * @prev_state: previous state of smmu context banks
  * @secure_level: secure level cached from crtc
- * @prev_secure_level: previous secure level
  * @transition_type: transition request type
  * @transition_error: whether there is error while transitioning the state
  */
 struct sde_kms_smmu_state_data {
 	uint32_t state;
-	uint32_t prev_state;
 	uint32_t secure_level;
-	uint32_t prev_secure_level;
 	uint32_t transition_type;
 	uint32_t transition_error;
 	uint32_t sui_misr_state;
@@ -251,16 +232,17 @@ struct sde_kms {
 	bool genpd_init;
 
 	struct msm_gem_address_space *aspace[MSM_SMMU_DOMAIN_MAX];
+	struct sde_power_client *core_client;
+
 	struct sde_power_event *power_event;
 
 	/* directory entry for debugfs */
+	struct dentry *debugfs_danger;
 	struct dentry *debugfs_vbif;
 
 	/* io/register spaces: */
-	void __iomem *mmio, *vbif[VBIF_MAX], *reg_dma, *sid,
-		*imem;
-	unsigned long mmio_len, vbif_len[VBIF_MAX],
-		reg_dma_len, sid_len, imem_len;
+	void __iomem *mmio, *vbif[VBIF_MAX], *reg_dma, *sid;
+	unsigned long mmio_len, vbif_len[VBIF_MAX], reg_dma_len, sid_len;
 
 	struct regulator *vdd;
 	struct regulator *mmagic;
@@ -284,7 +266,6 @@ struct sde_kms {
 	struct sde_splash_data splash_data;
 	struct sde_hw_vbif *hw_vbif[VBIF_MAX];
 	struct sde_hw_mdp *hw_mdp;
-	struct sde_hw_uidle *hw_uidle;
 	struct sde_hw_sid *hw_sid;
 	int dsi_display_count;
 	void **dsi_displays;
@@ -300,30 +281,9 @@ struct sde_kms {
 	atomic_t detach_sec_cb;
 	atomic_t detach_all_cb;
 	struct mutex secure_transition_lock;
-	struct mutex vblank_ctl_global_lock;
 
 	bool first_kickoff;
 	bool qdss_enabled;
-
-	cpumask_t irq_cpu_mask;
-	struct pm_qos_request pm_qos_irq_req;
-	struct irq_affinity_notify affinity_notify;
-	bool pm_qos_irq_req_en;
-};
-
-/**
- * struct sde_boot_config:	display info stored in imem region
- * @header:     header info containing magic ID, frame buffer sizes,
- *              checksum & platformID
- * @addr1:      Lower 32 bits of Frame Buffer Address
- * @addr2:      Higher 32 bits of Frame Buffer Address
- * @reserved:   Reserved
- */
-struct sde_boot_config {
-	u32 header;
-	u32 addr1;
-	u32 addr2;
-	u32 reserved;
 };
 
 struct vsync_info {
@@ -347,10 +307,14 @@ bool sde_is_custom_client(void);
  */
 static inline bool sde_kms_power_resource_is_enabled(struct drm_device *dev)
 {
-	if (!dev)
+	struct msm_drm_private *priv;
+
+	if (!dev || !dev->dev_private)
 		return false;
 
-	return pm_runtime_enabled(dev->dev);
+	priv = dev->dev_private;
+
+	return sde_power_resource_is_enabled(&priv->phandle);
 }
 
 /**
@@ -453,8 +417,59 @@ static inline bool sde_kms_is_cp_operation_allowed(struct sde_kms *sde_kms)
  *
  * Documentation/filesystems/debugfs.txt
  *
+ * @sde_debugfs_setup_regset32: Initialize data for sde_debugfs_create_regset32
+ * @sde_debugfs_create_regset32: Create 32-bit register dump file
  * @sde_debugfs_get_root: Get root dentry for SDE_KMS's debugfs node
  */
+
+/**
+ * Companion structure for sde_debugfs_create_regset32. Do not initialize the
+ * members of this structure explicitly; use sde_debugfs_setup_regset32 instead.
+ */
+struct sde_debugfs_regset32 {
+	uint32_t offset;
+	uint32_t blk_len;
+	struct sde_kms *sde_kms;
+};
+
+/**
+ * sde_debugfs_setup_regset32 - Initialize register block definition for debugfs
+ * This function is meant to initialize sde_debugfs_regset32 structures for use
+ * with sde_debugfs_create_regset32.
+ * @regset: opaque register definition structure
+ * @offset: sub-block offset
+ * @length: sub-block length, in bytes
+ * @sde_kms: pointer to sde kms structure
+ */
+void sde_debugfs_setup_regset32(struct sde_debugfs_regset32 *regset,
+		uint32_t offset, uint32_t length, struct sde_kms *sde_kms);
+
+/**
+ * sde_debugfs_create_regset32 - Create register read back file for debugfs
+ *
+ * This function is almost identical to the standard debugfs_create_regset32()
+ * function, with the main difference being that a list of register
+ * names/offsets do not need to be provided. The 'read' function simply outputs
+ * sequential register values over a specified range.
+ *
+ * Similar to the related debugfs_create_regset32 API, the structure pointed to
+ * by regset needs to persist for the lifetime of the created file. The calling
+ * code is responsible for initialization/management of this structure.
+ *
+ * The structure pointed to by regset is meant to be opaque. Please use
+ * sde_debugfs_setup_regset32 to initialize it.
+ *
+ * @name:   File name within debugfs
+ * @mode:   File mode within debugfs
+ * @parent: Parent directory entry within debugfs, can be NULL
+ * @regset: Pointer to persistent register block definition
+ *
+ * Return: dentry pointer for newly created file, use either debugfs_remove()
+ *         or debugfs_remove_recursive() (on a parent directory) to remove the
+ *         file
+ */
+void *sde_debugfs_create_regset32(const char *name, umode_t mode,
+		void *parent, struct sde_debugfs_regset32 *regset);
 
 /**
  * sde_debugfs_get_root - Return root directory entry for KMS's debugfs
@@ -473,7 +488,11 @@ void *sde_debugfs_get_root(struct sde_kms *sde_kms);
  * These functions/definitions allow for building up a 'sde_info' structure
  * containing one or more "key=value\n" entries.
  */
+#if defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
+#define SDE_KMS_INFO_MAX_SIZE	(4096 + 2048)
+#else
 #define SDE_KMS_INFO_MAX_SIZE	4096
+#endif
 
 /**
  * struct sde_kms_info - connector information structure container
@@ -668,12 +687,18 @@ void sde_kms_timeline_status(struct drm_device *dev);
 int sde_kms_handle_recovery(struct drm_encoder *encoder);
 
 /**
- * sde_kms_update_pm_qos_irq_request - Update Qos vote for CPU receiving
- *					display IRQ
- * @sde_kms : pointer to sde_kms structure
- * @enable : indicates request to be enabled or disabled
- * @skip_lock : indicates if lock needs to be acquired
+ * sde_kms_release_splash_resource - release splash resource
+ * @sde_kms: poiner to sde_kms structure
+ * @crtc: crtc that splash resource to be released from
  */
-void sde_kms_update_pm_qos_irq_request(struct sde_kms *sde_kms,
-	 bool enable, bool skip_lock);
+void sde_kms_release_splash_resource(struct sde_kms *sde_kms,
+		struct drm_crtc *crtc);
+/**
+ * sde_kms_trigger_early_wakeup - trigger early wake up
+ * @sde_kms: pointer to sde_kms structure
+ * @crtc: pointer to drm_crtc structure
+ */
+void sde_kms_trigger_early_wakeup(struct sde_kms *sde_kms,
+		struct drm_crtc *crtc);
+
 #endif /* __sde_kms_H__ */
