@@ -23,7 +23,7 @@
 #include "dsi_parser.h"
 
 #if defined(CONFIG_DISPLAY_SAMSUNG)
-#include "ss_dsi_panel_common.h"
+#include "../samsung/ss_dsi_panel_common.h"
 #endif
 
 #define to_dsi_display(x) container_of(x, struct dsi_display, host)
