@@ -829,16 +829,6 @@ no_ops:
 	return 0;
 }
 
-static void _sde_clear_boot_config(struct sde_boot_config *boot_cfg)
-{
-	if (!boot_cfg)
-		return;
-
-	SDE_IMEM_WRITE(&boot_cfg->header, 0x0);
-	SDE_IMEM_WRITE(&boot_cfg->addr1, 0x0);
-	SDE_IMEM_WRITE(&boot_cfg->addr2, 0x0);
-}
-
 static int _sde_kms_release_splash_buffer(struct sde_kms *sde_kms,
 					unsigned int mem_addr,
 					unsigned int splash_buffer_size,
