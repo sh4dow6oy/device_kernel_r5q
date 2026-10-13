@@ -178,7 +178,6 @@ int set_freq_limit(unsigned long id, unsigned int freq)
 	pr_err("%s is not yet implemented\n", __func__);
 	return 0;
 }
-#endif
 
 #ifdef USE_HMP_BOOST
 void set_hmp(int level)
