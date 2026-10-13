@@ -1,6 +1,15 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Copyright (c) 2015-2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2015-2020, The Linux Foundation.All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
 
 #ifndef _DSI_DISPLAY_H_
@@ -20,7 +29,6 @@
 #include "dsi_phy.h"
 #include "dsi_panel.h"
 
-#define MAX_DSI_CTRLS_PER_DISPLAY             2
 #define DSI_CLIENT_NAME_SIZE		20
 #define MAX_CMDLINE_PARAM_LEN	 512
 #define MAX_CMD_PAYLOAD_SIZE	256
@@ -106,8 +114,9 @@ struct dsi_display_boot_param {
  * struct dsi_display_clk_info - dsi display clock source information
  * @src_clks:          Source clocks for DSI display.
  * @mux_clks:          Mux clocks used for DFPS.
- * @shadow_clks:       Used for D-phy clock switch.
- * @shadow_cphy_clks:  Used for C-phy clock switch.
+ * @shadow_clks:       Used for D-phy clock switch
+ * @shadow_cphy_clks:  Used for C-phy clock switch
+ * @xo_clks:           XO clocks for DSI display
  */
 struct dsi_display_clk_info {
 	struct dsi_clk_link_set src_clks;
@@ -115,6 +124,7 @@ struct dsi_display_clk_info {
 	struct dsi_clk_link_set cphy_clks;
 	struct dsi_clk_link_set shadow_clks;
 	struct dsi_clk_link_set shadow_cphy_clks;
+	struct dsi_clk_link_set xo_clks;
 };
 
 /**
@@ -141,6 +151,7 @@ struct dsi_display_ext_bridge {
  * @ext_conn:         Pointer to external connector attached to DSI connector
  * @name:             Name of the display.
  * @display_type:     Display type as defined in device tree.
+ * @dsi_type:         Display label as defined in device tree.
  * @list:             List pointer.
  * @is_active:        Is display active.
  * @is_cont_splash_enabled:  Is continuous splash enabled
@@ -152,9 +163,8 @@ struct dsi_display_ext_bridge {
  * @ctrl_count:       Number of DSI interfaces required by panel.
  * @ctrl:             Controller information for DSI display.
  * @panel:            Handle to DSI panel.
- * @panel_node:       pHandle to DSI panel actually in use.
+ * @panel_of:         pHandle to DSI panel.
  * @ext_bridge:       External bridge information for DSI display.
- * @ext_bridge_cnt:   Number of external bridges
  * @modes:            Array of probed DSI modes
  * @type:             DSI display type.
  * @clk_master_idx:   The master controller for controlling clocks. This is an
@@ -184,10 +194,6 @@ struct dsi_display_ext_bridge {
  * @misr_frame_count  Number of frames to accumulate the MISR value
  * @esd_trigger       field indicating ESD trigger through debugfs
  * @te_source         vsync source pin information
- * @clk_gating_config Clocks for which clock gating needs to be enabled
- * @queue_cmd_waits   Indicates if wait for dma commands done has to be queued.
- * @dma_cmd_workq:	Pointer to the workqueue of DMA command transfer done
- *				wait sequence.
  */
 struct dsi_display {
 	struct platform_device *pdev;
@@ -197,6 +203,7 @@ struct dsi_display {
 
 	const char *name;
 	const char *display_type;
+	const char *dsi_type;
 	struct list_head list;
 	bool is_cont_splash_enabled;
 	bool sw_te_using_wd;
@@ -210,12 +217,12 @@ struct dsi_display {
 
 	/* panel info */
 	struct dsi_panel *panel;
-	struct device_node *panel_node;
+	struct device_node *disp_node;
+	struct device_node *panel_of;
 	struct device_node *parser_node;
 
 	/* external bridge */
-	struct dsi_display_ext_bridge ext_bridge[MAX_DSI_CTRLS_PER_DISPLAY];
-	u32 ext_bridge_cnt;
+	struct dsi_display_ext_bridge ext_bridge[MAX_EXT_BRIDGE_PORT_CONFIG];
 
 	struct dsi_display_mode *modes;
 
@@ -248,6 +255,9 @@ struct dsi_display {
 	struct dsi_bridge    *bridge;
 	u32 cmd_engine_refcount;
 
+	struct sde_power_handle *phandle;
+	struct sde_power_client *cont_splash_client;
+
 	void *clk_mngr;
 	void *dsi_clk_handle;
 	void *mdp_clk_handle;
@@ -271,9 +281,6 @@ struct dsi_display {
 	struct dsi_display_boot_param *boot_disp;
 
 	u32 te_source;
-	u32 clk_gating_config;
-	bool queue_cmd_waits;
-	struct workqueue_struct *dma_cmd_workq;
 };
 
 int dsi_display_dev_probe(struct platform_device *pdev);
@@ -383,16 +390,6 @@ int dsi_display_get_modes(struct dsi_display *display,
  */
 void dsi_display_put_mode(struct dsi_display *display,
 	struct dsi_display_mode *mode);
-
-/**
- * dsi_display_get_default_lms() - retrieve max number of lms used
- *             for dsi display by traversing through all topologies
- * @display:            Handle to display.
- * @num_lm:             Number of LMs used
- *
- * Return: error code.
- */
-int dsi_display_get_default_lms(void *dsi_display, u32 *num_lm);
 
 /**
  * dsi_display_find_mode() - retrieve cached DSI mode given relevant params
@@ -594,15 +591,6 @@ int dsi_display_clock_gate(struct dsi_display *display, bool enable);
 int dsi_dispaly_static_frame(struct dsi_display *display, bool enable);
 
 /**
- * dsi_display_get_drm_panel() - get drm_panel from display.
- * @display:            Handle to display.
- * Get drm_panel which was inclued in dsi_display's dsi_panel.
- *
- * Return: drm_panel/NULL.
- */
-struct drm_panel *dsi_display_get_drm_panel(struct dsi_display *display);
-
-/**
  * dsi_display_enable_event() - enable interrupt based connector event
  * @connector:          Pointer to drm connector structure
  * @display:            Handle to display.
@@ -687,7 +675,6 @@ int dsi_display_set_power(struct drm_connector *connector,
 int dsi_display_pre_kickoff(struct drm_connector *connector,
 		struct dsi_display *display,
 		struct msm_display_kickoff_params *params);
-
 /*
  * dsi_display_pre_commit - program pre commit features
  * @display: Pointer to private display structure
@@ -725,7 +712,7 @@ int dsi_display_cont_splash_config(void *display);
 int dsi_display_get_panel_vfp(void *display,
 	int h_active, int v_active);
 
-#if defined(CONFIG_DISPLAY_SAMSUNG)
+#if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
 int dsi_display_ctrl_init(struct dsi_display *display);
 int dsi_display_ctrl_deinit(struct dsi_display *display);
 #endif
