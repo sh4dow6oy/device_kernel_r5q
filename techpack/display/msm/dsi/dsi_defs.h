@@ -1,6 +1,14 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2016-2020, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #ifndef _DSI_DEFS_H_
@@ -9,6 +17,9 @@
 #include <linux/types.h>
 #include <drm/drm_mipi_dsi.h>
 #include "msm_drv.h"
+
+#define MAX_EXT_BRIDGE_PORT_CONFIG             16
+#define MAX_DSI_CTRLS_PER_DISPLAY             2
 
 #define DSI_H_TOTAL(t) (((t)->h_active) + ((t)->h_back_porch) + \
 			((t)->h_sync_width) + ((t)->h_front_porch))
@@ -38,19 +49,10 @@
 		value;\
 	})
 
-
 #define DSI_DEBUG_NAME_LEN		32
 #define display_for_each_ctrl(index, display) \
 	for (index = 0; (index < (display)->ctrl_count) &&\
 			(index < MAX_DSI_CTRLS_PER_DISPLAY); index++)
-
-#define DSI_WARN(fmt, ...)	DRM_WARN("[msm-dsi-warn]: "fmt, ##__VA_ARGS__)
-#define DSI_ERR(fmt, ...)	DRM_DEV_ERROR(NULL, "[msm-dsi-error]: " fmt, \
-								##__VA_ARGS__)
-#define DSI_INFO(fmt, ...)	DRM_DEV_INFO(NULL, "[msm-dsi-info]: "fmt, \
-								##__VA_ARGS__)
-#define DSI_DEBUG(fmt, ...)	DRM_DEV_DEBUG(NULL, "[msm-dsi-debug]: "fmt, \
-								##__VA_ARGS__)
 /**
  * enum dsi_pixel_format - DSI pixel formats
  * @DSI_PIXEL_FORMAT_RGB565:
@@ -93,10 +95,9 @@ enum dsi_op_mode {
  * @DSI_MODE_FLAG_DMS: Seamless transition is dynamic mode switch
  * @DSI_MODE_FLAG_VRR: Seamless transition is DynamicFPS.
  *                     New timing values are sent from DAL.
- * @DSI_MODE_FLAG_POMS:
- *         Seamless transition is dynamic panel operating mode switch
  * @DSI_MODE_FLAG_DYN_CLK: Seamless transition is dynamic clock change
- * @DSI_MODE_FLAG_DMS_FPS: Seamless fps only transition in Dynamic Mode Switch
+ * @DSI_MODE_FLAG_POMS:
+ *     Seamless transition is dynamic panel operating mode switch
  */
 enum dsi_mode_flags {
 	DSI_MODE_FLAG_SEAMLESS			= BIT(0),
@@ -104,9 +105,8 @@ enum dsi_mode_flags {
 	DSI_MODE_FLAG_VBLANK_PRE_MODESET	= BIT(2),
 	DSI_MODE_FLAG_DMS			= BIT(3),
 	DSI_MODE_FLAG_VRR			= BIT(4),
-	DSI_MODE_FLAG_POMS			= BIT(5),
-	DSI_MODE_FLAG_DYN_CLK			= BIT(6),
-	DSI_MODE_FLAG_DMS_FPS                   = BIT(7),
+	DSI_MODE_FLAG_DYN_CLK			= BIT(5),
+	DSI_MODE_FLAG_POMS			= BIT(6),
 };
 
 /**
@@ -242,13 +242,14 @@ enum dsi_dfps_type {
 
 /**
  * enum dsi_dyn_clk_feature_type - Dynamic clock feature support type
- * @DSI_DYN_CLK_TYPE_LEGACY:			Constant FPS is not supported
+ * @DSI_DYN_CLK_TYPE_LEGACY:	Constant FPS is not supported
  * @DSI_DYN_CLK_TYPE_CONST_FPS_ADJUST_HFP:	Constant FPS supported with
- *						change in hfp
+ *		change in hfp
  * @DSI_DYN_CLK_TYPE_CONST_FPS_ADJUST_VFP:	Constant FPS supported with
- *						change in vfp
+ *		change in vfp
  * @DSI_DYN_CLK_TYPE_MAX:
  */
+
 enum dsi_dyn_clk_feature_type {
 	DSI_DYN_CLK_TYPE_LEGACY = 0,
 	DSI_DYN_CLK_TYPE_CONST_FPS_ADJUST_HFP,
@@ -285,6 +286,9 @@ enum dsi_dyn_clk_feature_type {
  */
 enum dsi_cmd_set_type {
 	DSI_CMD_SET_PRE_ON = 0,
+#if defined(CONFIG_DISPLAY_SAMSUNG)
+	DSI_CMD_SET_FD_ON_FACTORY,
+#endif
 	DSI_CMD_SET_ON,
 	DSI_CMD_SET_POST_ON,
 	DSI_CMD_SET_PRE_OFF,
@@ -308,8 +312,311 @@ enum dsi_cmd_set_type {
 	DSI_CMD_SET_QSYNC_ON,
 	DSI_CMD_SET_QSYNC_OFF,
 	DSI_CMD_SET_MAX,
-
 #if defined(CONFIG_DISPLAY_SAMSUNG)
+	/* set type for samsung display driver
+	 * Please add type in proper boundary (TX, RX)
+	 */
+
+	/* samsung CMD */
+	SS_DSI_CMD_SET_START,
+
+	/* TX */
+	TX_CMD_START,
+	TX_MTP_WRITE_SYSFS,
+	TX_TEMP_DSC,
+	TX_DISPLAY_ON,
+	TX_DISPLAY_OFF,
+	TX_BRIGHT_CTRL,
+	TX_MANUFACTURE_ID_READ_PRE,
+	TX_LEVEL0_KEY_ENABLE,
+	TX_LEVEL0_KEY_DISABLE,
+	TX_LEVEL1_KEY_ENABLE,
+	TX_LEVEL1_KEY_DISABLE,
+	TX_LEVEL2_KEY_ENABLE,
+	TX_LEVEL2_KEY_DISABLE,
+	TX_POC_KEY_ENABLE,
+	TX_POC_KEY_DISABLE,
+	TX_MDNIE_ADB_TEST,
+	TX_LPM_ON,
+	TX_LPM_OFF,
+	TX_LPM_AOD_ON,
+	TX_LPM_AOD_OFF,
+	TX_LPM_2NIT_CMD,
+	TX_LPM_10NIT_CMD,
+	TX_LPM_30NIT_CMD,
+	TX_LPM_40NIT_CMD,
+	TX_LPM_60NIT_CMD,
+	TX_ALPM_2NIT_CMD,
+	TX_ALPM_10NIT_CMD,
+	TX_ALPM_30NIT_CMD,
+	TX_ALPM_40NIT_CMD,
+	TX_ALPM_60NIT_CMD,
+	TX_ALPM_OFF,
+	TX_HLPM_2NIT_CMD,
+	TX_HLPM_10NIT_CMD,
+	TX_HLPM_30NIT_CMD,
+	TX_HLPM_40NIT_CMD,
+	TX_HLPM_60NIT_CMD,
+	TX_HLPM_OFF,
+	TX_LPM_BL_CMD,
+	TX_PACKET_SIZE,
+	TX_REG_READ_POS,
+	TX_MDNIE_TUNE,
+	TX_OSC_TE_FITTING,
+	TX_AVC_ON,
+	TX_LDI_FPS_CHANGE,
+	TX_HMT_ENABLE,
+	TX_HMT_DISABLE,
+	TX_HMT_LOW_PERSISTENCE_OFF_BRIGHT,
+	TX_HMT_REVERSE,
+	TX_HMT_FORWARD,
+	TX_HMT_GAMMA_MODE2_BRIGHT,
+	TX_FFC,
+	TX_DYNAMIC_FFC_SET,
+	TX_CABC_ON,
+	TX_CABC_OFF,
+	TX_TFT_PWM,
+	TX_GAMMA_MODE2,
+	TX_BLIC_DIMMING,
+	TX_LDI_SET_VDD_OFFSET,
+	TX_LDI_SET_VDDM_OFFSET,
+	TX_HSYNC_ON,
+	TX_CABC_ON_DUTY,
+	TX_CABC_OFF_DUTY,
+	TX_COPR_ENABLE,
+	TX_COPR_DISABLE,
+	TX_COLOR_WEAKNESS_ENABLE,
+	TX_COLOR_WEAKNESS_DISABLE,
+	TX_ESD_RECOVERY_1,
+	TX_ESD_RECOVERY_2,
+	TX_MCD_ON,
+	TX_MCD_OFF,
+	TX_MCD_READ_RESISTANCE_PRE, /* For read real MCD R/L resistance */
+	TX_MCD_READ_RESISTANCE, /* For read real MCD R/L resistance */
+	TX_MCD_READ_RESISTANCE_POST, /* For read real MCD R/L resistance */
+	TX_GRADUAL_ACL,
+	TX_HW_CURSOR,
+	TX_DYNAMIC_HLPM_ENABLE,
+	TX_DYNAMIC_HLPM_DISABLE,
+	TX_MULTIRES_FHD_TO_WQHD,
+	TX_MULTIRES_HD_TO_WQHD,
+	TX_MULTIRES_FHD,
+	TX_MULTIRES_HD,
+	TX_COVER_CONTROL_ENABLE,
+	TX_COVER_CONTROL_DISABLE,
+	TX_HBM_GAMMA,
+	TX_HBM_ETC,
+	TX_HBM_IRC,
+	TX_HBM_OFF,
+	TX_AID,
+	TX_AID_SUBDIVISION,
+	TX_PAC_AID_SUBDIVISION,
+	TX_ACL_ON,
+	TX_ACL_OFF,
+	TX_ELVSS,
+	TX_ELVSS_HIGH,
+	TX_ELVSS_MID,
+	TX_ELVSS_LOW,
+	TX_ELVSS_PRE,
+	TX_GAMMA,
+	TX_HMT_ELVSS,
+	TX_HMT_VINT,
+	TX_HMT_IRC,
+	TX_HMT_GAMMA,
+	TX_HMT_AID,
+	TX_ELVSS_LOWTEMP,
+	TX_ELVSS_LOWTEMP2,
+	TX_SMART_ACL_ELVSS,
+	TX_SMART_ACL_ELVSS_LOWTEMP,
+	TX_VINT,
+	TX_IRC,
+	TX_IRC_SUBDIVISION,
+	TX_PAC_IRC_SUBDIVISION,
+	TX_IRC_OFF,
+	TX_MICRO_SHORT_TEST_ON,
+	TX_MICRO_SHORT_TEST_OFF,
+	TX_POC_CMD_START, /* START POC CMDS */
+	TX_POC_ENABLE,
+	TX_POC_DISABLE,
+	TX_POC_ERASE,			/* ERASE */
+	TX_POC_ERASE1,
+	TX_POC_PRE_ERASE_SECTOR,
+	TX_POC_ERASE_SECTOR,
+	TX_POC_POST_ERASE_SECTOR,
+	TX_POC_PRE_WRITE,		/* WRITE */
+	TX_POC_WRITE_LOOP_START,
+	TX_POC_WRITE_LOOP_DATA_ADD,
+	TX_POC_WRITE_LOOP_1BYTE,
+	TX_POC_WRITE_LOOP_256BYTE,
+	TX_POC_WRITE_LOOP_END,
+	TX_POC_POST_WRITE,
+	TX_POC_PRE_READ,		/* READ */
+	TX_POC_PRE_READ2,		/* READ */
+	TX_POC_READ,
+	TX_POC_POST_READ,
+	TX_POC_REG_READ_POS,
+	TX_POC_CMD_END, /* END POC CMDS */
+	TX_GCT_ENTER,
+	TX_GCT_MID,
+	TX_GCT_EXIT,
+	TX_DDI_RAM_IMG_DATA,
+	TX_GRAY_SPOT_TEST_ON,
+	TX_GRAY_SPOT_TEST_OFF,
+	TX_ISC_DEFECT_TEST_ON,
+	TX_ISC_DEFECT_TEST_OFF,
+	TX_PARTIAL_DISP_ON,
+	TX_PARTIAL_DISP_OFF,
+	TX_DIA_ON,
+	TX_DIA_OFF,
+	TX_FP_GREEN_CIRCLE_ON,		/* Finger Print Green Circle */
+	TX_FP_GREEN_CIRCLE_OFF,
+	TX_SELF_IDLE_AOD_ENTER,
+	TX_SELF_IDLE_AOD_EXIT,
+	TX_SELF_IDLE_TIMER_ON,
+	TX_SELF_IDLE_TIMER_OFF,
+	TX_SELF_IDLE_MOVE_ON_PATTERN1,
+	TX_SELF_IDLE_MOVE_ON_PATTERN2,
+	TX_SELF_IDLE_MOVE_ON_PATTERN3,
+	TX_SELF_IDLE_MOVE_ON_PATTERN4,
+	TX_SELF_IDLE_MOVE_OFF,
+	TX_SELF_MASK_CHECK_PRE1,
+	TX_SELF_MASK_CHECK_PRE2,
+	TX_SELF_MASK_CHECK_POST,
+
+	/* SELF DISPLAY */
+	TX_SELF_DISP_CMD_START,
+	TX_SELF_DISP_ON,
+	TX_SELF_DISP_OFF,
+	TX_SELF_TIME_SET,
+	TX_SELF_MOVE_ON,
+	TX_SELF_MOVE_ON_100,
+	TX_SELF_MOVE_ON_200,
+	TX_SELF_MOVE_ON_500,
+	TX_SELF_MOVE_ON_1000,
+	TX_SELF_MOVE_ON_DEBUG,
+	TX_SELF_MOVE_RESET,
+	TX_SELF_MOVE_OFF,
+	TX_SELF_MOVE_2C_SYNC_OFF,
+	TX_SELF_MASK_SET_PRE,
+	TX_SELF_MASK_SET_POST,
+	TX_SELF_MASK_SIDE_MEM_SET,
+	TX_SELF_MASK_ON,
+	TX_SELF_MASK_ON_FACTORY,
+	TX_SELF_MASK_OFF,
+	TX_SELF_MASK_GREEN_CIRCLE_ON_FACTORY,
+	TX_SELF_MASK_GREEN_CIRCLE_OFF_FACTORY,
+	TX_SELF_MASK_IMAGE,
+	TX_SELF_MASK_IMAGE_CRC,
+	TX_SELF_ICON_SET_PRE,
+	TX_SELF_ICON_SET_POST,
+	TX_SELF_ICON_SIDE_MEM_SET,
+	TX_SELF_ICON_GRID,
+	TX_SELF_ICON_ON,
+	TX_SELF_ICON_ON_GRID_ON,
+	TX_SELF_ICON_ON_GRID_OFF,
+	TX_SELF_ICON_OFF_GRID_ON,
+	TX_SELF_ICON_OFF_GRID_OFF,
+	TX_SELF_ICON_GRID_2C_SYNC_OFF,
+	TX_SELF_ICON_OFF,
+	TX_SELF_ICON_IMAGE,
+	TX_SELF_BRIGHTNESS_ICON_ON,
+	TX_SELF_BRIGHTNESS_ICON_OFF,
+	TX_SELF_ACLOCK_SET_PRE,
+	TX_SELF_ACLOCK_SET_POST,
+	TX_SELF_ACLOCK_SIDE_MEM_SET,
+	TX_SELF_ACLOCK_ON,
+	TX_SELF_ACLOCK_TIME_UPDATE,
+	TX_SELF_ACLOCK_ROTATION,
+	TX_SELF_ACLOCK_OFF,
+	TX_SELF_ACLOCK_HIDE,
+	TX_SELF_ACLOCK_IMAGE,
+	TX_SELF_DCLOCK_SET_PRE,
+	TX_SELF_DCLOCK_SET_POST,
+	TX_SELF_DCLOCK_SIDE_MEM_SET,
+	TX_SELF_DCLOCK_ON,
+	TX_SELF_DCLOCK_BLINKING_ON,
+	TX_SELF_DCLOCK_BLINKING_OFF,
+	TX_SELF_DCLOCK_TIME_UPDATE,
+	TX_SELF_DCLOCK_OFF,
+	TX_SELF_DCLOCK_HIDE,
+	TX_SELF_DCLOCK_IMAGE,
+	TX_SELF_CLOCK_2C_SYNC_OFF,
+	TX_SELF_VIDEO_IMAGE,
+	TX_SELF_VIDEO_SIDE_MEM_SET,
+	TX_SELF_VIDEO_ON,
+	TX_SELF_VIDEO_OFF,
+	TX_SELF_PARTIAL_HLPM_SCAN_SET,
+	RX_SELF_DISP_DEBUG,
+	TX_SELF_DISP_CMD_END,
+
+	/* FLASH GAMMA */
+	TX_FLASH_GAMMA_PRE1,
+	TX_FLASH_GAMMA_PRE2,
+	TX_FLASH_GAMMA,
+	TX_FLASH_GAMMA_POST,
+
+	TX_ISC_DATA_THRESHOLD,
+	TX_STM_ENABLE,
+	TX_STM_DISABLE,
+	TX_GAMMA_MODE1_INTERPOLATION,
+
+	TX_SPI_IF_SEL_ON,
+	TX_SPI_IF_SEL_OFF,
+
+	TX_CCD_ON,
+	TX_CCD_OFF,
+	TX_DEMUX_STRESS_ON,
+	TX_DEMUX_STRESS_OFF,
+	TX_POC_COMP,
+
+	TX_FD_ON,
+	TX_FD_OFF,
+
+	TX_CMD_END,
+
+	/* RX */
+	RX_CMD_START,
+	RX_SMART_DIM_MTP,
+	RX_MANUFACTURE_ID,
+	RX_MANUFACTURE_ID0,
+	RX_MANUFACTURE_ID1,
+	RX_MANUFACTURE_ID2,
+	RX_MODULE_INFO,
+	RX_MANUFACTURE_DATE,
+	RX_DDI_ID,
+	RX_CELL_ID,
+	RX_OCTA_ID,
+	RX_RDDPM,
+	RX_MTP_READ_SYSFS,
+	RX_ELVSS,
+	RX_IRC,
+	RX_HBM,
+	RX_HBM2,
+	RX_MDNIE,
+	RX_LDI_DEBUG0, /* 0x0A : RDDPM */
+	RX_LDI_DEBUG1,
+	RX_LDI_DEBUG2, /* 0xEE : ERR_FG */
+	RX_LDI_DEBUG3, /* 0x0E : RDDSM */
+	RX_LDI_DEBUG4, /* 0x05 : DSI_ERR */
+	RX_LDI_DEBUG5, /* 0x0F : OTP loading error count */
+	RX_LDI_DEBUG_LOGBUF, /* 0x9C : command log buffer */
+	RX_LDI_DEBUG_PPS1, /* 0xA2 : PPS data (0x00 ~ 0x2C) */
+	RX_LDI_DEBUG_PPS2, /* 0xA2 : PPS data (0x2d ~ 0x58)*/
+	RX_LDI_LOADING_DET,
+	RX_LDI_FPS,
+	RX_POC_READ,
+	RX_POC_STATUS,
+	RX_POC_CHECKSUM,
+	RX_POC_MCA_CHECK,
+	RX_GCT_CHECKSUM,
+	RX_MCD_READ_RESISTANCE,  /* For read real MCD R/L resistance */
+	RX_FLASH_GAMMA,
+	RX_CCD_STATE,
+	RX_SELF_MASK_CHECK,
+	RX_CMD_END,
+
+	SS_DSI_CMD_SET_MAX,
+#elif  defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
 	/* set type for samsung display driver
 	 * Please add type in proper boundary (TX, RX)
 	 */
@@ -713,15 +1020,11 @@ enum dsi_cmd_set_state {
  * @PIXEL_CLK:  DSI pixel clock.
  * @BYTE_CLK:   DSI byte clock.
  * @DSI_PHY:    DSI PHY.
- * @DSI_CLK_ALL: All available DSI clocks
- * @DSI_CLK_NONE: None of the clocks should be gated
  */
 enum dsi_clk_gate_type {
 	PIXEL_CLK = 1,
 	BYTE_CLK = 2,
 	DSI_PHY = 4,
-	DSI_CLK_ALL = (PIXEL_CLK | BYTE_CLK | DSI_PHY),
-	DSI_CLK_NONE = 8,
 };
 
 /**
@@ -783,7 +1086,7 @@ struct dsi_panel_cmd_set {
 	u32 ctrl_idx;
 	struct dsi_cmd_desc *cmds;
 
-#if defined(CONFIG_DISPLAY_SAMSUNG)
+#if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
 #define SUPPORT_PANEL_REVISION	20
 	int read_startoffset;
 	char *name;
@@ -815,10 +1118,9 @@ struct dsi_panel_cmd_set {
  * @v_sync_polarity:  Polarity of VSYNC (false is active low).
  * @refresh_rate:     Refresh rate in Hz.
  * @clk_rate_hz:      DSI bit clock rate per lane in Hz.
- * @min_dsi_clk_hz:   Min DSI bit clock to transfer in vsync time.
  * @mdp_transfer_time_us:   Specifies the mdp transfer time for command mode
  *                    panels in microseconds.
- * @dsi_transfer_time_us:   Specifies dsi transfer time for command mode.
+ * @overlap_pixels:   overlap pixels for certain panels.
  * @dsc_enabled:      DSC compression enabled.
  * @dsc:              DSC compression configuration.
  * @roi_caps:         Panel ROI capabilities.
@@ -839,13 +1141,13 @@ struct dsi_mode_info {
 
 	u32 refresh_rate;
 	u64 clk_rate_hz;
-	u64 min_dsi_clk_hz;
 	u32 mdp_transfer_time_us;
-	u32 dsi_transfer_time_us;
+	u32 overlap_pixels;
 	bool dsc_enabled;
 	struct msm_display_dsc_info *dsc;
 	struct msm_roi_caps roi_caps;
-#if defined(CONFIG_DISPLAY_SAMSUNG)
+
+#if defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
 	/* Identify VRR HS by drm_mode's name.
 	 * drm_mode's name is defined by dsi_mode->timing.sot_hs_mode parsed
 	 * from samsung,mdss-dsi-sot-hs-mode in panel dtsi file.
@@ -856,6 +1158,11 @@ struct dsi_mode_info {
 	 * Refer to ss_is_sot_hs_from_drm_mode().
 	 */
 	bool sot_hs_mode;
+
+	/* DDI Passive mode.
+	 * ex) DDI 120hz + TE(AP) is 60hz.
+	 */
+	bool phs_mode;
 #endif
 };
 
@@ -875,8 +1182,6 @@ struct dsi_split_link_config {
  * struct dsi_host_common_cfg - Host configuration common to video and cmd mode
  * @dst_format:          Destination pixel format.
  * @data_lanes:          Physical data lanes to be enabled.
- * @num_data_lanes:      Number of physical data lanes.
- * @bpp:                 Number of bits per pixel.
  * @en_crc_check:        Enable CRC checks.
  * @en_ecc_check:        Enable ECC checks.
  * @te_mode:             Source for TE signalling.
@@ -898,17 +1203,16 @@ struct dsi_split_link_config {
  * @ignore_rx_eot:       Ignore Rx EOT packets if set to true.
  * @append_tx_eot:       Append EOT packets for forward transmissions if set to
  *                       true.
- * @ext_bridge_mode:     External bridge is connected.
+ * @ext_bridge_num:      Connected external bridge count.
+ * @ext_bridge_map:      External bridge config reg needs to match with the port
+ *                       reg config.
  * @force_hs_clk_lane:   Send continuous clock to the panel.
  * @phy_type:            DPHY/CPHY is enabled for this panel.
  * @dsi_split_link_config:  Split Link Configuration.
- * @byte_intf_clk_div:   Determines the factor for calculating byte intf clock.
  */
 struct dsi_host_common_cfg {
 	enum dsi_pixel_format dst_format;
 	enum dsi_data_lanes data_lanes;
-	u8 num_data_lanes;
-	u8 bpp;
 	bool en_crc_check;
 	bool en_ecc_check;
 	enum dsi_te_mode te_mode;
@@ -924,11 +1228,11 @@ struct dsi_host_common_cfg {
 	bool t_clk_pre_extend;
 	bool ignore_rx_eot;
 	bool append_tx_eot;
-	bool ext_bridge_mode;
+	u32 ext_bridge_num;
+	u32 ext_bridge_map[MAX_DSI_CTRLS_PER_DISPLAY];
 	bool force_hs_clk_lane;
 	enum dsi_phy_type phy_type;
 	struct dsi_split_link_config split_link;
-	u32 byte_intf_clk_div;
 };
 
 /**
@@ -984,7 +1288,7 @@ struct dsi_cmd_engine_cfg {
  * @common_config:         Host configuration common to both Video and Cmd mode.
  * @video_engine:          Video engine configuration if panel is in video mode.
  * @cmd_engine:            Cmd engine configuration if panel is in cmd mode.
- * @esc_clk_rate_hz:      Esc clock frequency in Hz.
+ * @esc_clk_rate_khz:      Esc clock frequency in Hz.
  * @bit_clk_rate_hz:       Bit clock frequency in Hz.
  * @bit_clk_rate_hz_override: DSI bit clk rate override from dt/sysfs.
  * @video_timing:          Video timing information of a frame.
@@ -1014,20 +1318,15 @@ struct dsi_host_config {
  * @panel_prefill_lines:  Panel prefill lines for RSC
  * @mdp_transfer_time_us:   Specifies the mdp transfer time for command mode
  *                          panels in microseconds.
- * @dsi_transfer_time_us: Specifies the dsi transfer time for cmd panels.
  * @clk_rate_hz:          DSI bit clock per lane in hz.
- * @min_dsi_clk_hz:       Min dsi clk per lane to transfer frame in vsync time.
+ * @overlap_pixels:       overlap pixels for certain panels.
  * @topology:             Topology selected for the panel
  * @dsc:                  DSC compression info
  * @dsc_enabled:          DSC compression enabled
  * @roi_caps:		  Panel ROI capabilities
  */
 struct dsi_display_mode_priv_info {
-#if !defined(CONFIG_DISPLAY_SAMSUNG)
 	struct dsi_panel_cmd_set cmd_sets[DSI_CMD_SET_MAX];
-#else
-	struct dsi_panel_cmd_set cmd_sets[SS_DSI_CMD_SET_MAX];
-#endif
 
 	u32 *phy_timing_val;
 	u32 phy_timing_len;
@@ -1036,9 +1335,8 @@ struct dsi_display_mode_priv_info {
 	u32 panel_jitter_denom;
 	u32 panel_prefill_lines;
 	u32 mdp_transfer_time_us;
-	u32 dsi_transfer_time_us;
 	u64 clk_rate_hz;
-	u64 min_dsi_clk_hz;
+	u32 overlap_pixels;
 
 	struct msm_display_topology topology;
 	struct msm_display_dsc_info dsc;
@@ -1051,16 +1349,14 @@ struct dsi_display_mode_priv_info {
  * @timing:         Timing parameters for the panel.
  * @pixel_clk_khz:  Pixel clock in Khz.
  * @dsi_mode_flags: Flags to signal other drm components via private flags
- * @panel_mode:      Panel mode
- * @is_preferred:   Is mode preferred
+ * @panel_mode:     Panel operating mode
  * @priv_info:      Mode private info
  */
 struct dsi_display_mode {
 	struct dsi_mode_info timing;
 	u32 pixel_clk_khz;
-	u32 dsi_mode_flags;
 	enum dsi_op_mode panel_mode;
-	bool is_preferred;
+	u32 dsi_mode_flags;
 	struct dsi_display_mode_priv_info *priv_info;
 };
 
