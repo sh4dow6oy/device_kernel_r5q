@@ -140,7 +140,6 @@ static int dsi_pwr_enable_vregs(struct dsi_regulator_info *regs, bool enable)
 				usleep_range((pre_on_ms * 1000),
 						(pre_on_ms * 1000) + 10);
 
-			reg_log_dump(__func__, __LINE__);
 			rc = regulator_set_load(vreg->vreg,
 						vreg->enable_load);
 			if (rc < 0) {
@@ -150,7 +149,6 @@ static int dsi_pwr_enable_vregs(struct dsi_regulator_info *regs, bool enable)
 			}
 			num_of_v = regulator_count_voltages(vreg->vreg);
 			if (num_of_v > 0) {
-				reg_log_dump(__func__, __LINE__);
 				rc = regulator_set_voltage(vreg->vreg,
 							   vreg->min_voltage,
 							   vreg->max_voltage);
@@ -161,7 +159,6 @@ static int dsi_pwr_enable_vregs(struct dsi_regulator_info *regs, bool enable)
 				}
 			}
 
-			reg_log_dump(__func__, __LINE__);
 			rc = regulator_enable(vreg->vreg);
 			if (rc) {
 				DSI_ERR("enable failed for %s, rc=%d\n",
@@ -179,7 +176,6 @@ static int dsi_pwr_enable_vregs(struct dsi_regulator_info *regs, bool enable)
 			pre_off_ms = vreg->pre_off_sleep;
 			post_off_ms = vreg->post_off_sleep;
 
-			reg_log_dump(__func__, __LINE__);
 			if (pre_off_ms)
 				usleep_range((pre_off_ms * 1000),
 						(pre_off_ms * 1000) + 10);
@@ -198,7 +194,6 @@ static int dsi_pwr_enable_vregs(struct dsi_regulator_info *regs, bool enable)
 						(post_off_ms * 1000) + 10);
 		}
 	}
-	reg_log_dump(__func__, __LINE__);
 
 	return 0;
 error_disable_opt_mode:
@@ -382,7 +377,6 @@ int dsi_pwr_enable_regulator(struct dsi_regulator_info *regs, bool enable)
 
 	if (enable) {
 		if (regs->refcount == 0) {
-			reg_log_dump(__func__, __LINE__);
 			rc = dsi_pwr_enable_vregs(regs, true);
 			if (rc)
 				DSI_ERR("failed to enable regulators\n");
@@ -395,7 +389,6 @@ int dsi_pwr_enable_regulator(struct dsi_regulator_info *regs, bool enable)
 		} else {
 			regs->refcount--;
 			if (regs->refcount == 0) {
-				reg_log_dump(__func__, __LINE__);
 				rc = dsi_pwr_enable_vregs(regs, false);
 				if (rc)
 					DSI_ERR("failed to disable vregs\n");
