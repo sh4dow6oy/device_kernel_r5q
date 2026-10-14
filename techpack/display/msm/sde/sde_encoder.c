@@ -4563,12 +4563,14 @@ static void sde_encoder_vsync_event_handler(struct timer_list *timer)
 		from_timer(sde_enc, timer, vsync_event_timer);
 	struct msm_drm_private *priv;
 	struct msm_drm_thread *event_thread;
+	struct drm_encoder *drm_enc = &sde_enc->base;
 
-	if (!drm_enc || !drm_enc->dev ||
-	    !drm_enc->dev->dev_private) {
+	if (!drm_enc->dev || !drm_enc->dev->dev_private) {
 		SDE_ERROR("invalid encoder parameters\n");
 		return;
 	}
+
+	priv = drm_enc->dev->dev_private;
 
 	sde_enc = to_sde_encoder_virt(drm_enc);
 	priv = drm_enc->dev->dev_private;
