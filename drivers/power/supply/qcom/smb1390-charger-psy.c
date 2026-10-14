@@ -1,13 +1,6 @@
-/* Copyright (c) 2017-2020 The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2017-2020 The Linux Foundation. All rights reserved.
  */
 
 #define pr_fmt(fmt) "SMB1390: %s: " fmt, __func__
@@ -467,7 +460,7 @@ static int smb1390_get_cp_en_status(struct smb1390 *chip, int id, bool *enable)
 		*enable = !!(status & EN_PIN_OUT2_BIT);
 		break;
 	default:
-		smb1390_dbg(chip, PR_MISC, "cp_en status %d is not supported",
+		smb1390_dbg(chip, PR_MISC, "cp_en status %d is not supported\n",
 				id);
 		rc = -EINVAL;
 		break;
@@ -1097,7 +1090,7 @@ static void smb1390_status_change_work(struct work_struct *work)
 	struct smb1390 *chip = container_of(work, struct smb1390,
 					    status_change_work);
 	union power_supply_propval pval = {0, };
-	int rc;
+	int rc, dc_current_max = 0;
 
 	if (!is_psy_voter_available(chip))
 		goto out;
@@ -1144,11 +1137,21 @@ static void smb1390_status_change_work(struct work_struct *work)
 			vote(chip->ilim_votable, ICL_VOTER, false, 0);
 			rc = power_supply_get_property(chip->dc_psy,
 					POWER_SUPPLY_PROP_CURRENT_MAX, &pval);
-			if (rc < 0)
+			if (rc < 0) {
 				pr_err("Couldn't get dc icl rc=%d\n", rc);
-			else
-				vote(chip->ilim_votable, WIRELESS_VOTER, true,
-						pval.intval);
+			} else {
+				dc_current_max = pval.intval;
+
+				rc = power_supply_get_property(chip->dc_psy,
+						POWER_SUPPLY_PROP_AICL_DONE,
+						&pval);
+				if (rc < 0)
+					pr_err("Couldn't get aicl done rc=%d\n",
+							rc);
+				else if (pval.intval)
+					vote(chip->ilim_votable, WIRELESS_VOTER,
+							true, dc_current_max);
+			}
 		} else {
 			vote(chip->ilim_votable, WIRELESS_VOTER, false, 0);
 			smb1390_configure_ilim(chip, pval.intval);
@@ -1194,6 +1197,7 @@ static void smb1390_status_change_work(struct work_struct *work)
 		vote(chip->fcc_votable, CP_VOTER, false, 0);
 		vote(chip->disable_votable, SOC_LEVEL_VOTER, true, 0);
 		vote_override(chip->ilim_votable, CC_MODE_VOTER, false, 0);
+		vote(chip->ilim_votable, WIRELESS_VOTER, false, 0);
 		vote(chip->slave_disable_votable, TAPER_END_VOTER, false, 0);
 		vote(chip->slave_disable_votable, MAIN_DISABLE_VOTER, true, 0);
 		vote_override(chip->usb_icl_votable, TAPER_MAIN_ICL_LIMIT_VOTER,
@@ -1217,7 +1221,7 @@ static int smb1390_validate_slave_chg_taper(struct smb1390 *chip, int fcc_uA)
 		vote(chip->slave_disable_votable, TAPER_END_VOTER,
 					true, 0);
 		/*
-		 * Set ILIM of master SMB1390 to Max value = 3.2A once slave is
+		 * Set ILIM of master CP to Max value = 3.2A once slave is
 		 * disabled to prevent ILIM irq storm.
 		 */
 		smb1390_dbg(chip, PR_INFO, "Set Master ILIM to MAX, post Slave disable in taper, fcc=%d\n",
@@ -1607,7 +1611,7 @@ static int smb1390_parse_dt(struct smb1390 *chip)
 	of_property_read_u32(chip->dev->of_node, "qcom,min-ilim-ua",
 			&chip->min_ilim_ua);
 
-	chip->max_temp_alarm_degc = 110;
+	chip->max_temp_alarm_degc = 105;
 	of_property_read_u32(chip->dev->of_node, "qcom,max-temp-alarm-degc",
 			&chip->max_temp_alarm_degc);
 
@@ -1712,16 +1716,16 @@ static int smb1390_init_hw(struct smb1390 *chip)
 		return rc;
 
 	switch (chip->max_temp_alarm_degc) {
-	case 125:
+	case 115:
 		val = 0x00;
 		break;
-	case 95:
+	case 90:
 		val = 0x02;
 		break;
-	case 85:
+	case 80:
 		val = 0x03;
 		break;
-	case 110:
+	case 105:
 	default:
 		val = 0x01;
 		break;
@@ -1951,8 +1955,8 @@ out_notifier:
 out_votables:
 	smb1390_destroy_votables(chip);
 out_work:
-	cancel_work(&chip->taper_work);
-	cancel_work(&chip->status_change_work);
+	cancel_work_sync(&chip->taper_work);
+	cancel_work_sync(&chip->status_change_work);
 	wakeup_source_unregister(chip->cp_ws);
 	return rc;
 }
@@ -2097,7 +2101,7 @@ static int smb1390_probe(struct platform_device *pdev)
 	}
 
 	platform_set_drvdata(pdev, chip);
-	chip->cp_role = (uintptr_t)of_device_get_match_data(chip->dev);
+	chip->cp_role = (int)(unsigned long)of_device_get_match_data(chip->dev);
 	switch (chip->cp_role) {
 	case CP_MASTER:
 		rc = smb1390_master_probe(chip);
@@ -2141,8 +2145,8 @@ static int smb1390_remove(struct platform_device *pdev)
 	/* explicitly disable charging */
 	vote(chip->disable_votable, USER_VOTER, true, 0);
 	vote(chip->disable_votable, SOC_LEVEL_VOTER, true, 0);
-	cancel_work(&chip->taper_work);
-	cancel_work(&chip->status_change_work);
+	cancel_work_sync(&chip->taper_work);
+	cancel_work_sync(&chip->status_change_work);
 	wakeup_source_unregister(chip->cp_ws);
 	smb1390_destroy_votables(chip);
 	smb1390_release_channels(chip);
@@ -2200,7 +2204,6 @@ static const struct dev_pm_ops smb1390_pm_ops = {
 static struct platform_driver smb1390_driver = {
 	.driver	= {
 		.name		= "qcom,smb1390-charger-psy",
-		.owner		= THIS_MODULE,
 		.pm		= &smb1390_pm_ops,
 		.of_match_table	= match_table,
 	},
