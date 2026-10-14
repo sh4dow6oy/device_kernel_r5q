@@ -2,6 +2,10 @@
 #include <linux/msm-bus.h>
 #include <linux/msm-bus-board.h>
 
+#ifndef DVFS_TOUCH_ID
+#define DVFS_TOUCH_ID 0
+#endif
+
 u32 bus_hdl = 0;
 struct pm_qos_request lpm_bias_pm_qos_request;
 int release_value[MAX_RES_COUNT];
