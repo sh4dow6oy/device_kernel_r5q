@@ -1,6 +1,15 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Copyright (c) 2016-2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
 
 #ifndef _DSI_DRM_H_
@@ -14,8 +23,6 @@
 #include "msm_drv.h"
 
 #include "dsi_display.h"
-
-#define NO_OVERRIDE -1
 
 struct dsi_bridge {
 	struct drm_bridge base;
@@ -53,11 +60,10 @@ enum drm_connector_status dsi_conn_detect(struct drm_connector *conn,
  * dsi_connector_get_modes - callback to add drm modes via drm_mode_probed_add()
  * @connector: Pointer to drm connector structure
  * @display: Pointer to private display handle
- * @avail_res: Pointer with curr available resources
  * Returns: Number of modes added
  */
 int dsi_connector_get_modes(struct drm_connector *connector,
-		void *display, const struct msm_resource_caps_info *avail_res);
+		void *display);
 
 /**
  * dsi_connector_put_modes - callback to free up drm modes of the connector
@@ -71,29 +77,28 @@ void dsi_connector_put_modes(struct drm_connector *connector,
  * dsi_conn_get_mode_info - retrieve information on the mode selected
  * @drm_mode: Display mode set for the display
  * @mode_info: Out parameter. information of the mode.
+ * @max_mixer_width: max width supported by HW layer mixer
  * @display: Pointer to private display structure
- * @avail_res: Pointer with curr available resources
  * Returns: Zero on success
  */
 int dsi_conn_get_mode_info(struct drm_connector *connector,
 		const struct drm_display_mode *drm_mode,
-		struct msm_mode_info *mode_info,
-		void *display, const struct msm_resource_caps_info *avail_res);
+		struct msm_mode_info *mode_info, u32 max_mixer_width,
+		void *display);
 
 /**
  * dsi_conn_mode_valid - callback to determine if specified mode is valid
  * @connector: Pointer to drm connector structure
  * @mode: Pointer to drm mode structure
  * @display: Pointer to private display handle
- * @avail_res: Pointer with curr available resources
  * Returns: Validity status for specified mode
  */
 enum drm_mode_status dsi_conn_mode_valid(struct drm_connector *connector,
 		struct drm_display_mode *mode,
-		void *display, const struct msm_resource_caps_info *avail_res);
+		void *display);
 
 /**
- * dsi_conn_enable_event - callback to notify DSI driver of event registration
+ * dsi_conn_enable_event - callback to notify DSI driver of event registeration
  * @connector: Pointer to drm connector structure
  * @event_idx: Connector event index
  * @enable: Whether or not the event is enabled
@@ -147,5 +152,6 @@ u64 dsi_drm_find_bit_clk_rate(void *display,
  */
 int dsi_conn_prepare_commit(void *display,
 		struct msm_display_conn_params *params);
+
 
 #endif /* _DSI_DRM_H_ */

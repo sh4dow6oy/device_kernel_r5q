@@ -1,6 +1,15 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2015-2020, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
 
 #ifndef _DSI_CTRL_H_
@@ -31,8 +40,6 @@
  * @DSI_CTRL_CMD_NON_EMBEDDED_MODE:Transfer cmd packets in non embedded mode.
  * @DSI_CTRL_CMD_CUSTOM_DMA_SCHED: Use the dma scheduling line number defined in
  *				   display panel dtsi file instead of default.
- * @DSI_CTRL_CMD_ASYNC_WAIT: Command flag to indicate that the wait for done
- *			for this command is asynchronous and must be queued.
  */
 #define DSI_CTRL_CMD_READ             0x1
 #define DSI_CTRL_CMD_BROADCAST        0x2
@@ -43,7 +50,6 @@
 #define DSI_CTRL_CMD_LAST_COMMAND     0x40
 #define DSI_CTRL_CMD_NON_EMBEDDED_MODE 0x80
 #define DSI_CTRL_CMD_CUSTOM_DMA_SCHED  0x100
-#define DSI_CTRL_CMD_ASYNC_WAIT 0x200
 
 /* DSI embedded mode fifo size
  * If the command is greater than 256 bytes it is sent in non-embedded mode.
@@ -53,9 +59,10 @@
 /* max size supported for dsi cmd transfer using TPG */
 #define DSI_CTRL_MAX_CMD_FIFO_STORE_SIZE 64
 
-#if defined(CONFIG_DISPLAY_SAMSUNG)
+#if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
 /* max size supported for dsi cmd transfer using DMA */
 #define DSI_CTRL_MAX_CMD_FET_MEMORY_SIZE 200
+#define DSI_CTRL_MAX_CMD_FET_MEMORY_SIZE_ONE_DSI_LANE 100
 #endif
 
 /**
@@ -82,6 +89,7 @@ enum dsi_engine_state {
 	DSI_CTRL_ENGINE_ON,
 	DSI_CTRL_ENGINE_MAX,
 };
+
 
 /**
  * enum dsi_ctrl_driver_ops - controller driver ops
@@ -225,19 +233,9 @@ struct dsi_ctrl_interrupts {
  * @vaddr:               CPU virtual address of cmd buffer.
  * @secure_mode:         Indicates if secure-session is in progress
  * @esd_check_underway:  Indicates if esd status check is in progress
- * @dma_cmd_wait:	Work object waiting on DMA command transfer done.
- * @dma_cmd_workq:	Pointer to the workqueue of DMA command transfer done
- *				wait sequence.
- * @dma_wait_queued:	Indicates if any DMA command transfer wait work
- *				is queued.
- * @dma_irq_trig:		 Atomic state to indicate DMA done IRQ
- *				triggered.
  * @debugfs_root:        Root for debugfs entries.
  * @misr_enable:         Frame MISR enable/disable
  * @misr_cache:          Cached Frame MISR value
- * @frame_threshold_time_us: Frame threshold time in microseconds, where
- *		 	  dsi data lane will be idle i.e from pingpong done to
- *			  next TE for command mode.
  * @phy_isolation_enabled:    A boolean property allows to isolate the phy from
  *                          dsi controller and run only dsi controller.
  * @null_insertion_enabled:  A boolean property to allow dsi controller to
@@ -282,10 +280,6 @@ struct dsi_ctrl {
 	void *vaddr;
 	bool secure_mode;
 	bool esd_check_underway;
-	struct work_struct dma_cmd_wait;
-	struct workqueue_struct *dma_cmd_workq;
-	bool dma_wait_queued;
-	atomic_t dma_irq_trig;
 
 	/* Debug Information */
 	struct dentry *debugfs_root;
@@ -293,8 +287,6 @@ struct dsi_ctrl {
 	/* MISR */
 	bool misr_enable;
 	u32 misr_cache;
-
-	u32 frame_threshold_time_us;
 
 	/* Check for spurious interrupts */
 	unsigned long jiffies_start;
@@ -366,7 +358,6 @@ int dsi_ctrl_validate_timing(struct dsi_ctrl *dsi_ctrl,
  * dsi_ctrl_update_host_config() - update dsi host configuration
  * @dsi_ctrl:          DSI controller handle.
  * @config:            DSI host configuration.
- * @mode:              DSI host mode selected.
  * @flags:             dsi_mode_flags modifying the behavior
  * @clk_handle:        Clock handle for DSI clocks
  *
@@ -378,8 +369,7 @@ int dsi_ctrl_validate_timing(struct dsi_ctrl *dsi_ctrl,
  */
 int dsi_ctrl_update_host_config(struct dsi_ctrl *dsi_ctrl,
 				struct dsi_host_config *config,
-				struct dsi_display_mode *mode, int flags,
-				void *clk_handle);
+				int flags, void *clk_handle);
 
 /**
  * dsi_ctrl_timing_db_update() - update only controller Timing DB
@@ -504,27 +494,15 @@ int dsi_ctrl_host_deinit(struct dsi_ctrl *dsi_ctrl);
 int dsi_ctrl_set_ulps(struct dsi_ctrl *dsi_ctrl, bool enable);
 
 /**
- * dsi_ctrl_timing_setup() - Setup DSI host config
- * @dsi_ctrl:        DSI controller handle.
- *
- * Initializes DSI controller hardware with host configuration provided by
- * dsi_ctrl_update_host_config(). This is called while setting up DSI host
- * through dsi_ctrl_setup() and after any ROI change.
- *
- * Also used to program the video mode timing values.
- *
- * Return: error code.
- */
-int dsi_ctrl_timing_setup(struct dsi_ctrl *dsi_ctrl);
-
-/**
  * dsi_ctrl_setup() - Setup DSI host hardware while coming out of idle screen.
  * @dsi_ctrl:        DSI controller handle.
  *
- * Initialization of DSI controller hardware with host configuration and
- * enabling required interrupts. Initialization can be performed only during
+ * Initializes DSI controller hardware with host configuration provided by
+ * dsi_ctrl_update_host_config(). Initialization can be performed only during
  * DSI_CTRL_POWER_CORE_CLK_ON state and after the PHY SW reset has been
  * performed.
+ *
+ * Also used to program the video mode timing values.
  *
  * Return: error code.
  */
@@ -569,7 +547,7 @@ int dsi_ctrl_set_tpg_state(struct dsi_ctrl *dsi_ctrl, bool on);
  */
 int dsi_ctrl_cmd_transfer(struct dsi_ctrl *dsi_ctrl,
 			  const struct mipi_dsi_msg *msg,
-			  u32 *flags);
+			  u32 flags);
 
 /**
  * dsi_ctrl_cmd_tx_trigger() - Trigger a deferred command.
@@ -838,7 +816,7 @@ int dsi_ctrl_wait_for_cmd_mode_mdp_idle(struct dsi_ctrl *dsi_ctrl);
  * dsi_ctrl_update_host_state() - Set the host state
  */
 int dsi_ctrl_update_host_state(struct dsi_ctrl *dsi_ctrl,
-					enum dsi_ctrl_driver_ops op, bool en);
+			       enum dsi_ctrl_driver_ops op, bool en);
 
 /**
  * dsi_ctrl_pixel_format_to_bpp() - returns number of bits per pxl
@@ -866,20 +844,4 @@ void dsi_ctrl_set_continuous_clk(struct dsi_ctrl *dsi_ctrl, bool enable);
  * @dsi_ctrl:                      DSI controller handle.
  */
 int dsi_ctrl_wait4dynamic_refresh_done(struct dsi_ctrl *ctrl);
-void dsi_ctrl_mask_overflow(struct dsi_ctrl *dsi_ctrl, bool enable);
-int dsi_ctrl_cmd_clear_interrupt(struct dsi_ctrl *dsi_ctrl, u32 flags);
-
-/**
- * dsi_ctrl_mask_overflow() -	API to mask/unmask overflow errors.
- * @dsi_ctrl:			DSI controller handle.
- * @enable:			variable to control masking/unmasking.
- */
-void dsi_ctrl_mask_overflow(struct dsi_ctrl *dsi_ctrl, bool enable);
-
-/**
- * dsi_ctrl_clear_slave_dma_status -   API to clear slave DMA status
- * @dsi_ctrl:                   DSI controller handle.
- * @flags:                      Modifiers
- */
-int dsi_ctrl_clear_slave_dma_status(struct dsi_ctrl *dsi_ctrl, u32 flags);
 #endif /* _DSI_CTRL_H_ */

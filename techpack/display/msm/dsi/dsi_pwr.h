@@ -1,6 +1,15 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
 
 #ifndef _DSI_PWR_H_
@@ -90,7 +99,7 @@ int dsi_pwr_enable_regulator(struct dsi_regulator_info *regs, bool enable);
  * dsi_pwr_panel_regulator_mode_set()
  * set regulator mode for OLED panel
  * @regs:       Pointer to set of regulators to enable or disable.
- * @reg_name:		Panel regulator name
+ * @reg_name:	Panel regulator name
  * @regulator_mode:	Regulator mode values, like:
  *                  REGULATOR_MODE_INVALID
  *                  REGULATOR_MODE_FAST
@@ -101,6 +110,6 @@ int dsi_pwr_enable_regulator(struct dsi_regulator_info *regs, bool enable);
  * return: error code in case of failure or 0 for success.
  */
 int dsi_pwr_panel_regulator_mode_set(struct dsi_regulator_info *regs,
-						const char *reg_name,
-						int regulator_mode);
+					const char *reg_name,
+					int regulator_mode);
 #endif /* _DSI_PWR_H_ */

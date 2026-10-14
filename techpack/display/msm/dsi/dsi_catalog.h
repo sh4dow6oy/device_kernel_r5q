@@ -1,6 +1,15 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2015-2020, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
 
 #ifndef _DSI_CATALOG_H_
@@ -58,6 +67,7 @@ int dsi_phy_timing_calc_init(struct dsi_phy_hw *phy,
  * @host:       DSI host configuration.
  * @timing:     DSI phy lane configurations.
  * @use_mode_bit_clk: Boolean to indicate whether to recalculate bit clk.
+ * @is_cphy:	Boolean to indicate whether cphy mode.
  *
  * This function setups the catalog information in the dsi_phy_hw object.
  *
@@ -67,7 +77,7 @@ int dsi_phy_hw_calculate_timing_params(struct dsi_phy_hw *phy,
 				       struct dsi_mode_info *mode,
 				       struct dsi_host_common_cfg *host,
 				       struct dsi_phy_per_lane_cfgs *timing,
-				       bool use_mode_bit_clk);
+				       bool use_mode_bit_clk, bool is_cphy);
 
 /* Definitions for 14nm PHY hardware driver */
 void dsi_phy_hw_v2_0_regulator_enable(struct dsi_phy_hw *phy,
@@ -82,7 +92,7 @@ int dsi_phy_hw_timing_val_v2_0(struct dsi_phy_per_lane_cfgs *timing_cfg,
 void dsi_phy_hw_v2_0_clamp_ctrl(struct dsi_phy_hw *phy, bool enable);
 void dsi_phy_hw_v2_0_dyn_refresh_helper(struct dsi_phy_hw *phy, u32 offset);
 void dsi_phy_hw_v2_0_dyn_refresh_config(struct dsi_phy_hw *phy,
-		struct dsi_phy_cfg *cfg, bool is_master);
+		struct dsi_phy_cfg *cfg, bool is_master, bool is_cphy);
 void dsi_phy_hw_v2_0_dyn_refresh_pipe_delay(struct dsi_phy_hw *phy,
 		struct dsi_dyn_clk_delay *delay);
 int dsi_phy_hw_v2_0_cache_phy_timings(struct dsi_phy_per_lane_cfgs *timings,
@@ -107,11 +117,6 @@ void dsi_phy_hw_v3_0_clamp_ctrl(struct dsi_phy_hw *phy, bool enable);
 int dsi_phy_hw_v3_0_lane_reset(struct dsi_phy_hw *phy);
 void dsi_phy_hw_v3_0_toggle_resync_fifo(struct dsi_phy_hw *phy);
 
-#if defined(CONFIG_DISPLAY_SAMSUNG)
-void dsi_phy_hw_v4_0_store_str(struct dsi_phy_hw *phy, u32 *val);
-void dsi_phy_hw_v4_0_store_emphasis(struct dsi_phy_hw *phy, u32 *val);
-#endif
-
 /* Definitions for 7nm PHY hardware driver */
 void dsi_phy_hw_v4_0_enable(struct dsi_phy_hw *phy, struct dsi_phy_cfg *cfg);
 void dsi_phy_hw_v4_0_disable(struct dsi_phy_hw *phy, struct dsi_phy_cfg *cfg);
@@ -128,8 +133,6 @@ int dsi_phy_hw_v4_0_lane_reset(struct dsi_phy_hw *phy);
 void dsi_phy_hw_v4_0_toggle_resync_fifo(struct dsi_phy_hw *phy);
 void dsi_phy_hw_v4_0_reset_clk_en_sel(struct dsi_phy_hw *phy);
 void dsi_phy_hw_v4_0_set_continuous_clk(struct dsi_phy_hw *phy, bool enable);
-void dsi_phy_hw_v4_0_commit_phy_timing(struct dsi_phy_hw *phy,
-		struct dsi_phy_per_lane_cfgs *timing);
 
 /* DSI controller common ops */
 u32 dsi_ctrl_hw_cmn_get_interrupt_status(struct dsi_ctrl_hw *ctrl);
@@ -140,8 +143,6 @@ void dsi_ctrl_hw_cmn_enable_status_interrupts(struct dsi_ctrl_hw *ctrl,
 					     u32 ints);
 
 u64 dsi_ctrl_hw_cmn_get_error_status(struct dsi_ctrl_hw *ctrl);
-void dsi_ctrl_hw_cmn_dma_read_before_trigger(struct dsi_ctrl_hw *ctrl);
-u32 dsi_ctrl_hw_cmn_read_mdp_line_count(struct dsi_ctrl_hw *ctrl);
 void dsi_ctrl_hw_cmn_clear_error_status(struct dsi_ctrl_hw *ctrl, u64 errors);
 void dsi_ctrl_hw_cmn_enable_error_interrupts(struct dsi_ctrl_hw *ctrl,
 					    u64 errors);
@@ -252,6 +253,7 @@ void dsi_ctrl_hw_kickoff_non_embedded_mode(struct dsi_ctrl_hw *ctrl,
 					u32 flags);
 
 /* Definitions specific to 2.2 DSI controller hardware */
+bool dsi_ctrl_hw_22_get_cont_splash_status(struct dsi_ctrl_hw *ctrl);
 void dsi_ctrl_hw_22_config_clk_gating(struct dsi_ctrl_hw *ctrl, bool enable,
 		enum dsi_clk_gate_type clk_selection);
 
@@ -261,20 +263,11 @@ void dsi_ctrl_hw_cmn_hs_req_sel(struct dsi_ctrl_hw *ctrl, bool sel_phy);
 /* dynamic refresh specific functions */
 void dsi_phy_hw_v3_0_dyn_refresh_helper(struct dsi_phy_hw *phy, u32 offset);
 void dsi_phy_hw_v3_0_dyn_refresh_config(struct dsi_phy_hw *phy,
-				struct dsi_phy_cfg *cfg, bool is_master);
+		struct dsi_phy_cfg *cfg, bool is_master, bool is_cphy);
 void dsi_phy_hw_v3_0_dyn_refresh_pipe_delay(struct dsi_phy_hw *phy,
 					    struct dsi_dyn_clk_delay *delay);
 
 int dsi_ctrl_hw_cmn_wait4dynamic_refresh_done(struct dsi_ctrl_hw *ctrl);
 int dsi_phy_hw_v3_0_cache_phy_timings(struct dsi_phy_per_lane_cfgs *timings,
-				      u32 *dst, u32 size);
-
-void dsi_phy_hw_v4_0_dyn_refresh_helper(struct dsi_phy_hw *phy, u32 offset);
-void dsi_phy_hw_v4_0_dyn_refresh_config(struct dsi_phy_hw *phy,
-				struct dsi_phy_cfg *cfg, bool is_master);
-void dsi_phy_hw_v4_0_dyn_refresh_pipe_delay(struct dsi_phy_hw *phy,
-					    struct dsi_dyn_clk_delay *delay);
-
-int dsi_phy_hw_v4_0_cache_phy_timings(struct dsi_phy_per_lane_cfgs *timings,
 				      u32 *dst, u32 size);
 #endif /* _DSI_CATALOG_H_ */

@@ -1,6 +1,15 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2016-2020, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
 
 #ifndef _DSI_PANEL_H_
@@ -23,17 +32,14 @@
 
 #define MAX_BL_LEVEL 4096
 #define MAX_BL_SCALE_LEVEL 1024
-#define MAX_SV_BL_SCALE_LEVEL 65535
+#define MAX_AD_BL_SCALE_LEVEL 65535
 #define DSI_CMD_PPS_SIZE 135
 
+#if defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
 #define DSI_MODE_MAX 32
-
-/*
- * Defining custom dsi msg flag,
- * continued from drm_mipi_dsi.h
- * Override to use async transfer
- */
-#define MIPI_DSI_MSG_ASYNC_OVERRIDE BIT(4)
+#else
+#define DSI_MODE_MAX 5
+#endif
 
 enum dsi_panel_rotation {
 	DSI_PANEL_ROTATE_NONE = 0,
@@ -88,6 +94,7 @@ struct dsi_dyn_clk_caps {
 	bool dyn_clk_support;
 	u32 *bit_clk_list;
 	u32 bit_clk_list_len;
+	bool skip_phy_timing_update;
 	enum dsi_dyn_clk_feature_type type;
 	bool maintain_const_fps;
 };
@@ -111,10 +118,10 @@ struct dsi_backlight_config {
 	u32 bl_min_level;
 	u32 bl_max_level;
 	u32 brightness_max_level;
+	u32 brightness_default_level;
 	u32 bl_level;
 	u32 bl_scale;
-	u32 bl_scale_sv;
-	bool bl_inverted_dbv;
+	u32 bl_scale_ad;
 
 	int en_gpio;
 	/* PWM params */
@@ -148,7 +155,7 @@ enum esd_check_status_mode {
 	ESD_MODE_PANEL_TE,
 	ESD_MODE_SW_SIM_SUCCESS,
 	ESD_MODE_SW_SIM_FAILURE,
-#if defined(CONFIG_DISPLAY_SAMSUNG)
+#if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
 	ESD_MODE_PANEL_IRQ,
 #endif
 	ESD_MODE_MAX
@@ -205,7 +212,9 @@ struct dsi_panel {
 	bool ulps_feature_enabled;
 	bool ulps_suspend_enabled;
 	bool allow_phy_power_off;
+#if defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
 	bool reset_gpio_always_on;
+#endif
 	atomic_t esd_recovery_pending;
 
 	bool panel_initialized;
@@ -213,18 +222,21 @@ struct dsi_panel {
 	u32 qsync_min_fps;
 
 	char dsc_pps_cmd[DSI_CMD_PPS_SIZE];
-#if defined(CONFIG_DISPLAY_SAMSUNG)
+#if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
 	void *panel_private;
 	struct device_node *self_display_of_node;
 	struct dsi_parser_utils self_display_utils;
+#if defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
 	struct device_node *mafpc_of_node;
 	struct dsi_parser_utils mafpc_utils;
+#endif
 #endif
 	enum dsi_dms_mode dms_mode;
 
 	bool sync_broadcast_en;
-
+#if defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
 	int panel_test_gpio;
+#endif
 	int power_mode;
 	enum dsi_panel_physical_type panel_type;
 };
@@ -324,8 +336,11 @@ int dsi_panel_send_roi_dcs(struct dsi_panel *panel, int ctrl_idx,
 		struct dsi_rect *roi);
 
 int dsi_panel_pre_mode_switch_to_video(struct dsi_panel *panel);
+
 int dsi_panel_pre_mode_switch_to_cmd(struct dsi_panel *panel);
+
 int dsi_panel_mode_switch_to_cmd(struct dsi_panel *panel);
+
 int dsi_panel_mode_switch_to_vid(struct dsi_panel *panel);
 
 int dsi_panel_switch(struct dsi_panel *panel);
@@ -344,16 +359,18 @@ int dsi_panel_parse_esd_reg_read_configs(struct dsi_panel *panel);
 
 void dsi_panel_ext_bridge_put(struct dsi_panel *panel);
 
-void dsi_panel_calc_dsi_transfer_time(struct dsi_host_common_cfg *config,
-		struct dsi_display_mode *mode, u32 frame_threshold_us);
-
-#if defined(CONFIG_DISPLAY_SAMSUNG)
+#if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
 int dsi_panel_set_pinctrl_state(struct dsi_panel *panel, bool enable);
 int dsi_panel_power_on(struct dsi_panel *panel);
 int dsi_panel_power_off(struct dsi_panel *panel);
 int dsi_panel_tx_cmd_set(struct dsi_panel *panel, enum dsi_cmd_set_type type);
 int ss_dsi_panel_parse_cmd_sets(struct dsi_panel_cmd_set *cmd_sets,
 			struct dsi_panel *panel);
+#if defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
+#define SS_CMD_PROP_STR_LEN (100)
+void dsi_panel_calc_dsi_transfer_time(struct dsi_host_common_cfg *config,
+		struct dsi_display_mode *mode, u32 frame_threshold_us);
+#endif
 #endif
 
 #endif /* _DSI_PANEL_H_ */

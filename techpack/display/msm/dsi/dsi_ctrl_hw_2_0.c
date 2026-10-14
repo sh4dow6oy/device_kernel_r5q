@@ -1,8 +1,18 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2016-2017, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
 
+#define pr_fmt(fmt) "dsi-hw:" fmt
 #include <linux/delay.h>
 #include <linux/iopoll.h>
 
@@ -20,7 +30,7 @@ void dsi_ctrl_hw_20_setup_lane_map(struct dsi_ctrl_hw *ctrl,
 
 	DSI_W32(ctrl, DSI_LANE_SWAP_CTRL, reg_value);
 
-	DSI_CTRL_HW_DBG(ctrl, "Lane swap setup complete\n");
+	pr_debug("[DSI_%d] Lane swap setup complete\n", ctrl->index);
 }
 
 int dsi_ctrl_hw_20_wait_for_lane_idle(struct dsi_ctrl_hw *ctrl,
@@ -43,13 +53,13 @@ int dsi_ctrl_hw_20_wait_for_lane_idle(struct dsi_ctrl_hw *ctrl,
 	if (lanes & DSI_DATA_LANE_3)
 		fifo_empty_mask |= BIT(28);
 
-	DSI_CTRL_HW_DBG(ctrl, "polling for fifo empty, mask=0x%08x\n",
+	pr_debug("%s: polling for fifo empty, mask=0x%08x\n", __func__,
 		fifo_empty_mask);
 	rc = readl_poll_timeout(ctrl->base + DSI_FIFO_STATUS, val,
 			(val & fifo_empty_mask), sleep_us, timeout_us);
 	if (rc) {
-		DSI_CTRL_HW_ERR(ctrl, "fifo not empty, FIFO_STATUS=0x%08x\n",
-				val);
+		pr_err("%s: fifo not empty, FIFO_STATUS=0x%08x\n",
+				__func__, val);
 		goto error;
 	}
 
@@ -219,6 +229,6 @@ ssize_t dsi_ctrl_hw_20_reg_dump_to_buffer(struct dsi_ctrl_hw *ctrl,
 	len += snprintf((buf + len), (size - len),
 			DUMP_REG_VALUE(DSI_VERSION));
 
-	DSI_CTRL_HW_ERR(ctrl, "LLENGTH = %d\n", len);
+	pr_err("LLENGTH = %d\n", len);
 	return len;
 }

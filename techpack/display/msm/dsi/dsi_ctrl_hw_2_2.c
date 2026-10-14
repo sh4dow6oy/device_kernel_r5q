@@ -1,13 +1,23 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
+
+#define pr_fmt(fmt) "dsi-hw:" fmt
 
 #include "dsi_ctrl_hw.h"
 #include "dsi_ctrl_reg.h"
 #include "dsi_hw.h"
 #include "dsi_catalog.h"
-#include "../sde_dbg.h"
 
 #define DISP_CC_MISC_CMD_REG_OFF 0x00
 
@@ -48,6 +58,25 @@ void dsi_ctrl_hw_22_schedule_dma_cmd(struct dsi_ctrl_hw *ctrl, int line_no)
 	reg |= (line_no & 0xffff);
 
 	DSI_W32(ctrl, DSI_DMA_SCHEDULE_CTRL, reg);
+}
+
+/*
+ * dsi_ctrl_hw_22_get_cont_splash_status() - to verify whether continuous
+ *                                           splash is enabled or not
+ * @ctrl:          Pointer to the controller host hardware.
+ *
+ * Return:         Return Continuous splash status
+ */
+bool dsi_ctrl_hw_22_get_cont_splash_status(struct dsi_ctrl_hw *ctrl)
+{
+	u32 reg = 0;
+
+	/**
+	 * DSI scratch register 1 is used to notify whether continuous
+	 * splash is enabled or not by bootloader
+	 */
+	reg = DSI_R32(ctrl, DSI_SCRATCH_REGISTER_1);
+	return reg == 0x1 ? true : false;
 }
 
 /*
@@ -94,8 +123,6 @@ void dsi_ctrl_hw_kickoff_non_embedded_mode(struct dsi_ctrl_hw *ctrl,
 
 	if (!(flags & DSI_CTRL_HW_CMD_WAIT_FOR_TRIGGER))
 		DSI_W32(ctrl, DSI_CMD_MODE_DMA_SW_TRIGGER, 0x1);
-
-	SDE_EVT32(cmd->length);
 }
 
 /*

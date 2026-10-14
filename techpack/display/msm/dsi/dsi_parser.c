@@ -1,7 +1,18 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2018-2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2018, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
+
+#define pr_fmt(fmt)	"[dsi-parser] %s: " fmt, __func__
 
 #include <linux/delay.h>
 #include <linux/slab.h>
@@ -12,7 +23,6 @@
 #include <linux/device.h>
 
 #include "dsi_parser.h"
-#include "dsi_defs.h"
 
 #define DSI_PARSER_MAX_NODES 20
 
@@ -99,15 +109,10 @@ static char *dsi_parser_get_data(char *start, char *end, char *str)
 	return NULL;
 }
 
-static bool dsi_parser_get_tuples_data(
+static bool dsi_parser_get_tuplets_data(
 		struct dsi_parser_prop *prop, char *str)
 {
 	bool middle_of_tx = false;
-
-	if (!str) {
-		DSI_ERR("Invalid input\n");
-		return middle_of_tx;
-	}
 
 	while (str) {
 		char *out = strsep(&str, " ");
@@ -129,16 +134,11 @@ static bool dsi_parser_get_strings(struct device *dev,
 	int i = 0;
 	int count = 0;
 
-	if (!str) {
-		DSI_ERR("Invalid input\n");
-		goto end;
-	}
-
 	if (!dsi_parser_count(str, '"'))
 		goto end;
 
 	count = dsi_parser_count(str, ',');
-	DSI_DEBUG("count=%d\n", count);
+	pr_debug("count=%d\n", count);
 
 	if (!count) {
 		prop->value = dsi_parser_get_data("\"", "\"", str);
@@ -171,16 +171,11 @@ end:
 	return middle_of_tx;
 }
 
-static bool dsi_parser_get_tuples(struct device *dev,
+static bool dsi_parser_get_tuplets(struct device *dev,
 			struct dsi_parser_prop *prop, char *str)
 {
 	bool middle_of_tx = false;
 	char *data = NULL;
-
-	if (!str) {
-		DSI_ERR("Invalid input\n");
-		return middle_of_tx;
-	}
 
 	while (str) {
 		char *out = strsep(&str, ",");
@@ -189,7 +184,7 @@ static bool dsi_parser_get_tuples(struct device *dev,
 			data = dsi_parser_get_data("<", ">", out);
 			middle_of_tx = true;
 
-			dsi_parser_get_tuples_data(prop, data);
+			dsi_parser_get_tuplets_data(prop, data);
 		}
 	}
 
@@ -224,7 +219,7 @@ static void dsi_parser_get_int_value(struct dsi_parser_prop *prop,
 		}
 
 		if (kstrtoint(tmp, base, &val)) {
-			DSI_ERR("error converting %s at %d\n",
+			pr_err("error converting %s at %d\n",
 				tmp, i);
 
 			continue;
@@ -239,23 +234,20 @@ static bool dsi_parser_parse_prop(struct device *dev,
 {
 	bool found = false;
 	char *out = strsep(&buf, "=");
-	size_t buf_len;
 
 	if (!out || !buf)
 		goto end;
 
-	buf_len = strlen(buf);
-
-	prop->raw = devm_kzalloc(dev, buf_len + 1, GFP_KERNEL);
+	prop->raw = devm_kzalloc(dev, strlen(buf) + 1, GFP_KERNEL);
 	if (!prop->raw)
 		goto end;
 
-	strlcpy(prop->raw, buf, buf_len + 1);
+	strlcpy(prop->raw, buf, strlen(buf) + 1);
 
 	found = true;
 
 	prop->name = dsi_parser_strim(out);
-	DSI_DEBUG("RAW: %s: %s\n", prop->name, prop->raw);
+	pr_debug("RAW: %s: %s\n", prop->name, prop->raw);
 
 	prop->len = 0;
 
@@ -266,7 +258,7 @@ static bool dsi_parser_parse_prop(struct device *dev,
 	if (!prop->items)
 		goto end;
 
-	if (dsi_parser_get_tuples(dev, prop, buf)) {
+	if (dsi_parser_get_tuplets(dev, prop, buf)) {
 		prop->value = devm_kzalloc(dev, prop->len, GFP_KERNEL);
 		if (prop->value) {
 			prop->type = DSI_PROP_TYPE_INT_SET_ARRAY;
@@ -277,7 +269,7 @@ static bool dsi_parser_parse_prop(struct device *dev,
 
 	prop->value = dsi_parser_get_data("<", ">", buf);
 	if (prop->value) {
-		if (dsi_parser_get_tuples_data(prop, prop->value)) {
+		if (dsi_parser_get_tuplets_data(prop, prop->value)) {
 			prop->value = devm_kzalloc(dev, prop->len, GFP_KERNEL);
 			if (prop->value) {
 				prop->type = DSI_PROP_TYPE_INT_SET;
@@ -305,7 +297,7 @@ static bool dsi_parser_parse_prop(struct device *dev,
 			out6 = dsi_parser_strim(out6);
 			if (out6 && strlen(out6))
 				prop->items[prop->len++] = out6;
-		}
+		};
 
 		prop->value = devm_kzalloc(dev, prop->len, GFP_KERNEL);
 		if (prop->value) {
@@ -323,11 +315,6 @@ end:
 static char *dsi_parser_clean_name(char *name)
 {
 	char *clean_name = name;
-
-	if (!name) {
-		DSI_ERR("Invalid input\n");
-		return NULL;
-	}
 
 	while (name)
 		clean_name = strsep(&name, ";");
@@ -372,12 +359,12 @@ static struct dsi_parser_node *dsi_parser_find_nodes(struct device *dev,
 	char *name, *data;
 	bool has_child = false;
 
-	if (!buf || !*buf)
+	if (!buf)
 		goto end;
 
 	data = strpbrk(*buf, "{}");
 	if (!data) {
-		DSI_DEBUG("{} not found\n");
+		pr_debug("{} not found\n");
 		goto end;
 	}
 
@@ -495,7 +482,7 @@ struct property *dsi_parser_find_property(const struct device_node *np,
 
 	prop = dsi_parser_search_property(node, name);
 	if (!prop) {
-		DSI_DEBUG("%s not found\n", name);
+		pr_debug("%s not found\n", name);
 		goto end;
 	}
 
@@ -508,7 +495,7 @@ struct property *dsi_parser_find_property(const struct device_node *np,
 		else
 			*lenp = strlen(prop->raw) + 1;
 
-		DSI_DEBUG("%s len=%d\n", name, *lenp);
+		pr_debug("%s len=%d\n", name, *lenp);
 	}
 end:
 	return (struct property *)prop;
@@ -522,7 +509,7 @@ bool dsi_parser_read_bool(const struct device_node *np,
 
 	prop_set = dsi_parser_search_property(node, propname) ? true : false;
 
-	DSI_DEBUG("%s=%s\n", propname, prop_set ? "set" : "not set");
+	pr_debug("%s=%s\n", propname, prop_set ? "set" : "not set");
 
 	return prop_set;
 }
@@ -537,7 +524,7 @@ int dsi_parser_read_string(const struct device_node *np,
 
 	prop = dsi_parser_search_property(node, propname);
 	if (!prop) {
-		DSI_DEBUG("%s not found\n", propname);
+		pr_debug("%s not found\n", propname);
 		rc = -EINVAL;
 	} else {
 		property = prop->value;
@@ -545,7 +532,7 @@ int dsi_parser_read_string(const struct device_node *np,
 
 	*out_string = property;
 
-	DSI_DEBUG("%s=%s\n", propname, *out_string);
+	pr_debug("%s=%s\n", propname, *out_string);
 	return rc;
 }
 
@@ -565,7 +552,7 @@ int dsi_parser_read_u32(const struct device_node *np,
 
 	prop = dsi_parser_search_property(node, propname);
 	if (!prop) {
-		DSI_DEBUG("%s not found\n", propname);
+		pr_debug("%s not found\n", propname);
 		rc = -EINVAL;
 		goto end;
 	}
@@ -586,12 +573,12 @@ int dsi_parser_read_u32(const struct device_node *np,
 
 	rc = kstrtoint(property, base, out_value);
 	if (rc) {
-		DSI_ERR("prop=%s error(%d) converting %s, base=%d\n",
+		pr_err("prop=%s error(%d) converting %s, base=%d\n",
 			propname, rc, property, base);
 		goto end;
 	}
 
-	DSI_DEBUG("%s=%d\n", propname, *out_value);
+	pr_debug("%s=%d\n", propname, *out_value);
 end:
 	return rc;
 }
@@ -606,7 +593,7 @@ int dsi_parser_read_u32_array(const struct device_node *np,
 
 	prop = dsi_parser_search_property(node, propname);
 	if (!prop) {
-		DSI_DEBUG("%s not found\n", propname);
+		pr_debug("%s not found\n", propname);
 		rc = -EINVAL;
 		goto end;
 	}
@@ -631,14 +618,14 @@ int dsi_parser_read_u32_array(const struct device_node *np,
 
 		rc = kstrtoint(tmp, base, &val);
 		if (rc) {
-			DSI_ERR("prop=%s error(%d) converting %s(%d), base=%d\n",
+			pr_err("prop=%s error(%d) converting %s(%d), base=%d\n",
 				propname, rc, tmp, i, base);
 			continue;
 		}
 
 		*out_values++ = val;
 
-		DSI_DEBUG("%s: [%d]=%d\n", propname, i, *(out_values - 1));
+		pr_debug("%s: [%d]=%d\n", propname, i, *(out_values - 1));
 	}
 end:
 	return rc;
@@ -653,14 +640,14 @@ const void *dsi_parser_get_property(const struct device_node *np,
 
 	prop = dsi_parser_search_property(node, name);
 	if (!prop) {
-		DSI_DEBUG("%s not found\n", name);
+		pr_debug("%s not found\n", name);
 		goto end;
 	}
 
 	property = prop->value;
 
 	if (prop->type == DSI_PROP_TYPE_STR)
-		DSI_DEBUG("%s=%s\n", name, property);
+		pr_debug("%s=%s\n", name, property);
 
 	if (lenp) {
 		if (prop->type == DSI_PROP_TYPE_INT_ARRAY)
@@ -671,7 +658,7 @@ const void *dsi_parser_get_property(const struct device_node *np,
 		else
 			*lenp = strlen(prop->raw) + 1;
 
-		DSI_DEBUG("%s len=%d\n", name, *lenp);
+		pr_debug("%s len=%d\n", name, *lenp);
 	}
 end:
 	return property;
@@ -699,7 +686,7 @@ struct device_node *dsi_parser_get_child_by_name(const struct device_node *np,
 		}
 	} while (index < node->children_count);
 end:
-	DSI_DEBUG("%s: %s\n", name, matched_node ? "found" : "not found");
+	pr_debug("%s: %s\n", name, matched_node ? "found" : "not found");
 
 	return (struct device_node *)matched_node;
 }
@@ -712,7 +699,7 @@ struct dsi_parser_node *dsi_parser_get_node_by_name(
 	struct dsi_parser_node *matched_node = NULL;
 
 	if (!node) {
-		DSI_ERR("node is null\n");
+		pr_err("node is null\n");
 		goto end;
 	}
 
@@ -728,7 +715,7 @@ struct dsi_parser_node *dsi_parser_get_node_by_name(
 			break;
 	}
 end:
-	DSI_DEBUG("%s: %s\n", name, matched_node ? "found" : "not found");
+	pr_debug("%s: %s\n", name, matched_node ? "found" : "not found");
 
 	return matched_node;
 }
@@ -740,7 +727,7 @@ int dsi_parser_get_child_count(const struct device_node *np)
 
 	if (node) {
 		count = node->children_count;
-		DSI_DEBUG("node %s child count=%d\n", node->name, count);
+		pr_debug("node %s child count=%d\n", node->name, count);
 	}
 
 	return count;
@@ -776,7 +763,7 @@ struct device_node *dsi_parser_get_next_child(const struct device_node *np,
 	} while (index < parent->children_count);
 end:
 	if (matched_node)
-		DSI_DEBUG("next child: %s\n", matched_node->name);
+		pr_debug("next child: %s\n", matched_node->name);
 
 	return (struct device_node *)matched_node;
 }
@@ -790,13 +777,13 @@ int dsi_parser_count_u32_elems(const struct device_node *np,
 
 	prop = dsi_parser_search_property(node, propname);
 	if (!prop) {
-		DSI_DEBUG("%s not found\n", propname);
+		pr_debug("%s not found\n", propname);
 		goto end;
 	}
 
 	count = prop->len;
 
-	DSI_DEBUG("prop %s has %d items\n", prop->name, count);
+	pr_debug("prop %s has %d items\n", prop->name, count);
 end:
 	return count;
 }
@@ -810,7 +797,7 @@ int dsi_parser_count_strings(const struct device_node *np,
 
 	prop = dsi_parser_search_property(node, propname);
 	if (!prop) {
-		DSI_DEBUG("%s not found\n", propname);
+		pr_debug("%s not found\n", propname);
 		goto end;
 	}
 
@@ -819,7 +806,7 @@ int dsi_parser_count_strings(const struct device_node *np,
 	else if (prop->type == DSI_PROP_TYPE_STR)
 		count = 1;
 
-	DSI_DEBUG("prop %s has %d items\n", prop->name, count);
+	pr_debug("prop %s has %d items\n", prop->name, count);
 end:
 	return count;
 }
@@ -833,17 +820,17 @@ int dsi_parser_read_string_index(const struct device_node *np,
 
 	prop = dsi_parser_search_property(node, propname);
 	if (!prop) {
-		DSI_DEBUG("%s not found\n", propname);
+		pr_debug("%s not found\n", propname);
 		goto end;
 	}
 
 	if (prop->type != DSI_PROP_TYPE_STR_ARRAY) {
-		DSI_ERR("not a string array property\n");
+		pr_err("not a string array property\n");
 		goto end;
 	}
 
 	if (index >= prop->len) {
-		DSI_ERR("out of bond index %d\n", index);
+		pr_err("out of bond index %d\n", index);
 		goto end;
 	}
 
@@ -871,7 +858,7 @@ void *dsi_parser_get_head_node(void *in,
 	char *buf;
 
 	if (!parser || !data || !size) {
-		DSI_ERR("invalid input\n");
+		pr_err("invalid input\n");
 		goto err;
 	}
 
@@ -888,7 +875,7 @@ void *dsi_parser_get_head_node(void *in,
 
 	parser->head_node = dsi_parser_find_nodes(parser->dev, &buf);
 	if (!parser->head_node) {
-		DSI_ERR("could not get head node\n");
+		pr_err("could not get head node\n");
 		devm_kfree(parser->dev, parser->buf);
 		goto err;
 	}
@@ -912,14 +899,14 @@ static int dsi_parser_read_file(struct dsi_parser *parser,
 
 	rc = request_firmware(&parser->fw, parser->file_name, parser->dev);
 	if (rc || !parser->fw) {
-		DSI_ERR("couldn't read firmware\n");
+		pr_err("couldn't read firmware\n");
 		goto end;
 	}
 
 	*buf = parser->fw->data;
 	*size = parser->fw->size;
 
-	DSI_DEBUG("file %s: size %zd\n",
+	pr_debug("file %s: size %zd\n",
 		parser->file_name, parser->fw->size);
 end:
 	return rc;
@@ -933,7 +920,7 @@ static void dsi_parser_free_mem(struct device *dev,
 	if (!node)
 		return;
 
-	DSI_DEBUG("node=%s, prop_count=%d\n", node->name, node->prop_count);
+	pr_debug("node=%s, prop_count=%d\n", node->name, node->prop_count);
 
 	for (i = 0; i < node->prop_count; i++) {
 		struct dsi_parser_prop *prop = &node->prop[i];
@@ -941,7 +928,7 @@ static void dsi_parser_free_mem(struct device *dev,
 		if (!prop)
 			continue;
 
-		DSI_DEBUG("deleting prop=%s\n", prop->name);
+		pr_debug("deleting prop=%s\n", prop->name);
 
 		if (prop->items)
 			devm_kfree(dev, prop->items);
@@ -987,12 +974,12 @@ static ssize_t dsi_parser_write_init(struct file *file,
 	buf[len] = '\0';
 
 	if (sscanf(buf, "%31s", parser->file_name) != 1) {
-		DSI_ERR("failed to get val\n");
+		pr_err("failed to get val\n");
 		goto end;
 	}
 
 	if (dsi_parser_read_file(parser, &data, &size)) {
-		DSI_ERR("failed to read file\n");
+		pr_err("failed to read file\n");
 		goto end;
 	}
 
@@ -1005,7 +992,7 @@ static ssize_t dsi_parser_write_init(struct file *file,
 
 	parser->head_node = dsi_parser_get_head_node(parser, data, size);
 	if (!parser->head_node) {
-		DSI_ERR("failed to parse data\n");
+		pr_err("failed to parse data\n");
 		goto end;
 	}
 end:
@@ -1171,7 +1158,7 @@ int dsi_parser_dbg_init(void *parser, struct dentry *parent_dir)
 	struct dentry *dir, *file;
 
 	if (!parser || !parent_dir) {
-		DSI_ERR("invalid input\n");
+		pr_err("invalid input\n");
 		goto end;
 	}
 
@@ -1179,7 +1166,7 @@ int dsi_parser_dbg_init(void *parser, struct dentry *parent_dir)
 	if (IS_ERR_OR_NULL(dir)) {
 		rc = PTR_ERR(dir);
 
-		DSI_ERR("failed to create parser debugfs\n");
+		pr_err("failed to create parser debugfs\n");
 		goto end;
 	}
 
@@ -1188,7 +1175,7 @@ int dsi_parser_dbg_init(void *parser, struct dentry *parent_dir)
 	if (IS_ERR_OR_NULL(file)) {
 		rc = PTR_ERR(file);
 
-		DSI_ERR("failed to create init debugfs\n");
+		pr_err("failed to create init debugfs\n");
 		goto dbg;
 	}
 
@@ -1197,11 +1184,11 @@ int dsi_parser_dbg_init(void *parser, struct dentry *parent_dir)
 	if (IS_ERR_OR_NULL(file)) {
 		rc = PTR_ERR(file);
 
-		DSI_ERR("failed to create init debugfs\n");
+		pr_err("failed to create init debugfs\n");
 		goto dbg;
 	}
 
-	DSI_DEBUG("success\n");
+	pr_debug("success\n");
 	return 0;
 dbg:
 	debugfs_remove_recursive(dir);
@@ -1215,7 +1202,7 @@ void *dsi_parser_get(struct device *dev)
 	struct dsi_parser *parser = NULL;
 
 	if (!dev) {
-		DSI_ERR("invalid data\n");
+		pr_err("invalid data\n");
 		rc = -EINVAL;
 		goto end;
 	}

@@ -1,7 +1,17 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2016-2020, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
+
+#define pr_fmt(fmt)	"dsi-ctrl:[%s] " fmt, __func__
 
 #include <linux/of_device.h>
 #include <linux/err.h>
@@ -13,24 +23,27 @@
 
 #include "msm_drv.h"
 #include "msm_kms.h"
+#include "msm_gpu.h"
 #include "msm_mmu.h"
 #include "dsi_ctrl.h"
 #include "dsi_ctrl_hw.h"
 #include "dsi_clk.h"
 #include "dsi_pwr.h"
 #include "dsi_catalog.h"
-#include "dsi_panel.h"
-
-#include "sde_dbg.h"
-
-#if defined(CONFIG_DISPLAY_SAMSUNG)
+#if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
 #include "ss_dsi_panel_common.h"
 #include "sde_trace.h"
 #endif
 
+#include "sde_dbg.h"
+
 #define DSI_CTRL_DEFAULT_LABEL "MDSS DSI CTRL"
 
+#if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
+#define DSI_CTRL_TX_TO_MS     500
+#else
 #define DSI_CTRL_TX_TO_MS     200
+#endif
 
 #define TO_ON_OFF(x) ((x) ? "ON" : "OFF")
 
@@ -38,15 +51,7 @@
 
 #define TICKS_IN_MICRO_SECOND    1000000
 
-#define DSI_CTRL_DEBUG(c, fmt, ...)	DRM_DEV_DEBUG(NULL, "[msm-dsi-debug]: %s: "\
-		fmt, c ? c->name : "inv", ##__VA_ARGS__)
-#define DSI_CTRL_ERR(c, fmt, ...)	DRM_DEV_ERROR(NULL, "[msm-dsi-error]: %s: "\
-		fmt, c ? c->name : "inv", ##__VA_ARGS__)
-#define DSI_CTRL_INFO(c, fmt, ...)	DRM_DEV_INFO(NULL, "[msm-dsi-info]: %s: "\
-		fmt, c->name, ##__VA_ARGS__)
-#define DSI_CTRL_WARN(c, fmt, ...)	DRM_WARN("[msm-dsi-warn]: %s: " fmt,\
-		c ? c->name : "inv", ##__VA_ARGS__)
-
+extern int err_flag;
 struct dsi_ctrl_list_item {
 	struct dsi_ctrl *ctrl;
 	struct list_head list;
@@ -164,7 +169,7 @@ static ssize_t debugfs_reg_dump_read(struct file *file,
 
 	rc = dsi_ctrl->clk_cb.dsi_clk_cb(dsi_ctrl->clk_cb.priv, clk_info);
 	if (rc) {
-		DSI_CTRL_ERR(dsi_ctrl, "failed to enable DSI core clocks\n");
+		pr_err("failed to enable DSI core clocks\n");
 		kfree(buf);
 		return rc;
 	}
@@ -176,7 +181,7 @@ static ssize_t debugfs_reg_dump_read(struct file *file,
 	clk_info.clk_state = DSI_CLK_OFF;
 	rc = dsi_ctrl->clk_cb.dsi_clk_cb(dsi_ctrl->clk_cb.priv, clk_info);
 	if (rc) {
-		DSI_CTRL_ERR(dsi_ctrl, "failed to disable DSI core clocks\n");
+		pr_err("failed to disable DSI core clocks\n");
 		kfree(buf);
 		return rc;
 	}
@@ -213,15 +218,15 @@ static int dsi_ctrl_debugfs_init(struct dsi_ctrl *dsi_ctrl,
 	char dbg_name[DSI_DEBUG_NAME_LEN];
 
 	if (!dsi_ctrl || !parent) {
-		DSI_CTRL_ERR(dsi_ctrl, "Invalid params\n");
+		pr_err("Invalid params\n");
 		return -EINVAL;
 	}
 
 	dir = debugfs_create_dir(dsi_ctrl->name, parent);
 	if (IS_ERR_OR_NULL(dir)) {
 		rc = PTR_ERR(dir);
-		DSI_CTRL_ERR(dsi_ctrl, "debugfs create dir failed, rc=%d\n",
-				rc);
+		pr_err("[DSI_%d] debugfs create dir failed, rc=%d\n",
+		       dsi_ctrl->cell_index, rc);
 		goto error;
 	}
 
@@ -232,7 +237,8 @@ static int dsi_ctrl_debugfs_init(struct dsi_ctrl *dsi_ctrl,
 					 &state_info_fops);
 	if (IS_ERR_OR_NULL(state_file)) {
 		rc = PTR_ERR(state_file);
-		DSI_CTRL_ERR(dsi_ctrl, "state file failed, rc=%d\n", rc);
+		pr_err("[DSI_%d] state file failed, rc=%d\n",
+		       dsi_ctrl->cell_index, rc);
 		goto error_remove_dir;
 	}
 
@@ -243,7 +249,8 @@ static int dsi_ctrl_debugfs_init(struct dsi_ctrl *dsi_ctrl,
 				       &reg_dump_fops);
 	if (IS_ERR_OR_NULL(reg_dump)) {
 		rc = PTR_ERR(reg_dump);
-		DSI_CTRL_ERR(dsi_ctrl, "reg dump file failed, rc=%d\n", rc);
+		pr_err("[DSI_%d] reg dump file failed, rc=%d\n",
+		       dsi_ctrl->cell_index, rc);
 		goto error_remove_dir;
 	}
 
@@ -253,6 +260,8 @@ static int dsi_ctrl_debugfs_init(struct dsi_ctrl *dsi_ctrl,
 						dsi_ctrl->cell_index);
 	sde_dbg_reg_register_base(dbg_name, dsi_ctrl->hw.base,
 				msm_iomap_size(dsi_ctrl->pdev, "dsi_ctrl"));
+	sde_dbg_reg_register_dump_range(dbg_name, dbg_name, 0,
+				msm_iomap_size(dsi_ctrl->pdev, "dsi_ctrl"), 0);
 error_remove_dir:
 	debugfs_remove(dir);
 error:
@@ -266,7 +275,7 @@ static int dsi_ctrl_debugfs_deinit(struct dsi_ctrl *dsi_ctrl)
 }
 #else
 static int dsi_ctrl_debugfs_init(struct dsi_ctrl *dsi_ctrl,
-				 struct dentry *parent)
+					struct dentry *parent)
 {
 	return 0;
 }
@@ -286,99 +295,6 @@ dsi_ctrl_get_aspace(struct dsi_ctrl *dsi_ctrl,
 	return msm_gem_smmu_address_space_get(dsi_ctrl->drm_dev, domain);
 }
 
-static void dsi_ctrl_flush_cmd_dma_queue(struct dsi_ctrl *dsi_ctrl)
-{
-	/*
-	 * If a command is triggered right after another command,
-	 * check if the previous command transfer is completed. If
-	 * transfer is done, cancel any work that has been
-	 * queued. Otherwise wait till the work is scheduled and
-	 * completed before triggering the next command by
-	 * flushing the workqueue.
-	 */
-	if (atomic_read(&dsi_ctrl->dma_irq_trig)) {
-		cancel_work_sync(&dsi_ctrl->dma_cmd_wait);
-	} else {
-		flush_workqueue(dsi_ctrl->dma_cmd_workq);
-		SDE_EVT32(SDE_EVTLOG_FUNC_CASE2);
-	}
-}
-
-static void dsi_ctrl_dma_cmd_wait_for_done(struct work_struct *work)
-{
-	int ret = 0;
-	struct dsi_ctrl *dsi_ctrl = NULL;
-	u32 status;
-	u32 mask = DSI_CMD_MODE_DMA_DONE;
-	struct dsi_ctrl_hw_ops dsi_hw_ops;
-	u64 start_wait, start_qtime, start_jiffies;
-	u64 end_wait, end_jiffies;
-
-	dsi_ctrl = container_of(work, struct dsi_ctrl, dma_cmd_wait);
-	dsi_hw_ops = dsi_ctrl->hw.ops;
-	SDE_EVT32(dsi_ctrl->cell_index, SDE_EVTLOG_FUNC_ENTRY);
-
-	/*
-	 * This atomic state will be set if ISR has been triggered,
-	 * so the wait is not needed.
-	 */
-	if (atomic_read(&dsi_ctrl->dma_irq_trig)) {
-		SDE_EVT32(SDE_EVTLOG_FUNC_CASE1);
-		goto done;
-	}
-
-	start_wait = sched_clock();
-	start_jiffies = jiffies;
-	start_qtime = arch_counter_get_cntvct();
-	ret = wait_for_completion_timeout(
-			&dsi_ctrl->irq_info.cmd_dma_done,
-			msecs_to_jiffies(DSI_CTRL_TX_TO_MS));
-	if (ret == 0 && !atomic_read(&dsi_ctrl->dma_irq_trig)) {
-		end_wait = sched_clock();
-		end_jiffies = jiffies;
-		SDE_EVT32(SDE_EVTLOG_FUNC_CASE2);
-		if (end_wait - start_wait < 180000000 ) {
-			pr_err("QCT: start: %llu jiffies: %llu qtime: %llu\n", start_wait, start_jiffies, start_qtime);
-			pr_err("QCT: end: %llu jiffies: %llu qtime: %llu\n", end_wait, end_jiffies, arch_counter_get_cntvct());
-			pr_err("QCT: not expected timeout.\n");
-			BUG();
-		}
-		status = dsi_hw_ops.get_interrupt_status(&dsi_ctrl->hw);
-		if (status & mask) {
-			status |= (DSI_CMD_MODE_DMA_DONE | DSI_BTA_DONE);
-			dsi_hw_ops.clear_interrupt_status(&dsi_ctrl->hw,
-					status);
-			DSI_CTRL_WARN(dsi_ctrl,
-					"dma_tx done but irq not triggered\n");
-		} else {
-#if defined(CONFIG_DISPLAY_SAMSUNG)
-			struct samsung_display_driver_data *vdd = ss_get_vdd(dsi_ctrl->cell_index);
-
-			/* check physical display connection */
-			if (gpio_is_valid(vdd->ub_con_det.gpio)) {
-				pr_err("[SDE] ub_con_det.gpio(%d) level=%d\n",
-						vdd->ub_con_det.gpio,
-						gpio_get_value(vdd->ub_con_det.gpio));
-			}
-
-#if 1 // case 03745287
-			if (!dsi_ctrl->esd_check_underway && !vdd->panel_dead) {
-				SDE_DBG_DUMP("all", "dbg_bus", "vbif_dbg_bus", "panic");
-			}
-#endif
-
-#endif
-			DSI_CTRL_ERR(dsi_ctrl,
-					"Command transfer failed\n");
-		}
-		dsi_ctrl_disable_status_interrupt(dsi_ctrl,
-					DSI_SINT_CMD_MODE_DMA_DONE);
-	}
-
-done:
-	dsi_ctrl->dma_wait_queued = false;
-}
-
 static int dsi_ctrl_check_state(struct dsi_ctrl *dsi_ctrl,
 				enum dsi_ctrl_driver_ops op,
 				u32 op_state)
@@ -386,17 +302,18 @@ static int dsi_ctrl_check_state(struct dsi_ctrl *dsi_ctrl,
 	int rc = 0;
 	struct dsi_ctrl_state_info *state = &dsi_ctrl->current_state;
 
-	SDE_EVT32(dsi_ctrl->cell_index, op, op_state);
+	SDE_EVT32(dsi_ctrl->cell_index, op);
 
 	switch (op) {
 	case DSI_CTRL_OP_POWER_STATE_CHANGE:
 		if (state->power_state == op_state) {
-			DSI_CTRL_ERR(dsi_ctrl, "No change in state, pwr_state=%d\n",
-					op_state);
+			pr_err("[%d] No change in state, pwr_state=%d\n",
+			       dsi_ctrl->cell_index, op_state);
 			rc = -EINVAL;
 		} else if (state->power_state == DSI_CTRL_POWER_VREG_ON) {
 			if (state->vid_engine_state == DSI_CTRL_ENGINE_ON) {
-				DSI_CTRL_ERR(dsi_ctrl, "State error: op=%d: %d\n",
+				pr_err("[%d]State error: op=%d: %d\n",
+				       dsi_ctrl->cell_index,
 				       op_state,
 				       state->vid_engine_state);
 				rc = -EINVAL;
@@ -405,12 +322,13 @@ static int dsi_ctrl_check_state(struct dsi_ctrl *dsi_ctrl,
 		break;
 	case DSI_CTRL_OP_CMD_ENGINE:
 		if (state->cmd_engine_state == op_state) {
-			DSI_CTRL_ERR(dsi_ctrl, "No change in state, cmd_state=%d\n",
-			       op_state);
+			pr_err("[%d] No change in state, cmd_state=%d\n",
+			       dsi_ctrl->cell_index, op_state);
 			rc = -EINVAL;
 		} else if ((state->power_state != DSI_CTRL_POWER_VREG_ON) ||
 			   (state->controller_state != DSI_CTRL_ENGINE_ON)) {
-			DSI_CTRL_ERR(dsi_ctrl, "State error: op=%d: %d, %d\n",
+			pr_err("[%d]State error: op=%d: %d, %d\n",
+			       dsi_ctrl->cell_index,
 			       op,
 			       state->power_state,
 			       state->controller_state);
@@ -419,12 +337,13 @@ static int dsi_ctrl_check_state(struct dsi_ctrl *dsi_ctrl,
 		break;
 	case DSI_CTRL_OP_VID_ENGINE:
 		if (state->vid_engine_state == op_state) {
-			DSI_CTRL_ERR(dsi_ctrl, "No change in state, cmd_state=%d\n",
-			       op_state);
+			pr_err("[%d] No change in state, cmd_state=%d\n",
+			       dsi_ctrl->cell_index, op_state);
 			rc = -EINVAL;
 		} else if ((state->power_state != DSI_CTRL_POWER_VREG_ON) ||
 			   (state->controller_state != DSI_CTRL_ENGINE_ON)) {
-			DSI_CTRL_ERR(dsi_ctrl, "State error: op=%d: %d, %d\n",
+			pr_err("[%d]State error: op=%d: %d, %d\n",
+			       dsi_ctrl->cell_index,
 			       op,
 			       state->power_state,
 			       state->controller_state);
@@ -433,18 +352,20 @@ static int dsi_ctrl_check_state(struct dsi_ctrl *dsi_ctrl,
 		break;
 	case DSI_CTRL_OP_HOST_ENGINE:
 		if (state->controller_state == op_state) {
-			DSI_CTRL_ERR(dsi_ctrl, "No change in state, ctrl_state=%d\n",
-			       op_state);
+			pr_err("[%d] No change in state, ctrl_state=%d\n",
+			       dsi_ctrl->cell_index, op_state);
 			rc = -EINVAL;
 		} else if (state->power_state != DSI_CTRL_POWER_VREG_ON) {
-			DSI_CTRL_ERR(dsi_ctrl, "State error (link is off): op=%d:, %d\n",
+			pr_err("[%d]State error (link is off): op=%d:, %d\n",
+			       dsi_ctrl->cell_index,
 			       op_state,
 			       state->power_state);
 			rc = -EINVAL;
 		} else if ((op_state == DSI_CTRL_ENGINE_OFF) &&
 			   ((state->cmd_engine_state != DSI_CTRL_ENGINE_OFF) ||
 			    (state->vid_engine_state != DSI_CTRL_ENGINE_OFF))) {
-			DSI_CTRL_ERR(dsi_ctrl, "State error (eng on): op=%d: %d, %d\n",
+			pr_err("[%d]State error (eng on): op=%d: %d, %d\n",
+				  dsi_ctrl->cell_index,
 				  op_state,
 				  state->cmd_engine_state,
 				  state->vid_engine_state);
@@ -453,9 +374,10 @@ static int dsi_ctrl_check_state(struct dsi_ctrl *dsi_ctrl,
 		break;
 	case DSI_CTRL_OP_CMD_TX:
 		if ((state->power_state != DSI_CTRL_POWER_VREG_ON) ||
-		    (!state->host_initialized) ||
+		    (state->host_initialized != true) ||
 		    (state->cmd_engine_state != DSI_CTRL_ENGINE_ON)) {
-			DSI_CTRL_ERR(dsi_ctrl, "State error: op=%d: %d, %d, %d\n",
+			pr_err("[%d]State error: op=%d: %d, %d, %d\n",
+			       dsi_ctrl->cell_index,
 			       op,
 			       state->power_state,
 			       state->host_initialized,
@@ -465,23 +387,24 @@ static int dsi_ctrl_check_state(struct dsi_ctrl *dsi_ctrl,
 		break;
 	case DSI_CTRL_OP_HOST_INIT:
 		if (state->host_initialized == op_state) {
-			DSI_CTRL_ERR(dsi_ctrl, "No change in state, host_init=%d\n",
-			       op_state);
+			pr_err("[%d] No change in state, host_init=%d\n",
+			       dsi_ctrl->cell_index, op_state);
 			rc = -EINVAL;
 		} else if (state->power_state != DSI_CTRL_POWER_VREG_ON) {
-			DSI_CTRL_ERR(dsi_ctrl, "State error: op=%d: %d\n",
-			       op, state->power_state);
+			pr_err("[%d]State error: op=%d: %d\n",
+			       dsi_ctrl->cell_index, op, state->power_state);
 			rc = -EINVAL;
 		}
 		break;
 	case DSI_CTRL_OP_TPG:
 		if (state->tpg_enabled == op_state) {
-			DSI_CTRL_ERR(dsi_ctrl, "No change in state, tpg_enabled=%d\n",
-			       op_state);
+			pr_err("[%d] No change in state, tpg_enabled=%d\n",
+			       dsi_ctrl->cell_index, op_state);
 			rc = -EINVAL;
 		} else if ((state->power_state != DSI_CTRL_POWER_VREG_ON) ||
 			   (state->controller_state != DSI_CTRL_ENGINE_ON)) {
-			DSI_CTRL_ERR(dsi_ctrl, "State error: op=%d: %d, %d\n",
+			pr_err("[%d]State error: op=%d: %d, %d\n",
+			       dsi_ctrl->cell_index,
 			       op,
 			       state->power_state,
 			       state->controller_state);
@@ -490,15 +413,15 @@ static int dsi_ctrl_check_state(struct dsi_ctrl *dsi_ctrl,
 		break;
 	case DSI_CTRL_OP_PHY_SW_RESET:
 		if (state->power_state != DSI_CTRL_POWER_VREG_ON) {
-			DSI_CTRL_ERR(dsi_ctrl, "State error: op=%d: %d\n",
-			       op, state->power_state);
+			pr_err("[%d]State error: op=%d: %d\n",
+			       dsi_ctrl->cell_index, op, state->power_state);
 			rc = -EINVAL;
 		}
 		break;
 	case DSI_CTRL_OP_ASYNC_TIMING:
 		if (state->vid_engine_state != op_state) {
-			DSI_CTRL_ERR(dsi_ctrl, "Unexpected engine state vid_state=%d\n",
-			       op_state);
+			pr_err("[%d] Unexpected engine state vid_state=%d\n",
+			       dsi_ctrl->cell_index, op_state);
 			rc = -EINVAL;
 		}
 		break;
@@ -515,7 +438,7 @@ bool dsi_ctrl_validate_host_state(struct dsi_ctrl *dsi_ctrl)
 	struct dsi_ctrl_state_info *state = &dsi_ctrl->current_state;
 
 	if (!state) {
-		DSI_CTRL_ERR(dsi_ctrl, "Invalid host state for DSI controller\n");
+		pr_err("Invalid host state for DSI controller\n");
 		return -EINVAL;
 	}
 
@@ -570,14 +493,16 @@ static int dsi_ctrl_init_regmap(struct platform_device *pdev,
 	}
 
 	ctrl->hw.base = ptr;
-	DSI_CTRL_DEBUG(ctrl, "map dsi_ctrl registers to %pK\n", ctrl->hw.base);
+	pr_debug("[%s] map dsi_ctrl registers to %pK\n", ctrl->name,
+		 ctrl->hw.base);
 
 	switch (ctrl->version) {
 	case DSI_CTRL_VERSION_1_4:
 	case DSI_CTRL_VERSION_2_0:
 		ptr = msm_ioremap(pdev, "mmss_misc", ctrl->name);
 		if (IS_ERR(ptr)) {
-			DSI_CTRL_ERR(ctrl, "mmss_misc base address not found\n");
+			pr_err("mmss_misc base address not found for [%s]\n",
+					ctrl->name);
 			rc = PTR_ERR(ptr);
 			return rc;
 		}
@@ -589,18 +514,13 @@ static int dsi_ctrl_init_regmap(struct platform_device *pdev,
 	case DSI_CTRL_VERSION_2_4:
 		ptr = msm_ioremap(pdev, "disp_cc_base", ctrl->name);
 		if (IS_ERR(ptr)) {
-			DSI_CTRL_ERR(ctrl, "disp_cc base address not found for\n");
+			pr_err("disp_cc base address not found for [%s]\n",
+					ctrl->name);
 			rc = PTR_ERR(ptr);
 			return rc;
 		}
 		ctrl->hw.disp_cc_base = ptr;
-		ptr = msm_ioremap(pdev, "mmss_misc", ctrl->name);
-		if (IS_ERR(ptr)) {
-			DSI_CTRL_ERR(ctrl, "mmss_misc base address not found\n");
-			rc = PTR_ERR(ptr);
-			return rc;
-		}
-		ctrl->hw.mmss_misc_base = ptr;
+		ctrl->hw.mmss_misc_base = NULL;
 		break;
 	default:
 		break;
@@ -663,72 +583,76 @@ static int dsi_ctrl_clocks_init(struct platform_device *pdev,
 	core->mdp_core_clk = devm_clk_get(&pdev->dev, "mdp_core_clk");
 	if (IS_ERR(core->mdp_core_clk)) {
 		core->mdp_core_clk = NULL;
-		DSI_CTRL_DEBUG(ctrl, "failed to get mdp_core_clk, rc=%d\n", rc);
+		pr_debug("failed to get mdp_core_clk, rc=%d\n", rc);
 	}
 
 	core->iface_clk = devm_clk_get(&pdev->dev, "iface_clk");
 	if (IS_ERR(core->iface_clk)) {
 		core->iface_clk = NULL;
-		DSI_CTRL_DEBUG(ctrl, "failed to get iface_clk, rc=%d\n", rc);
+		pr_debug("failed to get iface_clk, rc=%d\n", rc);
 	}
 
 	core->core_mmss_clk = devm_clk_get(&pdev->dev, "core_mmss_clk");
 	if (IS_ERR(core->core_mmss_clk)) {
 		core->core_mmss_clk = NULL;
-		DSI_CTRL_DEBUG(ctrl, "failed to get core_mmss_clk, rc=%d\n",
-				rc);
+		pr_debug("failed to get core_mmss_clk, rc=%d\n", rc);
 	}
 
 	core->bus_clk = devm_clk_get(&pdev->dev, "bus_clk");
 	if (IS_ERR(core->bus_clk)) {
 		core->bus_clk = NULL;
-		DSI_CTRL_DEBUG(ctrl, "failed to get bus_clk, rc=%d\n", rc);
+		pr_debug("failed to get bus_clk, rc=%d\n", rc);
 	}
 
 	core->mnoc_clk = devm_clk_get(&pdev->dev, "mnoc_clk");
 	if (IS_ERR(core->mnoc_clk)) {
 		core->mnoc_clk = NULL;
-		DSI_CTRL_DEBUG(ctrl, "can't get mnoc clock, rc=%d\n", rc);
+		pr_debug("can't get mnoc clock, rc=%d\n", rc);
 	}
 
 	hs_link->byte_clk = devm_clk_get(&pdev->dev, "byte_clk");
 	if (IS_ERR(hs_link->byte_clk)) {
 		rc = PTR_ERR(hs_link->byte_clk);
-		DSI_CTRL_ERR(ctrl, "failed to get byte_clk, rc=%d\n", rc);
+		pr_err("failed to get byte_clk, rc=%d\n", rc);
+		hs_link->byte_clk = NULL;
 		goto fail;
 	}
 
 	hs_link->pixel_clk = devm_clk_get(&pdev->dev, "pixel_clk");
 	if (IS_ERR(hs_link->pixel_clk)) {
 		rc = PTR_ERR(hs_link->pixel_clk);
-		DSI_CTRL_ERR(ctrl, "failed to get pixel_clk, rc=%d\n", rc);
+		pr_err("failed to get pixel_clk, rc=%d\n", rc);
+		hs_link->pixel_clk = NULL;
 		goto fail;
 	}
 
 	lp_link->esc_clk = devm_clk_get(&pdev->dev, "esc_clk");
 	if (IS_ERR(lp_link->esc_clk)) {
 		rc = PTR_ERR(lp_link->esc_clk);
-		DSI_CTRL_ERR(ctrl, "failed to get esc_clk, rc=%d\n", rc);
+		pr_err("failed to get esc_clk, rc=%d\n", rc);
+		lp_link->esc_clk = NULL;
 		goto fail;
 	}
 
 	hs_link->byte_intf_clk = devm_clk_get(&pdev->dev, "byte_intf_clk");
 	if (IS_ERR(hs_link->byte_intf_clk)) {
 		hs_link->byte_intf_clk = NULL;
-		DSI_CTRL_DEBUG(ctrl, "can't find byte intf clk, rc=%d\n", rc);
+		pr_debug("can't find byte intf clk, rc=%d\n", rc);
 	}
 
 	rcg->byte_clk = devm_clk_get(&pdev->dev, "byte_clk_rcg");
 	if (IS_ERR(rcg->byte_clk)) {
 		rc = PTR_ERR(rcg->byte_clk);
-		DSI_CTRL_ERR(ctrl, "failed to get byte_clk_rcg, rc=%d\n", rc);
+		pr_err("failed to get byte_clk_rcg, rc=%d\n", rc);
+		rcg->byte_clk = NULL;
 		goto fail;
 	}
 
 	rcg->pixel_clk = devm_clk_get(&pdev->dev, "pixel_clk_rcg");
 	if (IS_ERR(rcg->pixel_clk)) {
 		rc = PTR_ERR(rcg->pixel_clk);
-		DSI_CTRL_ERR(ctrl, "failed to get pixel_clk_rcg, rc=%d\n", rc);
+		pr_err("failed to get pixel_clk_rcg, rc=%d\n", rc);
+		rcg->pixel_clk = NULL;
 		goto fail;
 	}
 
@@ -747,8 +671,7 @@ static int dsi_ctrl_supplies_deinit(struct dsi_ctrl *ctrl)
 	regs = &ctrl->pwr_info.digital;
 	for (i = 0; i < regs->count; i++) {
 		if (!regs->vregs[i].vreg)
-			DSI_CTRL_ERR(ctrl,
-				"vreg is NULL, should not reach here\n");
+			pr_err("vreg is NULL, should not reach here\n");
 		else
 			devm_regulator_put(regs->vregs[i].vreg);
 	}
@@ -756,8 +679,7 @@ static int dsi_ctrl_supplies_deinit(struct dsi_ctrl *ctrl)
 	regs = &ctrl->pwr_info.host_pwr;
 	for (i = 0; i < regs->count; i++) {
 		if (!regs->vregs[i].vreg)
-			DSI_CTRL_ERR(ctrl,
-				"vreg is NULL, should not reach here\n");
+			pr_err("vreg is NULL, should not reach here\n");
 		else
 			devm_regulator_put(regs->vregs[i].vreg);
 	}
@@ -789,15 +711,13 @@ static int dsi_ctrl_supplies_init(struct platform_device *pdev,
 					  &ctrl->pwr_info.digital,
 					  "qcom,core-supply-entries");
 	if (rc)
-		DSI_CTRL_DEBUG(ctrl,
-				"failed to get digital supply, rc = %d\n", rc);
+		pr_err("failed to get digital supply, rc = %d\n", rc);
 
 	rc = dsi_pwr_get_dt_vreg_data(&pdev->dev,
 					  &ctrl->pwr_info.host_pwr,
 					  "qcom,ctrl-supply-entries");
 	if (rc) {
-		DSI_CTRL_ERR(ctrl,
-			"failed to get host power supplies, rc = %d\n", rc);
+		pr_err("failed to get host power supplies, rc = %d\n", rc);
 		goto error_digital;
 	}
 
@@ -805,7 +725,7 @@ static int dsi_ctrl_supplies_init(struct platform_device *pdev,
 	for (i = 0; i < regs->count; i++) {
 		vreg = devm_regulator_get(&pdev->dev, regs->vregs[i].vreg_name);
 		if (IS_ERR(vreg)) {
-			DSI_CTRL_ERR(ctrl, "failed to get %s regulator\n",
+			pr_err("failed to get %s regulator\n",
 			       regs->vregs[i].vreg_name);
 			rc = PTR_ERR(vreg);
 			goto error_host_pwr;
@@ -817,7 +737,7 @@ static int dsi_ctrl_supplies_init(struct platform_device *pdev,
 	for (i = 0; i < regs->count; i++) {
 		vreg = devm_regulator_get(&pdev->dev, regs->vregs[i].vreg_name);
 		if (IS_ERR(vreg)) {
-			DSI_CTRL_ERR(ctrl, "failed to get %s regulator\n",
+			pr_err("failed to get %s regulator\n",
 			       regs->vregs[i].vreg_name);
 			for (--i; i >= 0; i--)
 				devm_regulator_put(regs->vregs[i].vreg);
@@ -854,8 +774,7 @@ static int dsi_ctrl_axi_bus_client_init(struct platform_device *pdev,
 	bus->bus_scale_table = msm_bus_cl_get_pdata(pdev);
 	if (IS_ERR_OR_NULL(bus->bus_scale_table)) {
 		rc = PTR_ERR(bus->bus_scale_table);
-		DSI_CTRL_DEBUG(ctrl, "msm_bus_cl_get_pdata() failed, rc = %d\n",
-				rc);
+		pr_debug("msm_bus_cl_get_pdata() failed, rc = %d\n", rc);
 		bus->bus_scale_table = NULL;
 		return rc;
 	}
@@ -863,7 +782,7 @@ static int dsi_ctrl_axi_bus_client_init(struct platform_device *pdev,
 	bus->bus_handle = msm_bus_scale_register_client(bus->bus_scale_table);
 	if (!bus->bus_handle) {
 		rc = -EINVAL;
-		DSI_CTRL_ERR(ctrl, "failed to register axi bus client\n");
+		pr_err("failed to register axi bus client\n");
 	}
 
 	return rc;
@@ -889,14 +808,13 @@ static int dsi_ctrl_validate_panel_info(struct dsi_ctrl *dsi_ctrl,
 	struct dsi_host_common_cfg *host_cfg = &config->common_config;
 
 	if (config->panel_mode >= DSI_OP_MODE_MAX) {
-		DSI_CTRL_ERR(dsi_ctrl, "Invalid dsi operation mode (%d)\n",
-				config->panel_mode);
+		pr_err("Invalid dsi operation mode (%d)\n", config->panel_mode);
 		rc = -EINVAL;
 		goto err;
 	}
 
 	if ((host_cfg->data_lanes & (DSI_CLOCK_LANE - 1)) == 0) {
-		DSI_CTRL_ERR(dsi_ctrl, "No data lanes are enabled\n");
+		pr_err("No data lanes are enabled\n");
 		rc = -EINVAL;
 		goto err;
 	}
@@ -937,25 +855,21 @@ int dsi_ctrl_pixel_format_to_bpp(enum dsi_pixel_format dst_format)
 }
 
 static int dsi_ctrl_update_link_freqs(struct dsi_ctrl *dsi_ctrl,
-	struct dsi_host_config *config, void *clk_handle,
-	struct dsi_display_mode *mode)
+	struct dsi_host_config *config, void *clk_handle)
 {
 	int rc = 0;
 	u32 num_of_lanes = 0;
-	u32 bits_per_symbol = 16, num_of_symbols = 7; /* For Cphy */
-	u32 bpp, frame_time_us, byte_intf_clk_div;
+	u32 bpp;
+	u64 refresh_rate = TICKS_IN_MICRO_SECOND;
 	u64 h_period, v_period, bit_rate, pclk_rate, bit_rate_per_lane,
-	    byte_clk_rate, byte_intf_clk_rate;
+				byte_clk_rate, byte_intf_clk_rate;
 	struct dsi_host_common_cfg *host_cfg = &config->common_config;
 	struct dsi_split_link_config *split_link = &host_cfg->split_link;
 	struct dsi_mode_info *timing = &config->video_timing;
-	u64 dsi_transfer_time_us = mode->priv_info->dsi_transfer_time_us;
-	u64 min_dsi_clk_hz = mode->priv_info->min_dsi_clk_hz;
+	u32 bits_per_symbol = 16, num_of_symbols = 7; /* For Cphy */
 
-	/* Get bits per pxl in destination format */
+	/* Get bits per pxl in desitnation format */
 	bpp = dsi_ctrl_pixel_format_to_bpp(host_cfg->dst_format);
-	frame_time_us = mult_frac(1000, 1000, (timing->refresh_rate));
-
 	if (host_cfg->data_lanes & DSI_DATA_LANE_0)
 		num_of_lanes++;
 	if (host_cfg->data_lanes & DSI_DATA_LANE_1)
@@ -968,26 +882,25 @@ static int dsi_ctrl_update_link_freqs(struct dsi_ctrl *dsi_ctrl,
 	if (split_link->split_link_enabled)
 		num_of_lanes = split_link->lanes_per_sublink;
 
-	config->common_config.num_data_lanes = num_of_lanes;
-	config->common_config.bpp = bpp;
-
-	if (config->bit_clk_rate_hz_override != 0) {
+	if (config->bit_clk_rate_hz_override == 0) {
+		if (config->panel_mode == DSI_OP_CMD_MODE) {
+			h_period = DSI_H_ACTIVE_DSC(timing);
+			h_period += timing->overlap_pixels;
+			v_period = timing->v_active;
+			do_div(refresh_rate, timing->mdp_transfer_time_us);
+		} else {
+			h_period = DSI_H_TOTAL_DSC(timing);
+			v_period = DSI_V_TOTAL(timing);
+			refresh_rate = timing->refresh_rate;
+		}
+		bit_rate = h_period * v_period * refresh_rate * bpp;
+	} else {
 		bit_rate = config->bit_clk_rate_hz_override * num_of_lanes;
 		if (host_cfg->phy_type == DSI_PHY_TYPE_CPHY) {
 			bit_rate *= bits_per_symbol;
 			do_div(bit_rate, num_of_symbols);
 		}
-	} else if (config->panel_mode == DSI_OP_CMD_MODE) {
-		/* Calculate the bit rate needed to match dsi transfer time */
-		bit_rate = min_dsi_clk_hz * frame_time_us;
-		do_div(bit_rate, dsi_transfer_time_us);
-		bit_rate = bit_rate * num_of_lanes;
-	} else {
-		h_period = DSI_H_TOTAL_DSC(timing);
-		v_period = DSI_V_TOTAL(timing);
-		bit_rate = h_period * v_period * timing->refresh_rate * bpp;
 	}
-
 
 	pclk_rate = bit_rate;
 	do_div(pclk_rate, bpp);
@@ -997,8 +910,7 @@ static int dsi_ctrl_update_link_freqs(struct dsi_ctrl *dsi_ctrl,
 		byte_clk_rate = bit_rate_per_lane;
 		do_div(byte_clk_rate, 8);
 		byte_intf_clk_rate = byte_clk_rate;
-		byte_intf_clk_div = host_cfg->byte_intf_clk_div;
-		do_div(byte_intf_clk_rate, byte_intf_clk_div);
+		do_div(byte_intf_clk_rate, 2);
 		config->bit_clk_rate_hz = byte_clk_rate * 8;
 	} else {
 		do_div(bit_rate, bits_per_symbol);
@@ -1011,12 +923,11 @@ static int dsi_ctrl_update_link_freqs(struct dsi_ctrl *dsi_ctrl,
 		byte_intf_clk_rate = byte_clk_rate;
 		config->bit_clk_rate_hz = byte_clk_rate * 7;
 	}
-	DSI_CTRL_DEBUG(dsi_ctrl, "bit_clk_rate = %llu, bit_clk_rate_per_lane = %llu\n",
+	pr_debug("bit_clk_rate = %llu, bit_clk_rate_per_lane = %llu\n",
 		 bit_rate, bit_rate_per_lane);
-	DSI_CTRL_DEBUG(dsi_ctrl, "byte_clk_rate = %llu, byte_intf_clk = %llu\n",
+	pr_debug("byte_clk_rate = %llu, byte_intf_clk_rate = %llu\n",
 		  byte_clk_rate, byte_intf_clk_rate);
-	DSI_CTRL_DEBUG(dsi_ctrl, "pclk_rate = %llu\n", pclk_rate);
-	SDE_EVT32(dsi_ctrl->cell_index, bit_rate, byte_clk_rate, pclk_rate);
+	pr_debug("pclk_rate = %llu\n", pclk_rate);
 
 	dsi_ctrl->clk_freq.byte_clk_rate = byte_clk_rate;
 	dsi_ctrl->clk_freq.byte_intf_clk_rate = byte_intf_clk_rate;
@@ -1026,7 +937,7 @@ static int dsi_ctrl_update_link_freqs(struct dsi_ctrl *dsi_ctrl,
 	rc = dsi_clk_set_link_frequencies(clk_handle, dsi_ctrl->clk_freq,
 					dsi_ctrl->cell_index);
 	if (rc)
-		DSI_CTRL_ERR(dsi_ctrl, "Failed to update link frequencies\n");
+		pr_err("Failed to update link frequencies\n");
 
 	return rc;
 }
@@ -1036,40 +947,30 @@ static int dsi_ctrl_enable_supplies(struct dsi_ctrl *dsi_ctrl, bool enable)
 	int rc = 0;
 
 	if (enable) {
-		rc = pm_runtime_get_sync(dsi_ctrl->drm_dev->dev);
-		if (rc < 0) {
-			DSI_CTRL_ERR(dsi_ctrl,
-				"Power resource enable failed, rc=%d\n", rc);
-			goto error;
-		}
-
 		if (!dsi_ctrl->current_state.host_initialized) {
 			rc = dsi_pwr_enable_regulator(
 				&dsi_ctrl->pwr_info.host_pwr, true);
 			if (rc) {
-				DSI_CTRL_ERR(dsi_ctrl, "failed to enable host power regs\n");
-				goto error_get_sync;
+				pr_err("failed to enable host power regs\n");
+				goto error;
 			}
 		}
 
 		rc = dsi_pwr_enable_regulator(&dsi_ctrl->pwr_info.digital,
 					      true);
 		if (rc) {
-			DSI_CTRL_ERR(dsi_ctrl, "failed to enable gdsc, rc=%d\n",
-					rc);
+			pr_err("failed to enable gdsc, rc=%d\n", rc);
 			(void)dsi_pwr_enable_regulator(
 						&dsi_ctrl->pwr_info.host_pwr,
 						false
 						);
-			goto error_get_sync;
+			goto error;
 		}
-		return rc;
 	} else {
 		rc = dsi_pwr_enable_regulator(&dsi_ctrl->pwr_info.digital,
 					      false);
 		if (rc) {
-			DSI_CTRL_ERR(dsi_ctrl, "failed to disable gdsc, rc=%d\n",
-					rc);
+			pr_err("failed to disable gdsc, rc=%d\n", rc);
 			goto error;
 		}
 
@@ -1077,15 +978,11 @@ static int dsi_ctrl_enable_supplies(struct dsi_ctrl *dsi_ctrl, bool enable)
 			rc = dsi_pwr_enable_regulator(
 				&dsi_ctrl->pwr_info.host_pwr, false);
 			if (rc) {
-				DSI_CTRL_ERR(dsi_ctrl, "failed to disable host power regs\n");
+				pr_err("failed to disable host power regs\n");
 				goto error;
 			}
 		}
-		pm_runtime_put_sync(dsi_ctrl->drm_dev->dev);
-		return rc;
 	}
-error_get_sync:
-	pm_runtime_put_sync(dsi_ctrl->drm_dev->dev);
 error:
 	return rc;
 }
@@ -1123,9 +1020,9 @@ static int dsi_ctrl_copy_and_pad_cmd(struct dsi_ctrl *dsi_ctrl,
 	/* send embedded BTA for read commands */
 	cmd_type = buf[2] & 0x3f;
 	if ((cmd_type == MIPI_DSI_DCS_READ) ||
-			(cmd_type == MIPI_DSI_GENERIC_READ_REQUEST_0_PARAM) ||
-			(cmd_type == MIPI_DSI_GENERIC_READ_REQUEST_1_PARAM) ||
-			(cmd_type == MIPI_DSI_GENERIC_READ_REQUEST_2_PARAM))
+	    (cmd_type == MIPI_DSI_GENERIC_READ_REQUEST_0_PARAM) ||
+	    (cmd_type == MIPI_DSI_GENERIC_READ_REQUEST_1_PARAM) ||
+	    (cmd_type == MIPI_DSI_GENERIC_READ_REQUEST_2_PARAM))
 		buf[3] |= BIT(5);
 
 	*buffer = buf;
@@ -1139,7 +1036,7 @@ int dsi_ctrl_wait_for_cmd_mode_mdp_idle(struct dsi_ctrl *dsi_ctrl)
 	int rc = 0;
 
 	if (!dsi_ctrl) {
-		DSI_CTRL_ERR(dsi_ctrl, "Invalid params\n");
+		pr_err("Invalid params\n");
 		return -EINVAL;
 	}
 
@@ -1181,7 +1078,7 @@ static void dsi_ctrl_wait_for_video_done(struct dsi_ctrl *dsi_ctrl)
 			&dsi_ctrl->irq_info.vid_frame_done,
 			msecs_to_jiffies(DSI_CTRL_TX_TO_MS));
 	if (ret <= 0)
-		DSI_CTRL_DEBUG(dsi_ctrl, "wait for video done failed\n");
+		pr_debug("wait for video done failed\n");
 	dsi_ctrl_disable_status_interrupt(dsi_ctrl,
 				DSI_SINT_VIDEO_MODE_FRAME_DONE);
 
@@ -1204,19 +1101,18 @@ void dsi_message_setup_tx_mode(struct dsi_ctrl *dsi_ctrl,
 	 * override cmd fetch mode during secure session
 	 */
 	if (dsi_ctrl->secure_mode) {
-		SDE_EVT32(dsi_ctrl->cell_index, SDE_EVTLOG_FUNC_CASE1);
 		*flags &= ~DSI_CTRL_CMD_FETCH_MEMORY;
 		*flags |= DSI_CTRL_CMD_FIFO_STORE;
-		DSI_CTRL_DEBUG(dsi_ctrl,
-				"override to TPG during secure session\n");
+		pr_debug("[%s] override to TPG during secure session\n",
+				dsi_ctrl->name);
 		return;
 	}
 
 	/* Check to see if cmd len plus header is greater than fifo size */
 	if ((cmd_len + 4) > DSI_EMBEDDED_MODE_DMA_MAX_SIZE_BYTES) {
 		*flags |= DSI_CTRL_CMD_NON_EMBEDDED_MODE;
-		DSI_CTRL_DEBUG(dsi_ctrl, "override to non-embedded mode,cmd len =%d\n",
-				cmd_len);
+		pr_debug("[%s] override to non-embedded mode,cmd len =%d\n",
+				dsi_ctrl->name, cmd_len);
 		return;
 	}
 }
@@ -1230,53 +1126,193 @@ int dsi_message_validate_tx_mode(struct dsi_ctrl *dsi_ctrl,
 	if (*flags & DSI_CTRL_CMD_FIFO_STORE) {
 		/* if command size plus header is greater than fifo size */
 		if ((cmd_len + 4) > DSI_CTRL_MAX_CMD_FIFO_STORE_SIZE) {
-			DSI_CTRL_ERR(dsi_ctrl, "Cannot transfer Cmd in FIFO config\n");
+			pr_err("Cannot transfer Cmd in FIFO config\n");
 			return -ENOTSUPP;
 		}
 		if (!dsi_ctrl->hw.ops.kickoff_fifo_command) {
-			DSI_CTRL_ERR(dsi_ctrl, "Cannot transfer command,ops not defined\n");
+			pr_err("Cannot transfer command,ops not defined\n");
 			return -ENOTSUPP;
 		}
 	}
 
 	if (*flags & DSI_CTRL_CMD_NON_EMBEDDED_MODE) {
 		if (*flags & DSI_CTRL_CMD_BROADCAST) {
-			DSI_CTRL_ERR(dsi_ctrl, "Non embedded not supported with broadcast\n");
+			pr_err("Non embedded not supported with broadcast\n");
 			return -ENOTSUPP;
 		}
 		if (!dsi_ctrl->hw.ops.kickoff_command_non_embedded_mode) {
-			DSI_CTRL_ERR(dsi_ctrl, " Cannot transfer command,ops not defined\n");
+			pr_err(" Cannot transfer command,ops not defined\n");
 			return -ENOTSUPP;
 		}
+#if defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
 		if ((cmd_len + 4) > SZ_1M) {
-			DSI_CTRL_ERR(dsi_ctrl, "Cannot transfer,size is greater than SZ_1M\n");
+			pr_err("[SDE] Cannot transfer,size is greater than SZ_1M (NON_EMBEDDED)\n");
 			return -ENOTSUPP;
 		}
+#else 
+		if ((cmd_len + 4) > SZ_4K) {
+			pr_err("Cannot transfer,size is greater than 4096\n");
+			return -ENOTSUPP;
+		}
+#endif
 	}
 
 	if (*flags & DSI_CTRL_CMD_FETCH_MEMORY) {
+#if defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
 		if ((dsi_ctrl->cmd_len + cmd_len + 4) > SZ_1M) {
-			DSI_CTRL_ERR(dsi_ctrl, "Cannot transfer,size is greater than SZ_1M\n");
+			pr_err("[SDE] Cannot transfer,size is greater than SZ_1M (FETCH_MEMORY)\n");
 			return -ENOTSUPP;
 		}
+#else
+		if ((dsi_ctrl->cmd_len + cmd_len + 4) > SZ_4K) {
+			pr_err("Cannot transfer,size is greater than 4096\n");
+			return -ENOTSUPP;
+		}
+#endif
 	}
 
 	return rc;
 }
 
-static void dsi_kickoff_msg_tx(struct dsi_ctrl *dsi_ctrl,
-				const struct mipi_dsi_msg *msg,
-				struct dsi_ctrl_cmd_dma_fifo_info *cmd,
-				struct dsi_ctrl_cmd_dma_info *cmd_mem,
-				u32 flags)
+#if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
+static void print_cmd_desc(const struct mipi_dsi_msg *msg)
 {
+	char buf[1024];
+	int len = 0;
+	size_t i;
+
+	/* Packet Info */
+	len += snprintf(buf, sizeof(buf) - len,  "%02x ", msg->type);
+	len += snprintf(buf + len, sizeof(buf) - len, "%02x ",
+		(msg->flags & MIPI_DSI_MSG_LASTCOMMAND) ? 1 : 0); /* Last bit */
+	len += snprintf(buf + len, sizeof(buf) - len, "%02x ", msg->channel);
+	len += snprintf(buf + len, sizeof(buf) - len, "%02x ",
+						(unsigned int)msg->flags);
+	len += snprintf(buf + len, sizeof(buf) - len, "%02x ", 0); /* Delay */
+	len += snprintf(buf + len, sizeof(buf) - len, "%02x ",
+						(unsigned int)msg->tx_len);
+
+	/* Packet Payload */
+	for (i = 0 ; i < msg->tx_len ; i++) {
+		len += snprintf(buf + len, sizeof(buf) - len,
+						"%02x ", msg->tx_buf[i]);
+		/* Break to prevent show too long command */
+		if (i > 250)
+			break;
+	}
+
+	LCD_INFO("(%02d) %s\n", (unsigned int)msg->tx_len, buf);
+}
+#endif
+
+static int dsi_message_tx(struct dsi_ctrl *dsi_ctrl,
+			  const struct mipi_dsi_msg *msg,
+			  u32 flags)
+{
+	int rc = 0, ret = 0;
+	struct mipi_dsi_packet packet;
+	struct dsi_ctrl_cmd_dma_fifo_info cmd;
+	struct dsi_ctrl_cmd_dma_info cmd_mem;
 	u32 hw_flags = 0;
-	u32 line_no = 0x1;
+	u32 length = 0;
+	u8 *buffer = NULL;
+	u32 cnt = 0, line_no = 0x1;
+	u8 *cmdbuf;
 	struct dsi_mode_info *timing;
 	struct dsi_ctrl_hw_ops dsi_hw_ops = dsi_ctrl->hw.ops;
 
-	SDE_EVT32(dsi_ctrl->cell_index, SDE_EVTLOG_FUNC_ENTRY, flags,
-		msg->flags);
+#if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
+	struct samsung_display_driver_data *vdd = ss_get_vdd(dsi_ctrl->cell_index);
+	if (vdd->debug_data->print_cmds)
+		print_cmd_desc(msg);
+#endif
+
+	/* Select the tx mode to transfer the command */
+	dsi_message_setup_tx_mode(dsi_ctrl, msg->tx_len, &flags);
+
+	/* Validate the mode before sending the command */
+	rc = dsi_message_validate_tx_mode(dsi_ctrl, msg->tx_len, &flags);
+	if (rc) {
+		pr_err(" Cmd tx validation failed, cannot transfer cmd\n");
+		rc = -ENOTSUPP;
+		goto error;
+	}
+
+	if (flags & DSI_CTRL_CMD_NON_EMBEDDED_MODE) {
+		cmd_mem.offset = dsi_ctrl->cmd_buffer_iova;
+		cmd_mem.en_broadcast = (flags & DSI_CTRL_CMD_BROADCAST) ?
+			true : false;
+		cmd_mem.is_master = (flags & DSI_CTRL_CMD_BROADCAST_MASTER) ?
+			true : false;
+		cmd_mem.use_lpm = (msg->flags & MIPI_DSI_MSG_USE_LPM) ?
+			true : false;
+		cmd_mem.datatype = msg->type;
+		cmd_mem.length = msg->tx_len;
+
+		dsi_ctrl->cmd_len = msg->tx_len;
+		memcpy(dsi_ctrl->vaddr, msg->tx_buf, msg->tx_len);
+		pr_debug(" non-embedded mode , size of command =%zd\n",
+					msg->tx_len);
+
+		goto kickoff;
+	}
+
+	rc = mipi_dsi_create_packet(&packet, msg);
+	if (rc) {
+		pr_err("Failed to create message packet, rc=%d\n", rc);
+		goto error;
+	}
+
+	rc = dsi_ctrl_copy_and_pad_cmd(dsi_ctrl,
+			&packet,
+			&buffer,
+			&length);
+	if (rc) {
+		pr_err("[%s] failed to copy message, rc=%d\n",
+				dsi_ctrl->name, rc);
+		goto error;
+	}
+
+	if ((msg->flags & MIPI_DSI_MSG_LASTCOMMAND))
+		buffer[3] |= BIT(7);//set the last cmd bit in header.
+
+	if (flags & DSI_CTRL_CMD_FETCH_MEMORY) {
+		/* Embedded mode config is selected */
+		cmd_mem.offset = dsi_ctrl->cmd_buffer_iova;
+		cmd_mem.en_broadcast = (flags & DSI_CTRL_CMD_BROADCAST) ?
+			true : false;
+		cmd_mem.is_master = (flags & DSI_CTRL_CMD_BROADCAST_MASTER) ?
+			true : false;
+		cmd_mem.use_lpm = (msg->flags & MIPI_DSI_MSG_USE_LPM) ?
+			true : false;
+
+		cmdbuf = (u8 *)(dsi_ctrl->vaddr);
+
+		msm_gem_sync(dsi_ctrl->tx_cmd_buf);
+		for (cnt = 0; cnt < length; cnt++)
+			cmdbuf[dsi_ctrl->cmd_len + cnt] = buffer[cnt];
+
+		dsi_ctrl->cmd_len += length;
+
+		if (!(msg->flags & MIPI_DSI_MSG_LASTCOMMAND)) {
+			goto error;
+		} else {
+			cmd_mem.length = dsi_ctrl->cmd_len;
+			dsi_ctrl->cmd_len = 0;
+		}
+
+	} else if (flags & DSI_CTRL_CMD_FIFO_STORE) {
+		cmd.command =  (u32 *)buffer;
+		cmd.size = length;
+		cmd.en_broadcast = (flags & DSI_CTRL_CMD_BROADCAST) ?
+				     true : false;
+		cmd.is_master = (flags & DSI_CTRL_CMD_BROADCAST_MASTER) ?
+				  true : false;
+		cmd.use_lpm = (msg->flags & MIPI_DSI_MSG_USE_LPM) ?
+				  true : false;
+	}
+
+kickoff:
 	/* check if custom dma scheduling line needed */
 	if ((dsi_ctrl->host_config.panel_mode == DSI_OP_VIDEO_MODE) &&
 		(flags & DSI_CTRL_CMD_CUSTOM_DMA_SCHED))
@@ -1304,80 +1340,126 @@ static void dsi_kickoff_msg_tx(struct dsi_ctrl *dsi_ctrl,
 			if (flags & DSI_CTRL_CMD_NON_EMBEDDED_MODE) {
 				dsi_hw_ops.kickoff_command_non_embedded_mode(
 							&dsi_ctrl->hw,
-							cmd_mem,
+							&cmd_mem,
 							hw_flags);
 			} else {
-#if defined(CONFIG_DISPLAY_SAMSUNG)
-				if (msg->tx_buf[0] == 0x2a || msg->tx_buf[0] == 0x2b)
-					SDE_ATRACE_BEGIN("dsi_message_tx_flush");
-#endif
 				dsi_hw_ops.kickoff_command(
 						&dsi_ctrl->hw,
-						cmd_mem,
+						&cmd_mem,
 						hw_flags);
-#if defined(CONFIG_DISPLAY_SAMSUNG)
-				if (msg->tx_buf[0] == 0x2a || msg->tx_buf[0] == 0x2b)
-					SDE_ATRACE_END("dsi_message_tx_flush");
-#endif
 			}
 		} else if (flags & DSI_CTRL_CMD_FIFO_STORE) {
 			dsi_hw_ops.kickoff_fifo_command(&dsi_ctrl->hw,
-							      cmd,
+							      &cmd,
 							      hw_flags);
 		}
 	}
 
-	SDE_EVT32(dsi_ctrl->cell_index, flags);
-
 	if (!(flags & DSI_CTRL_CMD_DEFER_TRIGGER)) {
 		dsi_ctrl_wait_for_video_done(dsi_ctrl);
-		dsi_ctrl_mask_overflow(dsi_ctrl, true);
-
-		atomic_set(&dsi_ctrl->dma_irq_trig, 0);
 		dsi_ctrl_enable_status_interrupt(dsi_ctrl,
 					DSI_SINT_CMD_MODE_DMA_DONE, NULL);
+		if (dsi_hw_ops.mask_error_intr)
+			dsi_hw_ops.mask_error_intr(&dsi_ctrl->hw,
+					BIT(DSI_FIFO_OVERFLOW), true);
 		reinit_completion(&dsi_ctrl->irq_info.cmd_dma_done);
 
 		if (flags & DSI_CTRL_CMD_FETCH_MEMORY) {
 			if (flags & DSI_CTRL_CMD_NON_EMBEDDED_MODE) {
 				dsi_hw_ops.kickoff_command_non_embedded_mode(
 							&dsi_ctrl->hw,
-							cmd_mem,
+							&cmd_mem,
 							hw_flags);
 			} else {
+#if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
+				if (msg->tx_buf[0] == 0x2a || msg->tx_buf[0] == 0x2b)
+					SDE_ATRACE_BEGIN("dsi_message_tx_flush");
+#endif
 				dsi_hw_ops.kickoff_command(
 						&dsi_ctrl->hw,
-						cmd_mem,
+						&cmd_mem,
 						hw_flags);
+
+#if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
+				if (msg->tx_buf[0] == 0x2a || msg->tx_buf[0] == 0x2b)
+					SDE_ATRACE_END("dsi_message_tx_flush");
+#endif
 			}
 		} else if (flags & DSI_CTRL_CMD_FIFO_STORE) {
 			dsi_hw_ops.kickoff_fifo_command(&dsi_ctrl->hw,
-							      cmd,
+							      &cmd,
 							      hw_flags);
 		}
 
-#if defined(CONFIG_DISPLAY_SAMSUNG)
+#if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
 		if (msg->tx_buf[0] == 0x2a || msg->tx_buf[0] == 0x2b)
 			SDE_ATRACE_BEGIN("dsi_message_tx_wait");
 #endif
-		if (flags & DSI_CTRL_CMD_ASYNC_WAIT) {
-			dsi_ctrl->dma_wait_queued = true;
-			queue_work(dsi_ctrl->dma_cmd_workq,
-					&dsi_ctrl->dma_cmd_wait);
-		} else {
-			dsi_ctrl->dma_wait_queued = false;
-			dsi_ctrl_dma_cmd_wait_for_done(&dsi_ctrl->dma_cmd_wait);
-		}
+		SDE_EVT32(hw_flags, ret, 0x1111);
+		ret = wait_for_completion_timeout(
+				&dsi_ctrl->irq_info.cmd_dma_done,
+				msecs_to_jiffies(DSI_CTRL_TX_TO_MS));
 
-#if defined(CONFIG_DISPLAY_SAMSUNG)
-		// TODO: this should be called in dsi_ctrl_dma_cmd_wait_for_done()..
-		// but there is no msg struct... fix this later... (CSP3)
+#if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
 		if (msg->tx_buf[0] == 0x2a || msg->tx_buf[0] == 0x2b)
 			SDE_ATRACE_END("dsi_message_tx_wait");
 #endif
 
-		dsi_ctrl_mask_overflow(dsi_ctrl, false);
+		if (ret == 0) {
+			u32 status = dsi_hw_ops.get_interrupt_status(
+								&dsi_ctrl->hw);
+			u32 mask = DSI_CMD_MODE_DMA_DONE;
 
+			if (status & mask) {
+				status |= (DSI_CMD_MODE_DMA_DONE |
+						DSI_BTA_DONE);
+				dsi_hw_ops.clear_interrupt_status(
+								&dsi_ctrl->hw,
+								status);
+				dsi_ctrl_disable_status_interrupt(dsi_ctrl,
+						DSI_SINT_CMD_MODE_DMA_DONE);
+				complete_all(&dsi_ctrl->irq_info.cmd_dma_done);
+				pr_warn("dma_tx done but irq not triggered\n");
+			} else {
+				rc = -ETIMEDOUT;
+				dsi_ctrl_disable_status_interrupt(dsi_ctrl,
+						DSI_SINT_CMD_MODE_DMA_DONE);
+				pr_err("[DSI_%d]Command transfer failed\n",
+						dsi_ctrl->cell_index);
+				/* 
+				*  when we remove panic on tx_timeout we need to make err_flag 0 
+				*  otherwise it will make crtc_commit thread to be in a while loop
+				*  complete_commit(struct msm_commit *c) if (err_flag) { while (1) msleep(20);
+				*/
+				err_flag = 0;
+				SDE_EVT32(0xbad, 0x1);
+#if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
+				/* check physical display connection */
+				if (gpio_is_valid(vdd->ub_con_det.gpio)) {
+					pr_err("[SDE] ub_con_det.gpio(%d) level=%d\n",
+							vdd->ub_con_det.gpio,
+							gpio_get_value(vdd->ub_con_det.gpio));
+				}
+#endif
+
+/* 
+*  when we remove panic on tx_timeout we need to make err_flag 0
+*  otherwise it will make crtc_commit thread to be in a while loop
+*  complete_commit(struct msm_commit *c) if (err_flag) { while (1) msleep(20);
+*/
+#if 0 // case 03745287
+				if (!dsi_ctrl->esd_check_underway) {
+					/* For retry rx operation */
+					if (!msg->rx_len)
+						SDE_DBG_DUMP("all", "dbg_bus", "vbif_dbg_bus", "panic");
+				}
+#endif
+			}
+		}
+
+		if (dsi_hw_ops.mask_error_intr && !dsi_ctrl->esd_check_underway)
+			dsi_hw_ops.mask_error_intr(&dsi_ctrl->hw,
+					BIT(DSI_FIFO_OVERFLOW), false);
 		dsi_hw_ops.reset_cmd_fifo(&dsi_ctrl->hw);
 
 		/*
@@ -1386,181 +1468,10 @@ static void dsi_kickoff_msg_tx(struct dsi_ctrl *dsi_ctrl,
 		 * result in smmu write faults with DSI as client.
 		 */
 		if (flags & DSI_CTRL_CMD_NON_EMBEDDED_MODE) {
-			if (dsi_ctrl->version < DSI_CTRL_VERSION_2_4)
-				dsi_hw_ops.soft_reset(&dsi_ctrl->hw);
+			dsi_hw_ops.soft_reset(&dsi_ctrl->hw);
 			dsi_ctrl->cmd_len = 0;
 		}
 	}
-}
-
-static void dsi_ctrl_validate_msg_flags(struct dsi_ctrl *dsi_ctrl,
-				const struct mipi_dsi_msg *msg,
-				u32 *flags)
-{
-	/*
-	 * ASYNC command wait mode is not supported for
-	 *    - commands sent using DSI FIFO memory
-	 *    - DSI read commands
-	 *    - DCS commands sent in non-embedded mode
-	 *    - whenever an explicit wait time is specificed for the command
-	 *      since the wait time cannot be guaranteed in async mode
-	 *    - video mode panels
-	 * If async override is set, skip async flag reset
-	 */
-	if (((*flags & DSI_CTRL_CMD_FIFO_STORE) ||
-		*flags & DSI_CTRL_CMD_READ ||
-		*flags & DSI_CTRL_CMD_NON_EMBEDDED_MODE ||
-		msg->wait_ms ||
-		(dsi_ctrl->host_config.panel_mode == DSI_OP_VIDEO_MODE)) &&
-		!(msg->flags & MIPI_DSI_MSG_ASYNC_OVERRIDE))
-		*flags &= ~DSI_CTRL_CMD_ASYNC_WAIT;
-}
-
-#if defined(CONFIG_DISPLAY_SAMSUNG)
-static void print_cmd_desc(const struct mipi_dsi_msg *msg, int display_ndx)
-{
-	char buf[1024];
-	int len = 0;
-	size_t i;
-
-	/* Packet Info */
-	len += snprintf(buf, sizeof(buf) - len,  "%02x ", msg->type);
-	len += snprintf(buf + len, sizeof(buf) - len, "%02x ",
-		(msg->flags & MIPI_DSI_MSG_LASTCOMMAND) ? 1 : 0); /* Last bit */
-	len += snprintf(buf + len, sizeof(buf) - len, "%02x ", msg->channel);
-	len += snprintf(buf + len, sizeof(buf) - len, "%02x ",
-						(unsigned int)msg->flags);
-	len += snprintf(buf + len, sizeof(buf) - len, "%02x ", 0); /* Delay */
-	len += snprintf(buf + len, sizeof(buf) - len, "%02x ",
-						(unsigned int)msg->tx_len);
-
-	/* Packet Payload */
-	for (i = 0 ; i < msg->tx_len ; i++) {
-		len += snprintf(buf + len, sizeof(buf) - len,
-						"%02x ", msg->tx_buf[i]);
-		/* Break to prevent show too long command */
-		if (i > 250)
-			break;
-	}
-
-	LCD_INFO("[DISPLAY_%d] (%02d) %s\n", display_ndx, (unsigned int)msg->tx_len, buf);
-}
-#endif
-
-static int dsi_message_tx(struct dsi_ctrl *dsi_ctrl,
-			  const struct mipi_dsi_msg *msg,
-			  u32 *flags)
-{
-	int rc = 0;
-	struct mipi_dsi_packet packet;
-	struct dsi_ctrl_cmd_dma_fifo_info cmd;
-	struct dsi_ctrl_cmd_dma_info cmd_mem;
-	u32 length = 0;
-	u8 *buffer = NULL;
-	u32 cnt = 0;
-	u8 *cmdbuf;
-
-#if defined(CONFIG_DISPLAY_SAMSUNG)
-	struct samsung_display_driver_data *vdd = ss_get_vdd(dsi_ctrl->cell_index);
-	if (vdd->debug_data && vdd->debug_data->print_cmds)
-		print_cmd_desc(msg, vdd->ndx);
-#endif
-
-	/* Select the tx mode to transfer the command */
-	dsi_message_setup_tx_mode(dsi_ctrl, msg->tx_len, flags);
-
-	/* Validate the mode before sending the command */
-	rc = dsi_message_validate_tx_mode(dsi_ctrl, msg->tx_len, flags);
-	if (rc) {
-		DSI_CTRL_ERR(dsi_ctrl,
-			"Cmd tx validation failed, cannot transfer cmd\n");
-		rc = -ENOTSUPP;
-		goto error;
-	}
-
-	dsi_ctrl_validate_msg_flags(dsi_ctrl, msg, flags);
-
-	if (dsi_ctrl->dma_wait_queued)
-		dsi_ctrl_flush_cmd_dma_queue(dsi_ctrl);
-
-	if (*flags & DSI_CTRL_CMD_NON_EMBEDDED_MODE) {
-		cmd_mem.offset = dsi_ctrl->cmd_buffer_iova;
-		cmd_mem.en_broadcast = (*flags & DSI_CTRL_CMD_BROADCAST) ?
-			true : false;
-		cmd_mem.is_master = (*flags & DSI_CTRL_CMD_BROADCAST_MASTER) ?
-			true : false;
-		cmd_mem.use_lpm = (msg->flags & MIPI_DSI_MSG_USE_LPM) ?
-			true : false;
-		cmd_mem.datatype = msg->type;
-		cmd_mem.length = msg->tx_len;
-
-		dsi_ctrl->cmd_len = msg->tx_len;
-		memcpy(dsi_ctrl->vaddr, msg->tx_buf, msg->tx_len);
-		DSI_CTRL_INFO(dsi_ctrl,
-				"non-embedded mode , size of command =%zd\n",
-					msg->tx_len);
-
-		goto kickoff;
-	}
-
-	rc = mipi_dsi_create_packet(&packet, msg);
-	if (rc) {
-		DSI_CTRL_ERR(dsi_ctrl, "Failed to create message packet, rc=%d\n",
-				rc);
-		goto error;
-	}
-
-	rc = dsi_ctrl_copy_and_pad_cmd(dsi_ctrl,
-			&packet,
-			&buffer,
-			&length);
-	if (rc) {
-		DSI_CTRL_ERR(dsi_ctrl, "failed to copy message, rc=%d\n", rc);
-		goto error;
-	}
-
-	if ((msg->flags & MIPI_DSI_MSG_LASTCOMMAND))
-		buffer[3] |= BIT(7);//set the last cmd bit in header.
-
-	if (*flags & DSI_CTRL_CMD_FETCH_MEMORY) {
-		/* Embedded mode config is selected */
-		cmd_mem.offset = dsi_ctrl->cmd_buffer_iova;
-		cmd_mem.en_broadcast = (*flags & DSI_CTRL_CMD_BROADCAST) ?
-			true : false;
-		cmd_mem.is_master = (*flags & DSI_CTRL_CMD_BROADCAST_MASTER) ?
-			true : false;
-		cmd_mem.use_lpm = (msg->flags & MIPI_DSI_MSG_USE_LPM) ?
-			true : false;
-
-		cmdbuf = (u8 *)(dsi_ctrl->vaddr);
-
-		msm_gem_sync(dsi_ctrl->tx_cmd_buf);
-		for (cnt = 0; cnt < length; cnt++)
-			cmdbuf[dsi_ctrl->cmd_len + cnt] = buffer[cnt];
-
-		dsi_ctrl->cmd_len += length;
-
-		if (!(msg->flags & MIPI_DSI_MSG_LASTCOMMAND)) {
-			goto error;
-		} else {
-			cmd_mem.length = dsi_ctrl->cmd_len;
-			SDE_EVT32(cmd_mem.length, *flags);
-			dsi_ctrl->cmd_len = 0;
-		}
-
-	} else if (*flags & DSI_CTRL_CMD_FIFO_STORE) {
-		cmd.command =  (u32 *)buffer;
-		cmd.size = length;
-		cmd.en_broadcast = (*flags & DSI_CTRL_CMD_BROADCAST) ?
-				     true : false;
-		cmd.is_master = (*flags & DSI_CTRL_CMD_BROADCAST_MASTER) ?
-				  true : false;
-		cmd.use_lpm = (msg->flags & MIPI_DSI_MSG_USE_LPM) ?
-				  true : false;
-	}
-
-kickoff:
-	dsi_kickoff_msg_tx(dsi_ctrl, msg, &cmd, &cmd_mem, *flags);
 error:
 	if (buffer)
 		devm_kfree(&dsi_ctrl->pdev->dev, buffer);
@@ -1574,8 +1485,6 @@ static int dsi_set_max_return_size(struct dsi_ctrl *dsi_ctrl,
 	int rc = 0;
 	u8 tx[2] = { (u8)(size & 0xFF), (u8)(size >> 8) };
 	u32 flags = DSI_CTRL_CMD_FETCH_MEMORY;
-	u16 dflags = rx_msg->flags;
-
 	struct mipi_dsi_msg msg = {
 		.channel = rx_msg->channel,
 		.type = MIPI_DSI_SET_MAXIMUM_RETURN_PACKET_SIZE,
@@ -1584,14 +1493,9 @@ static int dsi_set_max_return_size(struct dsi_ctrl *dsi_ctrl,
 		.flags = rx_msg->flags,
 	};
 
-	/* remove last message flag to batch max packet cmd to read command */
-	dflags &= ~BIT(3);
-	msg.flags = dflags;
-
-	rc = dsi_message_tx(dsi_ctrl, &msg, &flags);
+	rc = dsi_message_tx(dsi_ctrl, &msg, flags);
 	if (rc)
-		DSI_CTRL_ERR(dsi_ctrl, "failed to send max return size packet, rc=%d\n",
-				rc);
+		pr_err("failed to send max return size packet, rc=%d\n", rc);
 
 	return rc;
 }
@@ -1650,7 +1554,7 @@ static int dsi_parse_long_read_resp(const struct mipi_dsi_msg *msg,
 
 static int dsi_message_rx(struct dsi_ctrl *dsi_ctrl,
 			  const struct mipi_dsi_msg *msg,
-			  u32 *flags)
+			  u32 flags)
 {
 	int rc = 0;
 	u32 rd_pkt_size, total_read_len, hw_read_cnt;
@@ -1662,7 +1566,7 @@ static int dsi_message_rx(struct dsi_ctrl *dsi_ctrl,
 	char cmd;
 
 	if (!msg) {
-		DSI_CTRL_ERR(dsi_ctrl, "Invalid msg\n");
+		pr_err("Invalid msg\n");
 		rc = -EINVAL;
 		goto error;
 	}
@@ -1687,7 +1591,7 @@ static int dsi_message_rx(struct dsi_ctrl *dsi_ctrl,
 	while (!read_done) {
 		rc = dsi_set_max_return_size(dsi_ctrl, msg, rd_pkt_size);
 		if (rc) {
-			DSI_CTRL_ERR(dsi_ctrl, "Failed to set max return packet size, rc=%d\n",
+			pr_err("Failed to set max return packet size, rc=%d\n",
 			       rc);
 			goto error;
 		}
@@ -1697,8 +1601,16 @@ static int dsi_message_rx(struct dsi_ctrl *dsi_ctrl,
 
 		rc = dsi_message_tx(dsi_ctrl, msg, flags);
 		if (rc) {
-			DSI_CTRL_ERR(dsi_ctrl, "Message transmission failed, rc=%d\n",
-					rc);
+			pr_err("Message transmission failed, rc=%d\n", rc);
+
+#if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
+			{
+				struct dsi_display *display = dsi_ctrl->irq_info.irq_err_cb.event_usr_ptr;
+
+				if (work_busy(&display->lp_rx_timeout_work))
+					usleep_range(20000, 20000);
+			}
+#endif
 			goto error;
 		}
 		/*
@@ -1749,7 +1661,7 @@ static int dsi_message_rx(struct dsi_ctrl *dsi_ctrl,
 	cmd = buff[0];
 	switch (cmd) {
 	case MIPI_DSI_RX_ACKNOWLEDGE_AND_ERROR_REPORT:
-		DSI_CTRL_ERR(dsi_ctrl, "Rx ACK_ERROR 0x%x\n", cmd);
+		pr_err("Rx ACK_ERROR 0x%x\n", cmd);
 		rc = 0;
 		break;
 	case MIPI_DSI_RX_GENERIC_SHORT_READ_RESPONSE_1BYTE:
@@ -1765,7 +1677,7 @@ static int dsi_message_rx(struct dsi_ctrl *dsi_ctrl,
 		rc = dsi_parse_long_read_resp(msg, buff);
 		break;
 	default:
-		DSI_CTRL_WARN(dsi_ctrl, "Invalid response: 0x%x\n", cmd);
+		pr_warn("Invalid response: 0x%x\n", cmd);
 		rc = 0;
 	}
 
@@ -1783,13 +1695,13 @@ static int dsi_enable_ulps(struct dsi_ctrl *dsi_ctrl)
 
 	rc = dsi_ctrl->hw.ops.wait_for_lane_idle(&dsi_ctrl->hw, lanes);
 	if (rc) {
-		DSI_CTRL_ERR(dsi_ctrl, "lanes not entering idle, skip ULPS\n");
+		pr_err("lanes not entering idle, skip ULPS\n");
 		return rc;
 	}
 
 	if (!dsi_ctrl->hw.ops.ulps_ops.ulps_request ||
 			!dsi_ctrl->hw.ops.ulps_ops.ulps_exit) {
-		DSI_CTRL_DEBUG(dsi_ctrl, "DSI controller ULPS ops not present\n");
+		pr_debug("DSI controller ULPS ops not present\n");
 		return 0;
 	}
 
@@ -1799,7 +1711,7 @@ static int dsi_enable_ulps(struct dsi_ctrl *dsi_ctrl)
 	ulps_lanes = dsi_ctrl->hw.ops.ulps_ops.get_lanes_in_ulps(&dsi_ctrl->hw);
 
 	if ((lanes & ulps_lanes) != lanes) {
-		DSI_CTRL_ERR(dsi_ctrl, "Failed to enter ULPS, request=0x%x, actual=0x%x\n",
+		pr_err("Failed to enter ULPS, request=0x%x, actual=0x%x\n",
 		       lanes, ulps_lanes);
 		rc = -EIO;
 	}
@@ -1816,7 +1728,7 @@ static int dsi_disable_ulps(struct dsi_ctrl *dsi_ctrl)
 
 	if (!dsi_ctrl->hw.ops.ulps_ops.ulps_request ||
 			!dsi_ctrl->hw.ops.ulps_ops.ulps_exit) {
-		DSI_CTRL_DEBUG(dsi_ctrl, "DSI controller ULPS ops not present\n");
+		pr_debug("DSI controller ULPS ops not present\n");
 		return 0;
 	}
 
@@ -1826,7 +1738,7 @@ static int dsi_disable_ulps(struct dsi_ctrl *dsi_ctrl)
 	ulps_lanes = dsi_ctrl->hw.ops.ulps_ops.get_lanes_in_ulps(&dsi_ctrl->hw);
 
 	if ((lanes & ulps_lanes) != lanes)
-		DSI_CTRL_ERR(dsi_ctrl, "Mismatch between lanes in ULPS\n");
+		pr_err("Mismatch between lanes in ULPS\n");
 
 	lanes &= ulps_lanes;
 
@@ -1834,8 +1746,7 @@ static int dsi_disable_ulps(struct dsi_ctrl *dsi_ctrl)
 
 	ulps_lanes = dsi_ctrl->hw.ops.ulps_ops.get_lanes_in_ulps(&dsi_ctrl->hw);
 	if (ulps_lanes & lanes) {
-		DSI_CTRL_ERR(dsi_ctrl, "Lanes (0x%x) stuck in ULPS\n",
-				ulps_lanes);
+		pr_err("Lanes (0x%x) stuck in ULPS\n", ulps_lanes);
 		rc = -EIO;
 	}
 
@@ -1877,7 +1788,7 @@ static int dsi_ctrl_buffer_deinit(struct dsi_ctrl *dsi_ctrl)
 		aspace = dsi_ctrl_get_aspace(dsi_ctrl,
 				MSM_SMMU_DOMAIN_UNSECURE);
 		if (!aspace) {
-			DSI_CTRL_ERR(dsi_ctrl, "failed to get address space\n");
+			pr_err("failed to get address space\n");
 			return -ENOMEM;
 		}
 
@@ -1900,7 +1811,7 @@ int dsi_ctrl_buffer_init(struct dsi_ctrl *dsi_ctrl)
 
 	aspace = dsi_ctrl_get_aspace(dsi_ctrl, MSM_SMMU_DOMAIN_UNSECURE);
 	if (!aspace) {
-		DSI_CTRL_ERR(dsi_ctrl, "failed to get address space\n");
+		pr_err("failed to get address space\n");
 		return -ENOMEM;
 	}
 
@@ -1910,7 +1821,7 @@ int dsi_ctrl_buffer_init(struct dsi_ctrl *dsi_ctrl)
 
 	if (IS_ERR(dsi_ctrl->tx_cmd_buf)) {
 		rc = PTR_ERR(dsi_ctrl->tx_cmd_buf);
-		DSI_CTRL_ERR(dsi_ctrl, "failed to allocate gem, rc=%d\n", rc);
+		pr_err("failed to allocate gem, rc=%d\n", rc);
 		dsi_ctrl->tx_cmd_buf = NULL;
 		goto error;
 	}
@@ -1919,13 +1830,13 @@ int dsi_ctrl_buffer_init(struct dsi_ctrl *dsi_ctrl)
 
 	rc = msm_gem_get_iova(dsi_ctrl->tx_cmd_buf, aspace, &iova);
 	if (rc) {
-		DSI_CTRL_ERR(dsi_ctrl, "failed to get iova, rc=%d\n", rc);
+		pr_err("failed to get iova, rc=%d\n", rc);
 		(void)dsi_ctrl_buffer_deinit(dsi_ctrl);
 		goto error;
 	}
 
 	if (iova & 0x07) {
-		DSI_CTRL_ERR(dsi_ctrl, "Tx command buffer is not 8 byte aligned\n");
+		pr_err("Tx command buffer is not 8 byte aligned\n");
 		rc = -ENOTSUPP;
 		(void)dsi_ctrl_buffer_deinit(dsi_ctrl);
 		goto error;
@@ -1957,18 +1868,18 @@ static int dsi_enable_io_clamp(struct dsi_ctrl *dsi_ctrl,
 static int dsi_ctrl_dts_parse(struct dsi_ctrl *dsi_ctrl,
 				  struct device_node *of_node)
 {
-	u32 index = 0, frame_threshold_time_us = 0;
+	u32 index = 0;
 	int rc = 0;
 
 	if (!dsi_ctrl || !of_node) {
-		DSI_CTRL_ERR(dsi_ctrl, "invalid dsi_ctrl:%d or of_node:%d\n",
+		pr_err("invalid dsi_ctrl:%d or of_node:%d\n",
 					dsi_ctrl != NULL, of_node != NULL);
 		return -EINVAL;
 	}
 
 	rc = of_property_read_u32(of_node, "cell-index", &index);
 	if (rc) {
-		DSI_CTRL_DEBUG(dsi_ctrl, "cell index not set, default to 0\n");
+		pr_debug("cell index not set, default to 0\n");
 		index = 0;
 	}
 
@@ -1986,16 +1897,6 @@ static int dsi_ctrl_dts_parse(struct dsi_ctrl *dsi_ctrl,
 	dsi_ctrl->split_link_supported = of_property_read_bool(of_node,
 					"qcom,split-link-supported");
 
-	rc = of_property_read_u32(of_node, "frame-threshold-time-us",
-			&frame_threshold_time_us);
-	if (rc) {
-		DSI_CTRL_DEBUG(dsi_ctrl,
-				"frame-threshold-time not specified, defaulting\n");
-		frame_threshold_time_us = 2666;
-	}
-
-	dsi_ctrl->frame_threshold_time_us = frame_threshold_time_us;
-
 	return 0;
 }
 
@@ -2006,6 +1907,10 @@ static int dsi_ctrl_dev_probe(struct platform_device *pdev)
 	const struct of_device_id *id;
 	enum dsi_ctrl_version version;
 	int rc = 0;
+
+#if defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
+	LCD_INFO("dsi_ctrl_dev_probe ++ \n");
+#endif
 
 	id = of_match_node(msm_dsi_of_match, pdev->dev.of_node);
 	if (!id)
@@ -2025,35 +1930,30 @@ static int dsi_ctrl_dev_probe(struct platform_device *pdev)
 	dsi_ctrl->irq_info.irq_num = -1;
 	dsi_ctrl->irq_info.irq_stat_mask = 0x0;
 
-	INIT_WORK(&dsi_ctrl->dma_cmd_wait, dsi_ctrl_dma_cmd_wait_for_done);
-	atomic_set(&dsi_ctrl->dma_irq_trig, 0);
-
 	spin_lock_init(&dsi_ctrl->irq_info.irq_lock);
 
 	rc = dsi_ctrl_dts_parse(dsi_ctrl, pdev->dev.of_node);
 	if (rc) {
-		DSI_CTRL_ERR(dsi_ctrl, "dts parse failed, rc = %d\n", rc);
+		pr_err("ctrl:%d dts parse failed, rc = %d\n",
+						dsi_ctrl->cell_index, rc);
 		goto fail;
 	}
 
 	rc = dsi_ctrl_init_regmap(pdev, dsi_ctrl);
 	if (rc) {
-		DSI_CTRL_ERR(dsi_ctrl, "Failed to parse register information, rc = %d\n",
-				rc);
+		pr_err("Failed to parse register information, rc = %d\n", rc);
 		goto fail;
 	}
 
 	rc = dsi_ctrl_clocks_init(pdev, dsi_ctrl);
 	if (rc) {
-		DSI_CTRL_ERR(dsi_ctrl, "Failed to parse clock information, rc = %d\n",
-				rc);
+		pr_err("Failed to parse clock information, rc = %d\n", rc);
 		goto fail;
 	}
 
 	rc = dsi_ctrl_supplies_init(pdev, dsi_ctrl);
 	if (rc) {
-		DSI_CTRL_ERR(dsi_ctrl, "Failed to parse voltage supplies, rc = %d\n",
-				rc);
+		pr_err("Failed to parse voltage supplies, rc = %d\n", rc);
 		goto fail_clks;
 	}
 
@@ -2061,15 +1961,14 @@ static int dsi_ctrl_dev_probe(struct platform_device *pdev)
 		dsi_ctrl->cell_index, dsi_ctrl->phy_isolation_enabled,
 		dsi_ctrl->null_insertion_enabled);
 	if (rc) {
-		DSI_CTRL_ERR(dsi_ctrl, "Catalog does not support version (%d)\n",
+		pr_err("Catalog does not support version (%d)\n",
 		       dsi_ctrl->version);
 		goto fail_supplies;
 	}
 
 	rc = dsi_ctrl_axi_bus_client_init(pdev, dsi_ctrl);
 	if (rc)
-		DSI_CTRL_DEBUG(dsi_ctrl, "failed to init axi bus client, rc = %d\n",
-				rc);
+		pr_debug("failed to init axi bus client, rc = %d\n", rc);
 
 	item->ctrl = dsi_ctrl;
 
@@ -2082,7 +1981,11 @@ static int dsi_ctrl_dev_probe(struct platform_device *pdev)
 
 	dsi_ctrl->pdev = pdev;
 	platform_set_drvdata(pdev, dsi_ctrl);
-	DSI_CTRL_INFO(dsi_ctrl, "Probe successful\n");
+	pr_info("Probe successful for %s\n", dsi_ctrl->name);
+
+#if defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
+	LCD_INFO("dsi_ctrl_dev_probe -- \n");
+#endif
 
 	return 0;
 
@@ -2117,21 +2020,16 @@ static int dsi_ctrl_dev_remove(struct platform_device *pdev)
 	mutex_lock(&dsi_ctrl->ctrl_lock);
 	rc = dsi_ctrl_axi_bus_client_deinit(dsi_ctrl);
 	if (rc)
-		DSI_CTRL_ERR(dsi_ctrl, "failed to deinitialize axi bus client, rc = %d\n",
-				rc);
+		pr_err("failed to deinitialize axi bus client, rc = %d\n", rc);
 
 	rc = dsi_ctrl_supplies_deinit(dsi_ctrl);
 	if (rc)
-		DSI_CTRL_ERR(dsi_ctrl,
-				"failed to deinitialize voltage supplies, rc=%d\n",
-				rc);
+		pr_err("failed to deinitialize voltage supplies, rc=%d\n", rc);
 
 	rc = dsi_ctrl_clocks_deinit(dsi_ctrl);
 	if (rc)
-		DSI_CTRL_ERR(dsi_ctrl,
-				"failed to deinitialize clocks, rc=%d\n", rc);
+		pr_err("failed to deinitialize clocks, rc=%d\n", rc);
 
-	atomic_set(&dsi_ctrl->dma_irq_trig, 0);
 	mutex_unlock(&dsi_ctrl->ctrl_lock);
 
 	mutex_destroy(&dsi_ctrl->ctrl_lock);
@@ -2151,8 +2049,6 @@ static struct platform_driver dsi_ctrl_driver = {
 	},
 };
 
-#if defined(CONFIG_DEBUG_FS)
-
 void dsi_ctrl_debug_dump(u32 *entries, u32 size)
 {
 	struct list_head *pos, *tmp;
@@ -2167,13 +2063,12 @@ void dsi_ctrl_debug_dump(u32 *entries, u32 size)
 
 		n = list_entry(pos, struct dsi_ctrl_list_item, list);
 		ctrl = n->ctrl;
-		DSI_ERR("dsi ctrl:%d\n", ctrl->cell_index);
+		pr_err("dsi ctrl:%d\n", ctrl->cell_index);
 		ctrl->hw.ops.debug_bus(&ctrl->hw, entries, size);
 	}
 	mutex_unlock(&dsi_ctrl_list_lock);
 }
 
-#endif
 /**
  * dsi_ctrl_get() - get a dsi_ctrl handle from an of_node
  * @of_node:    of_node of the DSI controller.
@@ -2202,20 +2097,20 @@ struct dsi_ctrl *dsi_ctrl_get(struct device_node *of_node)
 	mutex_unlock(&dsi_ctrl_list_lock);
 
 	if (!ctrl) {
-		DSI_CTRL_ERR(ctrl, "Device with of node not found\n");
+		pr_err("Device with of node not found\n");
 		ctrl = ERR_PTR(-EPROBE_DEFER);
 		return ctrl;
 	}
 
 	mutex_lock(&ctrl->ctrl_lock);
 	if (ctrl->refcount == 1) {
-		DSI_CTRL_ERR(ctrl, "Device in use\n");
+		pr_err("[%s] Device in use\n", ctrl->name);
 		mutex_unlock(&ctrl->ctrl_lock);
 		ctrl = ERR_PTR(-EBUSY);
 		return ctrl;
+	} else {
+		ctrl->refcount++;
 	}
-
-	ctrl->refcount++;
 	mutex_unlock(&ctrl->ctrl_lock);
 	return ctrl;
 }
@@ -2232,7 +2127,7 @@ void dsi_ctrl_put(struct dsi_ctrl *dsi_ctrl)
 	mutex_lock(&dsi_ctrl->ctrl_lock);
 
 	if (dsi_ctrl->refcount == 0)
-		DSI_CTRL_ERR(dsi_ctrl, "Unbalanced %s call\n", __func__);
+		pr_err("Unbalanced %s call\n", __func__);
 	else
 		dsi_ctrl->refcount--;
 
@@ -2254,21 +2149,21 @@ int dsi_ctrl_drv_init(struct dsi_ctrl *dsi_ctrl, struct dentry *parent)
 	int rc = 0;
 
 	if (!dsi_ctrl) {
-		DSI_CTRL_ERR(dsi_ctrl, "Invalid params\n");
+		pr_err("Invalid params\n");
 		return -EINVAL;
 	}
 
 	mutex_lock(&dsi_ctrl->ctrl_lock);
 	rc = dsi_ctrl_drv_state_init(dsi_ctrl);
 	if (rc) {
-		DSI_CTRL_ERR(dsi_ctrl, "Failed to initialize driver state, rc=%d\n",
-				rc);
+		pr_err("Failed to initialize driver state, rc=%d\n", rc);
 		goto error;
 	}
 
 	rc = dsi_ctrl_debugfs_init(dsi_ctrl, parent);
 	if (rc) {
-		DSI_CTRL_ERR(dsi_ctrl, "failed to init debug fs, rc=%d\n", rc);
+		pr_err("[DSI_%d] failed to init debug fs, rc=%d\n",
+		       dsi_ctrl->cell_index, rc);
 		goto error;
 	}
 
@@ -2290,7 +2185,7 @@ int dsi_ctrl_drv_deinit(struct dsi_ctrl *dsi_ctrl)
 	int rc = 0;
 
 	if (!dsi_ctrl) {
-		DSI_CTRL_ERR(dsi_ctrl, "Invalid params\n");
+		pr_err("Invalid params\n");
 		return -EINVAL;
 	}
 
@@ -2298,13 +2193,11 @@ int dsi_ctrl_drv_deinit(struct dsi_ctrl *dsi_ctrl)
 
 	rc = dsi_ctrl_debugfs_deinit(dsi_ctrl);
 	if (rc)
-		DSI_CTRL_ERR(dsi_ctrl, "failed to release debugfs root, rc=%d\n",
-				rc);
+		pr_err("failed to release debugfs root, rc=%d\n", rc);
 
 	rc = dsi_ctrl_buffer_deinit(dsi_ctrl);
 	if (rc)
-		DSI_CTRL_ERR(dsi_ctrl, "Failed to free cmd buffers, rc=%d\n",
-				rc);
+		pr_err("Failed to free cmd buffers, rc=%d\n", rc);
 
 	mutex_unlock(&dsi_ctrl->ctrl_lock);
 	return rc;
@@ -2314,7 +2207,7 @@ int dsi_ctrl_clk_cb_register(struct dsi_ctrl *dsi_ctrl,
 	struct clk_ctrl_cb *clk_cb)
 {
 	if (!dsi_ctrl || !clk_cb) {
-		DSI_CTRL_ERR(dsi_ctrl, "Invalid params\n");
+		pr_err("Invalid params\n");
 		return -EINVAL;
 	}
 
@@ -2340,21 +2233,21 @@ int dsi_ctrl_phy_sw_reset(struct dsi_ctrl *dsi_ctrl)
 	int rc = 0;
 
 	if (!dsi_ctrl) {
-		DSI_CTRL_ERR(dsi_ctrl, "Invalid params\n");
+		pr_err("Invalid params\n");
 		return -EINVAL;
 	}
 
 	mutex_lock(&dsi_ctrl->ctrl_lock);
 	rc = dsi_ctrl_check_state(dsi_ctrl, DSI_CTRL_OP_PHY_SW_RESET, 0x0);
 	if (rc) {
-		DSI_CTRL_ERR(dsi_ctrl, "Controller state check failed, rc=%d\n",
-				rc);
+		pr_err("[DSI_%d] Controller state check failed, rc=%d\n",
+		       dsi_ctrl->cell_index, rc);
 		goto error;
 	}
 
 	dsi_ctrl->hw.ops.phy_sw_reset(&dsi_ctrl->hw);
 
-	DSI_CTRL_DEBUG(dsi_ctrl, "PHY soft reset done\n");
+	pr_debug("[DSI_%d] PHY soft reset done\n", dsi_ctrl->cell_index);
 	dsi_ctrl_update_state(dsi_ctrl, DSI_CTRL_OP_PHY_SW_RESET, 0x0);
 error:
 	mutex_unlock(&dsi_ctrl->ctrl_lock);
@@ -2378,7 +2271,7 @@ int dsi_ctrl_async_timing_update(struct dsi_ctrl *dsi_ctrl,
 	int rc = 0;
 
 	if (!dsi_ctrl || !timing) {
-		DSI_CTRL_ERR(dsi_ctrl, "Invalid params\n");
+		pr_err("Invalid params\n");
 		return -EINVAL;
 	}
 
@@ -2387,8 +2280,8 @@ int dsi_ctrl_async_timing_update(struct dsi_ctrl *dsi_ctrl,
 	rc = dsi_ctrl_check_state(dsi_ctrl, DSI_CTRL_OP_ASYNC_TIMING,
 			DSI_CTRL_ENGINE_ON);
 	if (rc) {
-		DSI_CTRL_ERR(dsi_ctrl, "Controller state check failed, rc=%d\n",
-				rc);
+		pr_err("[DSI_%d] Controller state check failed, rc=%d\n",
+		       dsi_ctrl->cell_index, rc);
 		goto exit;
 	}
 
@@ -2417,7 +2310,7 @@ int dsi_ctrl_timing_db_update(struct dsi_ctrl *dsi_ctrl,
 	int rc = 0;
 
 	if (!dsi_ctrl) {
-		DSI_CTRL_ERR(dsi_ctrl, "Invalid dsi_ctrl\n");
+		pr_err("Invalid dsi_ctrl\n");
 		return -EINVAL;
 	}
 
@@ -2426,8 +2319,8 @@ int dsi_ctrl_timing_db_update(struct dsi_ctrl *dsi_ctrl,
 	rc = dsi_ctrl_check_state(dsi_ctrl, DSI_CTRL_OP_ASYNC_TIMING,
 			DSI_CTRL_ENGINE_ON);
 	if (rc) {
-		DSI_CTRL_ERR(dsi_ctrl, "Controller state check failed, rc=%d\n",
-				rc);
+		pr_err("[DSI_%d] Controller state check failed, rc=%d\n",
+		       dsi_ctrl->cell_index, rc);
 		goto exit;
 	}
 
@@ -2449,15 +2342,22 @@ exit:
 	return rc;
 }
 
-int dsi_ctrl_timing_setup(struct dsi_ctrl *dsi_ctrl)
+int dsi_ctrl_setup(struct dsi_ctrl *dsi_ctrl)
 {
 	int rc = 0;
+
 	if (!dsi_ctrl) {
-		DSI_CTRL_ERR(dsi_ctrl, "Invalid params\n");
+		pr_err("Invalid params\n");
 		return -EINVAL;
 	}
 
 	mutex_lock(&dsi_ctrl->ctrl_lock);
+
+	dsi_ctrl->hw.ops.setup_lane_map(&dsi_ctrl->hw,
+					&dsi_ctrl->host_config.lane_map);
+
+	dsi_ctrl->hw.ops.host_setup(&dsi_ctrl->hw,
+				    &dsi_ctrl->host_config.common_config);
 
 	if (dsi_ctrl->host_config.panel_mode == DSI_OP_CMD_MODE) {
 		dsi_ctrl->hw.ops.cmd_engine_setup(&dsi_ctrl->hw,
@@ -2479,27 +2379,8 @@ int dsi_ctrl_timing_setup(struct dsi_ctrl *dsi_ctrl)
 		dsi_ctrl->hw.ops.video_engine_en(&dsi_ctrl->hw, true);
 	}
 
-	mutex_unlock(&dsi_ctrl->ctrl_lock);
-	return rc;
-}
-
-int dsi_ctrl_setup(struct dsi_ctrl *dsi_ctrl)
-{
-	int rc = 0;
-
-	rc = dsi_ctrl_timing_setup(dsi_ctrl);
-	if (rc)
-		return -EINVAL;
-
-	mutex_lock(&dsi_ctrl->ctrl_lock);
-
-	dsi_ctrl->hw.ops.setup_lane_map(&dsi_ctrl->hw,
-					&dsi_ctrl->host_config.lane_map);
-
-	dsi_ctrl->hw.ops.host_setup(&dsi_ctrl->hw,
-				    &dsi_ctrl->host_config.common_config);
-
 	dsi_ctrl->hw.ops.enable_status_interrupts(&dsi_ctrl->hw, 0x0);
+
 	dsi_ctrl_enable_error_interrupts(dsi_ctrl);
 
 	dsi_ctrl->hw.ops.ctrl_en(&dsi_ctrl->hw, true);
@@ -2514,7 +2395,7 @@ int dsi_ctrl_set_roi(struct dsi_ctrl *dsi_ctrl, struct dsi_rect *roi,
 	int rc = 0;
 
 	if (!dsi_ctrl || !roi || !changed) {
-		DSI_CTRL_ERR(dsi_ctrl, "Invalid params\n");
+		pr_err("Invalid params\n");
 		return -EINVAL;
 	}
 
@@ -2543,7 +2424,7 @@ int dsi_ctrl_config_clk_gating(struct dsi_ctrl *dsi_ctrl, bool enable,
 			enum dsi_clk_gate_type clk_selection)
 {
 	if (!dsi_ctrl) {
-		DSI_CTRL_ERR(dsi_ctrl, "Invalid params\n");
+		pr_err("Invalid params\n");
 		return -EINVAL;
 	}
 
@@ -2565,7 +2446,7 @@ int dsi_ctrl_config_clk_gating(struct dsi_ctrl *dsi_ctrl, bool enable,
 int dsi_ctrl_phy_reset_config(struct dsi_ctrl *dsi_ctrl, bool enable)
 {
 	if (!dsi_ctrl) {
-		DSI_CTRL_ERR(dsi_ctrl, "Invalid params\n");
+		pr_err("Invalid params\n");
 		return -EINVAL;
 	}
 
@@ -2583,7 +2464,7 @@ static bool dsi_ctrl_check_for_spurious_error_interrupts(
 	unsigned long jiffies_now = jiffies;
 
 	if (!dsi_ctrl) {
-		DSI_CTRL_ERR(dsi_ctrl, "Invalid DSI controller structure\n");
+		pr_err("Invalid DSI controller structure\n");
 		return false;
 	}
 
@@ -2594,8 +2475,7 @@ static bool dsi_ctrl_check_for_spurious_error_interrupts(
 
 	if ((jiffies_now - dsi_ctrl->jiffies_start) < intr_check_interval) {
 		if (dsi_ctrl->error_interrupt_count > interrupt_threshold) {
-			DSI_CTRL_WARN(dsi_ctrl, "Detected spurious interrupts on dsi ctrl\n");
-			SDE_EVT32_IRQ(dsi_ctrl->error_interrupt_count);
+			pr_warn("Detected spurious interrupts on dsi ctrl\n");
 			return true;
 		}
 	} else {
@@ -2606,7 +2486,7 @@ static bool dsi_ctrl_check_for_spurious_error_interrupts(
 }
 
 static void dsi_ctrl_handle_error_status(struct dsi_ctrl *dsi_ctrl,
-				unsigned long error)
+				unsigned long int error)
 {
 	struct dsi_event_cb_info cb_info;
 
@@ -2623,8 +2503,7 @@ static void dsi_ctrl_handle_error_status(struct dsi_ctrl *dsi_ctrl,
 
 	/* DTLN PHY error */
 	if (error & 0x3000E00)
-		DSI_CTRL_ERR(dsi_ctrl, "dsi PHY contention error: 0x%lx\n",
-				error);
+		pr_err("dsi PHY contention error: 0x%lx\n", error);
 
 	/* ignore TX timeout if blpp_lp11 is disabled */
 	if (dsi_ctrl->host_config.panel_mode == DSI_OP_VIDEO_MODE &&
@@ -2643,7 +2522,7 @@ static void dsi_ctrl_handle_error_status(struct dsi_ctrl *dsi_ctrl,
 							0, 0, 0, 0);
 			}
 		}
-		DSI_CTRL_ERR(dsi_ctrl, "tx timeout error: 0x%lx\n", error);
+		pr_err("tx timeout error: 0x%lx\n", error);
 	}
 
 	/* DSI FIFO OVERFLOW error */
@@ -2659,13 +2538,13 @@ static void dsi_ctrl_handle_error_status(struct dsi_ctrl *dsi_ctrl,
 						cb_info.event_idx,
 						dsi_ctrl->cell_index,
 						0, 0, 0, 0);
-			DSI_CTRL_ERR(dsi_ctrl, "dsi FIFO OVERFLOW error: 0x%lx\n",
-					error);
+			pr_err("dsi FIFO OVERFLOW error: 0x%lx\n", error);
 		}
 	}
 
 	/* DSI FIFO UNDERFLOW error */
 	if (error & 0xF00000) {
+		pr_err("dsi FIFO UNDERFLOW error: 0x%lx\n", error);
 		if (cb_info.event_cb) {
 			cb_info.event_idx = DSI_FIFO_UNDERFLOW;
 			(void)cb_info.event_cb(cb_info.event_usr_ptr,
@@ -2673,17 +2552,16 @@ static void dsi_ctrl_handle_error_status(struct dsi_ctrl *dsi_ctrl,
 						dsi_ctrl->cell_index,
 						0, 0, 0, 0);
 		}
-		DSI_CTRL_ERR(dsi_ctrl, "dsi FIFO UNDERFLOW error: 0x%lx\n",
-				error);
+		pr_err("dsi FIFO UNDERFLOW error: 0x%lx\n", error);
 	}
 
 	/* DSI PLL UNLOCK error */
 	if (error & BIT(8))
-		DSI_CTRL_ERR(dsi_ctrl, "dsi PLL unlock error: 0x%lx\n", error);
+		pr_err("dsi PLL unlock error: 0x%lx\n", error);
 
 	/* ACK error */
 	if (error & 0xF)
-		DSI_CTRL_ERR(dsi_ctrl, "ack error: 0x%lx\n", error);
+		pr_err("ack error: 0x%lx\n", error);
 
 	/*
 	 * DSI Phy can go into bad state during ESD influence. This can
@@ -2702,7 +2580,7 @@ static void dsi_ctrl_handle_error_status(struct dsi_ctrl *dsi_ctrl,
 	if (dsi_ctrl->hw.ops.error_intr_ctrl)
 		dsi_ctrl->hw.ops.error_intr_ctrl(&dsi_ctrl->hw, true);
 
-#if defined(CONFIG_DISPLAY_SAMSUNG)
+#if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
 	inc_dpui_u32_field_nolock(DPUI_KEY_QCT_DSIE, 1);
 	ss_get_vdd(dsi_ctrl->cell_index)->dsi_errors = error;
 #endif
@@ -2746,9 +2624,6 @@ static irqreturn_t dsi_ctrl_isr(int irq, void *ptr)
 		dsi_ctrl_handle_error_status(dsi_ctrl, errors);
 
 	if (status & DSI_CMD_MODE_DMA_DONE) {
-		atomic_set(&dsi_ctrl->dma_irq_trig, 1);
-		SDE_EVT32_IRQ(SDE_EVTLOG_FUNC_CASE1);
-
 		dsi_ctrl_disable_status_interrupt(dsi_ctrl,
 					DSI_SINT_CMD_MODE_DMA_DONE);
 		complete_all(&dsi_ctrl->irq_info.cmd_dma_done);
@@ -2774,7 +2649,6 @@ static irqreturn_t dsi_ctrl_isr(int irq, void *ptr)
 		dsi_ctrl_disable_status_interrupt(dsi_ctrl,
 					DSI_SINT_BTA_DONE);
 		complete_all(&dsi_ctrl->irq_info.bta_done);
-		SDE_EVT32_IRQ(SDE_EVTLOG_FUNC_CASE2);
 		if (dsi_ctrl->hw.ops.clear_error_status)
 			dsi_ctrl->hw.ops.clear_error_status(&dsi_ctrl->hw,
 					fifo_overflow_mask);
@@ -2820,20 +2694,21 @@ static int _dsi_ctrl_setup_isr(struct dsi_ctrl *dsi_ctrl)
 
 	irq_num = platform_get_irq(dsi_ctrl->pdev, 0);
 	if (irq_num < 0) {
-		DSI_CTRL_ERR(dsi_ctrl, "Failed to get IRQ number, %d\n",
-				irq_num);
+		pr_err("[DSI_%d] Failed to get IRQ number, %d\n",
+				dsi_ctrl->cell_index, irq_num);
 		rc = irq_num;
 	} else {
 		rc = devm_request_threaded_irq(&dsi_ctrl->pdev->dev, irq_num,
 				dsi_ctrl_isr, NULL, 0, "dsi_ctrl", dsi_ctrl);
 		if (rc) {
-			DSI_CTRL_ERR(dsi_ctrl, "Failed to request IRQ, %d\n",
-					rc);
+			pr_err("[DSI_%d] Failed to request IRQ, %d\n",
+					dsi_ctrl->cell_index, rc);
 		} else {
 			dsi_ctrl->irq_info.irq_num = irq_num;
 			disable_irq_nosync(irq_num);
 
-			DSI_CTRL_INFO(dsi_ctrl, "IRQ %d registered\n", irq_num);
+			pr_info("[DSI_%d] IRQ %d registered\n",
+					dsi_ctrl->cell_index, irq_num);
 		}
 	}
 	return rc;
@@ -2864,7 +2739,6 @@ void dsi_ctrl_enable_status_interrupt(struct dsi_ctrl *dsi_ctrl,
 			intr_idx >= DSI_STATUS_INTERRUPT_COUNT)
 		return;
 
-	SDE_EVT32(dsi_ctrl->cell_index, SDE_EVTLOG_FUNC_ENTRY, intr_idx);
 	spin_lock_irqsave(&dsi_ctrl->irq_info.irq_lock, flags);
 
 	if (dsi_ctrl->irq_info.irq_stat_refcount[intr_idx] == 0) {
@@ -2877,10 +2751,6 @@ void dsi_ctrl_enable_status_interrupt(struct dsi_ctrl *dsi_ctrl,
 		dsi_ctrl->hw.ops.enable_status_interrupts(&dsi_ctrl->hw,
 				dsi_ctrl->irq_info.irq_stat_mask);
 	}
-
-	if (intr_idx == DSI_SINT_CMD_MODE_DMA_DONE)
-		dsi_ctrl->hw.ops.enable_status_interrupts(&dsi_ctrl->hw,
-				dsi_ctrl->irq_info.irq_stat_mask);
 	++(dsi_ctrl->irq_info.irq_stat_refcount[intr_idx]);
 
 	if (event_info)
@@ -2897,7 +2767,6 @@ void dsi_ctrl_disable_status_interrupt(struct dsi_ctrl *dsi_ctrl,
 	if (!dsi_ctrl || intr_idx >= DSI_STATUS_INTERRUPT_COUNT)
 		return;
 
-	SDE_EVT32_IRQ(dsi_ctrl->cell_index, SDE_EVTLOG_FUNC_ENTRY, intr_idx);
 	spin_lock_irqsave(&dsi_ctrl->irq_info.irq_lock, flags);
 
 	if (dsi_ctrl->irq_info.irq_stat_refcount[intr_idx])
@@ -2918,7 +2787,7 @@ void dsi_ctrl_disable_status_interrupt(struct dsi_ctrl *dsi_ctrl,
 int dsi_ctrl_host_timing_update(struct dsi_ctrl *dsi_ctrl)
 {
 	if (!dsi_ctrl) {
-		DSI_CTRL_ERR(dsi_ctrl, "Invalid params\n");
+		pr_err("Invalid params\n");
 		return -EINVAL;
 	}
 
@@ -2938,7 +2807,7 @@ int dsi_ctrl_host_timing_update(struct dsi_ctrl *dsi_ctrl)
 				dsi_ctrl->host_config.video_timing.h_active * 3,
 				0x0, NULL);
 	} else {
-		DSI_CTRL_ERR(dsi_ctrl, "invalid panel mode for resolution switch\n");
+		pr_err("invalid panel mode for resolution switch\n");
 		return -EINVAL;
 	}
 
@@ -2946,34 +2815,37 @@ int dsi_ctrl_host_timing_update(struct dsi_ctrl *dsi_ctrl)
 }
 
 /**
- * dsi_ctrl_update_host_state() - Update the host initialization state.
+ * dsi_ctrl_update_host_state() - Update the host state.
  * @dsi_ctrl:        DSI controller handle.
- * @op:			ctrl driver ops
+ * @op:            ctrl driver ops
  * @enable:        boolean signifying host state.
  *
- * Update the host status only while exiting from ulps during suspend state.
+ * Update the host status only while exiting from ulps during
+ * suspend state.
  *
  * Return: error code.
  */
 int dsi_ctrl_update_host_state(struct dsi_ctrl *dsi_ctrl,
-				enum dsi_ctrl_driver_ops op, bool enable)
+			       enum dsi_ctrl_driver_ops op, bool enable)
 {
 	int rc = 0;
 	u32 state = enable ? 0x1 : 0x0;
 
 	if (!dsi_ctrl)
 		return rc;
+
 	mutex_lock(&dsi_ctrl->ctrl_lock);
 	rc = dsi_ctrl_check_state(dsi_ctrl, op, state);
 	if (rc) {
-		DSI_CTRL_ERR(dsi_ctrl, "Controller state check failed, rc=%d\n",
-				rc);
+		pr_err("[DSI_%d] Controller state check failed, rc=%d\n",
+		       dsi_ctrl->cell_index, rc);
 		mutex_unlock(&dsi_ctrl->ctrl_lock);
 		return rc;
 	}
 
 	dsi_ctrl_update_state(dsi_ctrl, op, state);
 	mutex_unlock(&dsi_ctrl->ctrl_lock);
+
 	return rc;
 }
 
@@ -2994,15 +2866,15 @@ int dsi_ctrl_host_init(struct dsi_ctrl *dsi_ctrl, bool is_splash_enabled)
 	int rc = 0;
 
 	if (!dsi_ctrl) {
-		DSI_CTRL_ERR(dsi_ctrl, "Invalid params\n");
+		pr_err("Invalid params\n");
 		return -EINVAL;
 	}
 
 	mutex_lock(&dsi_ctrl->ctrl_lock);
 	rc = dsi_ctrl_check_state(dsi_ctrl, DSI_CTRL_OP_HOST_INIT, 0x1);
 	if (rc) {
-		DSI_CTRL_ERR(dsi_ctrl, "Controller state check failed, rc=%d\n",
-				rc);
+		pr_err("[DSI_%d] Controller state check failed, rc=%d\n",
+		       dsi_ctrl->cell_index, rc);
 		goto error;
 	}
 
@@ -3036,10 +2908,11 @@ int dsi_ctrl_host_init(struct dsi_ctrl *dsi_ctrl, bool is_splash_enabled)
 	}
 
 	dsi_ctrl->hw.ops.enable_status_interrupts(&dsi_ctrl->hw, 0x0);
+
 	dsi_ctrl_enable_error_interrupts(dsi_ctrl);
 
-	DSI_CTRL_DEBUG(dsi_ctrl, "Host initialization complete, continuous splash status:%d\n",
-		is_splash_enabled);
+	pr_debug("[DSI_%d]Host initialization complete, continuous splash status:%d\n",
+		dsi_ctrl->cell_index, is_splash_enabled);
 	dsi_ctrl_update_state(dsi_ctrl, DSI_CTRL_OP_HOST_INIT, 0x1);
 error:
 	mutex_unlock(&dsi_ctrl->ctrl_lock);
@@ -3085,22 +2958,6 @@ void dsi_ctrl_set_continuous_clk(struct dsi_ctrl *dsi_ctrl, bool enable)
 	mutex_unlock(&dsi_ctrl->ctrl_lock);
 }
 
-bool dsi_ctrl_interrupt_enabled(struct dsi_ctrl *dsi_ctrl,uint32_t intr_idx)
-{
-	unsigned long flags;
-	bool ret = false;
-
-	if (!dsi_ctrl || dsi_ctrl->irq_info.irq_num == -1 ||
-			intr_idx >= DSI_STATUS_INTERRUPT_COUNT)
-		return false;
-
-	spin_lock_irqsave(&dsi_ctrl->irq_info.irq_lock, flags);
-	ret = (dsi_ctrl->irq_info.irq_stat_refcount[intr_idx]>0) ? true : false;
-	spin_unlock_irqrestore(&dsi_ctrl->irq_info.irq_lock, flags);
-	SDE_EVT32(dsi_ctrl->cell_index, ret);
-	return ret;
-}
-
 int dsi_ctrl_soft_reset(struct dsi_ctrl *dsi_ctrl)
 {
 	if (!dsi_ctrl)
@@ -3110,16 +2967,7 @@ int dsi_ctrl_soft_reset(struct dsi_ctrl *dsi_ctrl)
 	dsi_ctrl->hw.ops.soft_reset(&dsi_ctrl->hw);
 	mutex_unlock(&dsi_ctrl->ctrl_lock);
 
-	if(dsi_ctrl_interrupt_enabled(dsi_ctrl,DSI_SINT_CMD_MODE_DMA_DONE)) {
-		atomic_set(&dsi_ctrl->dma_irq_trig, 1);
-		dsi_ctrl_disable_status_interrupt(dsi_ctrl,
-				DSI_SINT_CMD_MODE_DMA_DONE);
-		complete_all(&dsi_ctrl->irq_info.cmd_dma_done);
-		DSI_CTRL_ERR(dsi_ctrl, "force disable DMA Done interrupt\n");
-		SDE_EVT32(dsi_ctrl->cell_index, 0xffff);
-	}
-
-	DSI_CTRL_DEBUG(dsi_ctrl, "Soft reset complete\n");
+	pr_debug("[DSI_%d]Soft reset complete\n", dsi_ctrl->cell_index);
 	return 0;
 }
 
@@ -3193,7 +3041,7 @@ int dsi_ctrl_host_deinit(struct dsi_ctrl *dsi_ctrl)
 	int rc = 0;
 
 	if (!dsi_ctrl) {
-		DSI_CTRL_ERR(dsi_ctrl, "Invalid params\n");
+		pr_err("Invalid params\n");
 		return -EINVAL;
 	}
 
@@ -3201,14 +3049,14 @@ int dsi_ctrl_host_deinit(struct dsi_ctrl *dsi_ctrl)
 
 	rc = dsi_ctrl_check_state(dsi_ctrl, DSI_CTRL_OP_HOST_INIT, 0x0);
 	if (rc) {
-		DSI_CTRL_ERR(dsi_ctrl, "Controller state check failed, rc=%d\n",
-				rc);
-		DSI_CTRL_ERR(dsi_ctrl, "driver state check failed, rc=%d\n",
-				rc);
+		pr_err("[DSI_%d] Controller state check failed, rc=%d\n",
+		       dsi_ctrl->cell_index, rc);
+		pr_err("driver state check failed, rc=%d\n", rc);
 		goto error;
 	}
 
-	DSI_CTRL_DEBUG(dsi_ctrl, "Host deinitization complete\n");
+	pr_debug("[DSI_%d] Host deinitization complete\n",
+		dsi_ctrl->cell_index);
 	dsi_ctrl_update_state(dsi_ctrl, DSI_CTRL_OP_HOST_INIT, 0x0);
 error:
 	mutex_unlock(&dsi_ctrl->ctrl_lock);
@@ -3229,13 +3077,12 @@ error:
  */
 int dsi_ctrl_update_host_config(struct dsi_ctrl *ctrl,
 				struct dsi_host_config *config,
-				struct dsi_display_mode *mode, int flags,
-				void *clk_handle)
+				int flags, void *clk_handle)
 {
 	int rc = 0;
 
 	if (!ctrl || !config) {
-		DSI_CTRL_ERR(ctrl, "Invalid params\n");
+		pr_err("Invalid params\n");
 		return -EINVAL;
 	}
 
@@ -3243,7 +3090,7 @@ int dsi_ctrl_update_host_config(struct dsi_ctrl *ctrl,
 
 	rc = dsi_ctrl_validate_panel_info(ctrl, config);
 	if (rc) {
-		DSI_CTRL_ERR(ctrl, "panel validation failed, rc=%d\n", rc);
+		pr_err("panel validation failed, rc=%d\n", rc);
 		goto error;
 	}
 
@@ -3253,21 +3100,22 @@ int dsi_ctrl_update_host_config(struct dsi_ctrl *ctrl,
 		 * for dynamic clk switch case link frequence would
 		 * be updated dsi_display_dynamic_clk_switch().
 		 */
-		rc = dsi_ctrl_update_link_freqs(ctrl, config, clk_handle,
-				mode);
+		rc = dsi_ctrl_update_link_freqs(ctrl, config, clk_handle);
 		if (rc) {
-			DSI_CTRL_ERR(ctrl, "failed to update link frequency, rc=%d\n",
-					rc);
+			pr_err("[%s] failed to update link frequencies, rc=%d\n",
+			       ctrl->name, rc);
 			goto error;
 		}
 	}
 
-	DSI_CTRL_DEBUG(ctrl, "Host config updated\n");
+	pr_debug("[DSI_%d]Host config updated\n", ctrl->cell_index);
 	memcpy(&ctrl->host_config, config, sizeof(ctrl->host_config));
-	ctrl->mode_bounds.x = ctrl->host_config.video_timing.h_active *
-			ctrl->horiz_index;
+	ctrl->mode_bounds.x = (ctrl->host_config.video_timing.h_active +
+			ctrl->host_config.video_timing.overlap_pixels) *
+						 ctrl->horiz_index;
 	ctrl->mode_bounds.y = 0;
-	ctrl->mode_bounds.w = ctrl->host_config.video_timing.h_active;
+	ctrl->mode_bounds.w = ctrl->host_config.video_timing.h_active +
+				ctrl->host_config.video_timing.overlap_pixels;
 	ctrl->mode_bounds.h = ctrl->host_config.video_timing.v_active;
 	memcpy(&ctrl->roi, &ctrl->mode_bounds, sizeof(ctrl->mode_bounds));
 	ctrl->modeupdated = true;
@@ -3293,7 +3141,7 @@ int dsi_ctrl_validate_timing(struct dsi_ctrl *dsi_ctrl,
 	int rc = 0;
 
 	if (!dsi_ctrl || !mode) {
-		DSI_CTRL_ERR(dsi_ctrl, "Invalid params\n");
+		pr_err("Invalid params\n");
 		return -EINVAL;
 	}
 
@@ -3316,12 +3164,12 @@ int dsi_ctrl_validate_timing(struct dsi_ctrl *dsi_ctrl,
  */
 int dsi_ctrl_cmd_transfer(struct dsi_ctrl *dsi_ctrl,
 			  const struct mipi_dsi_msg *msg,
-			  u32 *flags)
+			  u32 flags)
 {
 	int rc = 0;
 
 	if (!dsi_ctrl || !msg) {
-		DSI_CTRL_ERR(dsi_ctrl, "Invalid params\n");
+		pr_err("Invalid params\n");
 		return -EINVAL;
 	}
 
@@ -3329,100 +3177,25 @@ int dsi_ctrl_cmd_transfer(struct dsi_ctrl *dsi_ctrl,
 
 	rc = dsi_ctrl_check_state(dsi_ctrl, DSI_CTRL_OP_CMD_TX, 0x0);
 	if (rc) {
-		DSI_CTRL_ERR(dsi_ctrl, "Controller state check failed, rc=%d\n",
-				rc);
+		pr_err("[DSI_%d] Controller state check failed, rc=%d\n",
+		       dsi_ctrl->cell_index, rc);
 		goto error;
 	}
 
-	if (*flags & DSI_CTRL_CMD_READ) {
+	if (flags & DSI_CTRL_CMD_READ) {
 		rc = dsi_message_rx(dsi_ctrl, msg, flags);
 		if (rc <= 0)
-			DSI_CTRL_ERR(dsi_ctrl, "read message failed read length, rc=%d\n",
-					rc);
+			pr_err("read message failed read length, rc=%d\n", rc);
 	} else {
 		rc = dsi_message_tx(dsi_ctrl, msg, flags);
 		if (rc)
-			DSI_CTRL_ERR(dsi_ctrl, "command msg transfer failed, rc = %d\n",
-					rc);
+			pr_err("command msg transfer failed, rc = %d\n", rc);
 	}
 
 	dsi_ctrl_update_state(dsi_ctrl, DSI_CTRL_OP_CMD_TX, 0x0);
 
 error:
 	mutex_unlock(&dsi_ctrl->ctrl_lock);
-	return rc;
-}
-
-/**
- * dsi_ctrl_mask_overflow() -	API to mask/unmask overflow error.
- * @dsi_ctrl:			DSI controller handle.
- * @enable:			variable to control masking/unmasking.
- */
-void dsi_ctrl_mask_overflow(struct dsi_ctrl *dsi_ctrl, bool enable)
-{
-	struct dsi_ctrl_hw_ops dsi_hw_ops;
-
-	dsi_hw_ops = dsi_ctrl->hw.ops;
-
-	if (enable) {
-		if (dsi_hw_ops.mask_error_intr)
-			dsi_hw_ops.mask_error_intr(&dsi_ctrl->hw,
-					BIT(DSI_FIFO_OVERFLOW), true);
-	} else {
-		if (dsi_hw_ops.mask_error_intr && !dsi_ctrl->esd_check_underway)
-			dsi_hw_ops.mask_error_intr(&dsi_ctrl->hw,
-					BIT(DSI_FIFO_OVERFLOW), false);
-	}
-}
-
-/**
- * dsi_ctrl_clear_slave_dma_status -   API to clear slave DMA status
- * @dsi_ctrl:                   DSI controller handle.
- * @flags:                      Modifiers
- */
-int dsi_ctrl_clear_slave_dma_status(struct dsi_ctrl *dsi_ctrl, u32 flags)
-{
-	struct dsi_ctrl_hw_ops dsi_hw_ops;
-	u32 status;
-	u32 mask = DSI_CMD_MODE_DMA_DONE;
-	int rc = 0, wait_for_done = 5;
-
-	if (!dsi_ctrl) {
-		DSI_CTRL_ERR(dsi_ctrl, "Invalid params\n");
-		return -EINVAL;
-	}
-
-	/* Return if this is not the last ocmmand */
-	if (!(flags & DSI_CTRL_CMD_LAST_COMMAND))
-		return rc;
-
-	SDE_EVT32(dsi_ctrl->cell_index, SDE_EVTLOG_FUNC_ENTRY);
-
-	mutex_lock(&dsi_ctrl->ctrl_lock);
-
-	dsi_hw_ops = dsi_ctrl->hw.ops;
-
-	while (wait_for_done > 0) {
-		status = dsi_hw_ops.get_interrupt_status(&dsi_ctrl->hw);
-		if (status & mask) {
-			status |= (DSI_CMD_MODE_DMA_DONE | DSI_BTA_DONE);
-			dsi_hw_ops.clear_interrupt_status(&dsi_ctrl->hw,
-				status);
-			SDE_EVT32(dsi_ctrl->cell_index, status);
-			wait_for_done = 1;
-			break;
-		}
-		udelay(10);
-		wait_for_done--;
-	}
-	if (wait_for_done == 0) {
-		pr_err("DSI 1 DSI_CMD_MODE_DMA_DONE not done");
-		dsi_hw_ops.dma_read_before_trigger(&dsi_ctrl->hw);
-		SDE_DBG_DUMP("all", "dbg_bus", "vbif_dbg_bus", "panic");
-	}
-
-	mutex_unlock(&dsi_ctrl->ctrl_lock);
-
 	return rc;
 }
 
@@ -3435,82 +3208,69 @@ int dsi_ctrl_clear_slave_dma_status(struct dsi_ctrl *dsi_ctrl, u32 flags)
  */
 int dsi_ctrl_cmd_tx_trigger(struct dsi_ctrl *dsi_ctrl, u32 flags)
 {
-	int rc = 0;
-	struct dsi_ctrl_hw_ops dsi_hw_ops;
-	u32 v_total = 0, fps = 0, line_count, mem_latency = 200;
-	u32 line_time = 0, schedule_line = 0x1;
-	struct dsi_mode_info *timing;
-	unsigned long flag;
+	int rc = 0, ret = 0;
+	u32 status = 0;
+	u32 mask = (DSI_CMD_MODE_DMA_DONE);
 
 	if (!dsi_ctrl) {
-		DSI_CTRL_ERR(dsi_ctrl, "Invalid params\n");
+		pr_err("Invalid params\n");
 		return -EINVAL;
 	}
 
-	dsi_hw_ops = dsi_ctrl->hw.ops;
-
-	SDE_EVT32(dsi_ctrl->cell_index, SDE_EVTLOG_FUNC_ENTRY, flags);
 	/* Dont trigger the command if this is not the last ocmmand */
 	if (!(flags & DSI_CTRL_CMD_LAST_COMMAND))
 		return rc;
 
 	mutex_lock(&dsi_ctrl->ctrl_lock);
 
-	timing = &(dsi_ctrl->host_config.video_timing);
-	v_total = timing->v_sync_width + timing->v_back_porch +
-		timing->v_front_porch + timing->v_active;
-	fps = timing->refresh_rate;
-
-	line_time = (1000000 / fps) / v_total;
-
-	if (timing)
-		schedule_line += timing->v_back_porch + timing->v_sync_width +
-			timing->v_active;
-
-	if (!(flags & DSI_CTRL_CMD_BROADCAST_MASTER)) {
-		dsi_hw_ops.dma_read_before_trigger(&dsi_ctrl->hw);
-		dsi_hw_ops.trigger_command_dma(&dsi_ctrl->hw);
-	}
+	if (!(flags & DSI_CTRL_CMD_BROADCAST_MASTER))
+		dsi_ctrl->hw.ops.trigger_command_dma(&dsi_ctrl->hw);
 
 	if ((flags & DSI_CTRL_CMD_BROADCAST) &&
 		(flags & DSI_CTRL_CMD_BROADCAST_MASTER)) {
 		dsi_ctrl_wait_for_video_done(dsi_ctrl);
-		atomic_set(&dsi_ctrl->dma_irq_trig, 0);
 		dsi_ctrl_enable_status_interrupt(dsi_ctrl,
 					DSI_SINT_CMD_MODE_DMA_DONE, NULL);
+		if (dsi_ctrl->hw.ops.mask_error_intr)
+			dsi_ctrl->hw.ops.mask_error_intr(&dsi_ctrl->hw,
+					BIT(DSI_FIFO_OVERFLOW), true);
 		reinit_completion(&dsi_ctrl->irq_info.cmd_dma_done);
 
 		/* trigger command */
-		dsi_hw_ops.dma_read_before_trigger(&dsi_ctrl->hw);
-		while (1) {
-			local_irq_save(flag);
-			line_count = dsi_hw_ops.read_mdp_line_count(&dsi_ctrl->hw);
-			if (line_count < (schedule_line - CEIL(mem_latency, line_time)) ||
-				line_count > (schedule_line + 1)) {
-				dsi_hw_ops.trigger_command_dma(&dsi_ctrl->hw);
-				local_irq_restore(flag);
-				break;
-			}
-			else {
-				local_irq_restore(flag);
-				udelay(1000);
+		dsi_ctrl->hw.ops.trigger_command_dma(&dsi_ctrl->hw);
+
+		ret = wait_for_completion_timeout(
+				&dsi_ctrl->irq_info.cmd_dma_done,
+				msecs_to_jiffies(DSI_CTRL_TX_TO_MS));
+
+		if (ret == 0) {
+			status = dsi_ctrl->hw.ops.get_interrupt_status(
+								&dsi_ctrl->hw);
+			if (status & mask) {
+				status |= (DSI_CMD_MODE_DMA_DONE |
+						DSI_BTA_DONE);
+				dsi_ctrl->hw.ops.clear_interrupt_status(
+								&dsi_ctrl->hw,
+								status);
+				dsi_ctrl_disable_status_interrupt(dsi_ctrl,
+						DSI_SINT_CMD_MODE_DMA_DONE);
+				complete_all(&dsi_ctrl->irq_info.cmd_dma_done);
+				pr_warn("dma_tx done but irq not triggered\n");
+			} else {
+				rc = -ETIMEDOUT;
+				dsi_ctrl_disable_status_interrupt(dsi_ctrl,
+						DSI_SINT_CMD_MODE_DMA_DONE);
+				pr_err("[DSI_%d]Command transfer failed\n",
+						dsi_ctrl->cell_index);
 			}
 		}
-
-		SDE_EVT32(dsi_ctrl->cell_index, line_count, schedule_line, line_time);
-
-		if (flags & DSI_CTRL_CMD_ASYNC_WAIT) {
-			dsi_ctrl->dma_wait_queued = true;
-			queue_work(dsi_ctrl->dma_cmd_workq,
-					&dsi_ctrl->dma_cmd_wait);
-		} else {
-			dsi_ctrl->dma_wait_queued = false;
-			dsi_ctrl_dma_cmd_wait_for_done(&dsi_ctrl->dma_cmd_wait);
-		}
+		if (dsi_ctrl->hw.ops.mask_error_intr &&
+				!dsi_ctrl->esd_check_underway)
+			dsi_ctrl->hw.ops.mask_error_intr(&dsi_ctrl->hw,
+					BIT(DSI_FIFO_OVERFLOW), false);
 
 		if (flags & DSI_CTRL_CMD_NON_EMBEDDED_MODE) {
-			if (dsi_ctrl->version < DSI_CTRL_VERSION_2_4)
-				dsi_hw_ops.soft_reset(&dsi_ctrl->hw);
+			dsi_ctrl->hw.ops.soft_reset(&dsi_ctrl->hw);
 			dsi_ctrl->cmd_len = 0;
 		}
 	}
@@ -3536,7 +3296,8 @@ void dsi_ctrl_cache_misr(struct dsi_ctrl *dsi_ctrl)
 	if (misr)
 		dsi_ctrl->misr_cache = misr;
 
-	DSI_CTRL_DEBUG(dsi_ctrl, "misr_cache = %x\n", dsi_ctrl->misr_cache);
+	pr_debug("DSI_%d misr_cache = %x\n", dsi_ctrl->cell_index,
+		dsi_ctrl->misr_cache);
 }
 
 /**
@@ -3550,7 +3311,7 @@ int dsi_ctrl_get_host_engine_init_state(struct dsi_ctrl *dsi_ctrl,
 		bool *state)
 {
 	if (!dsi_ctrl || !state) {
-		DSI_CTRL_ERR(dsi_ctrl, "Invalid Params\n");
+		pr_err("Invalid Params\n");
 		return -EINVAL;
 	}
 
@@ -3577,7 +3338,7 @@ int dsi_ctrl_update_host_engine_state_for_cont_splash(struct dsi_ctrl *dsi_ctrl,
 	int rc = 0;
 
 	if (!dsi_ctrl || (state >= DSI_CTRL_ENGINE_MAX)) {
-		DSI_CTRL_ERR(dsi_ctrl, "Invalid params\n");
+		pr_err("Invalid params\n");
 		return -EINVAL;
 	}
 
@@ -3585,12 +3346,13 @@ int dsi_ctrl_update_host_engine_state_for_cont_splash(struct dsi_ctrl *dsi_ctrl,
 
 	rc = dsi_ctrl_check_state(dsi_ctrl, DSI_CTRL_OP_HOST_ENGINE, state);
 	if (rc) {
-		DSI_CTRL_ERR(dsi_ctrl, "Controller state check failed, rc=%d\n",
-				rc);
+		pr_err("[DSI_%d] Controller state check failed, rc=%d\n",
+		       dsi_ctrl->cell_index, rc);
 		goto error;
 	}
 
-	DSI_CTRL_DEBUG(dsi_ctrl, "Set host engine state = %d\n", state);
+	pr_debug("[DSI_%d] Set host engine state = %d\n", dsi_ctrl->cell_index,
+		 state);
 	dsi_ctrl_update_state(dsi_ctrl, DSI_CTRL_OP_HOST_ENGINE, state);
 error:
 	mutex_unlock(&dsi_ctrl->ctrl_lock);
@@ -3613,7 +3375,7 @@ int dsi_ctrl_set_power_state(struct dsi_ctrl *dsi_ctrl,
 	int rc = 0;
 
 	if (!dsi_ctrl || (state >= DSI_CTRL_POWER_MAX)) {
-		DSI_CTRL_ERR(dsi_ctrl, "Invalid Params\n");
+		pr_err("Invalid Params\n");
 		return -EINVAL;
 	}
 
@@ -3622,28 +3384,29 @@ int dsi_ctrl_set_power_state(struct dsi_ctrl *dsi_ctrl,
 	rc = dsi_ctrl_check_state(dsi_ctrl, DSI_CTRL_OP_POWER_STATE_CHANGE,
 				  state);
 	if (rc) {
-		DSI_CTRL_ERR(dsi_ctrl, "Controller state check failed, rc=%d\n",
-				rc);
+		pr_err("[DSI_%d] Controller state check failed, rc=%d\n",
+		       dsi_ctrl->cell_index, rc);
 		goto error;
 	}
 
 	if (state == DSI_CTRL_POWER_VREG_ON) {
 		rc = dsi_ctrl_enable_supplies(dsi_ctrl, true);
 		if (rc) {
-			DSI_CTRL_ERR(dsi_ctrl, "failed to enable voltage supplies, rc=%d\n",
-			       rc);
+			pr_err("[%d]failed to enable voltage supplies, rc=%d\n",
+			       dsi_ctrl->cell_index, rc);
 			goto error;
 		}
 	} else if (state == DSI_CTRL_POWER_VREG_OFF) {
 		rc = dsi_ctrl_enable_supplies(dsi_ctrl, false);
 		if (rc) {
-			DSI_CTRL_ERR(dsi_ctrl, "failed to disable vreg supplies, rc=%d\n",
-					rc);
+			pr_err("[%d]failed to disable vreg supplies, rc=%d\n",
+			       dsi_ctrl->cell_index, rc);
 			goto error;
 		}
 	}
 
-	DSI_CTRL_DEBUG(dsi_ctrl, "Power state updated to %d\n", state);
+	pr_debug("[DSI_%d] Power state updated to %d\n", dsi_ctrl->cell_index,
+		 state);
 	dsi_ctrl_update_state(dsi_ctrl, DSI_CTRL_OP_POWER_STATE_CHANGE, state);
 error:
 	mutex_unlock(&dsi_ctrl->ctrl_lock);
@@ -3665,7 +3428,7 @@ int dsi_ctrl_set_tpg_state(struct dsi_ctrl *dsi_ctrl, bool on)
 	int rc = 0;
 
 	if (!dsi_ctrl) {
-		DSI_CTRL_ERR(dsi_ctrl, "Invalid params\n");
+		pr_err("Invalid params\n");
 		return -EINVAL;
 	}
 
@@ -3673,8 +3436,8 @@ int dsi_ctrl_set_tpg_state(struct dsi_ctrl *dsi_ctrl, bool on)
 
 	rc = dsi_ctrl_check_state(dsi_ctrl, DSI_CTRL_OP_TPG, on);
 	if (rc) {
-		DSI_CTRL_ERR(dsi_ctrl, "Controller state check failed, rc=%d\n",
-				rc);
+		pr_err("[DSI_%d] Controller state check failed, rc=%d\n",
+		       dsi_ctrl->cell_index, rc);
 		goto error;
 	}
 
@@ -3693,7 +3456,8 @@ int dsi_ctrl_set_tpg_state(struct dsi_ctrl *dsi_ctrl, bool on)
 	}
 	dsi_ctrl->hw.ops.test_pattern_enable(&dsi_ctrl->hw, on);
 
-	DSI_CTRL_DEBUG(dsi_ctrl, "Set test pattern state=%d\n", on);
+	pr_debug("[DSI_%d]Set test pattern state=%d\n",
+		dsi_ctrl->cell_index, on);
 	dsi_ctrl_update_state(dsi_ctrl, DSI_CTRL_OP_TPG, on);
 error:
 	mutex_unlock(&dsi_ctrl->ctrl_lock);
@@ -3716,7 +3480,7 @@ int dsi_ctrl_set_host_engine_state(struct dsi_ctrl *dsi_ctrl,
 	int rc = 0;
 
 	if (!dsi_ctrl || (state >= DSI_CTRL_ENGINE_MAX)) {
-		DSI_CTRL_ERR(dsi_ctrl, "Invalid params\n");
+		pr_err("Invalid params\n");
 		return -EINVAL;
 	}
 
@@ -3724,8 +3488,8 @@ int dsi_ctrl_set_host_engine_state(struct dsi_ctrl *dsi_ctrl,
 
 	rc = dsi_ctrl_check_state(dsi_ctrl, DSI_CTRL_OP_HOST_ENGINE, state);
 	if (rc) {
-		DSI_CTRL_ERR(dsi_ctrl, "Controller state check failed, rc=%d\n",
-				rc);
+		pr_err("[DSI_%d] Controller state check failed, rc=%d\n",
+		       dsi_ctrl->cell_index, rc);
 		goto error;
 	}
 
@@ -3734,8 +3498,8 @@ int dsi_ctrl_set_host_engine_state(struct dsi_ctrl *dsi_ctrl,
 	else
 		dsi_ctrl->hw.ops.ctrl_en(&dsi_ctrl->hw, false);
 
-	SDE_EVT32(dsi_ctrl->cell_index, state);
-	DSI_CTRL_DEBUG(dsi_ctrl, "Set host engine state = %d\n", state);
+	pr_debug("[DSI_%d] Set host engine state = %d\n", dsi_ctrl->cell_index,
+		 state);
 	dsi_ctrl_update_state(dsi_ctrl, DSI_CTRL_OP_HOST_ENGINE, state);
 error:
 	mutex_unlock(&dsi_ctrl->ctrl_lock);
@@ -3758,14 +3522,14 @@ int dsi_ctrl_set_cmd_engine_state(struct dsi_ctrl *dsi_ctrl,
 	int rc = 0;
 
 	if (!dsi_ctrl || (state >= DSI_CTRL_ENGINE_MAX)) {
-		DSI_CTRL_ERR(dsi_ctrl, "Invalid params\n");
+		pr_err("Invalid params\n");
 		return -EINVAL;
 	}
 
 	rc = dsi_ctrl_check_state(dsi_ctrl, DSI_CTRL_OP_CMD_ENGINE, state);
 	if (rc) {
-		DSI_CTRL_ERR(dsi_ctrl, "Controller state check failed, rc=%d\n",
-				rc);
+		pr_err("[DSI_%d] Controller state check failed, rc=%d\n",
+		       dsi_ctrl->cell_index, rc);
 		goto error;
 	}
 
@@ -3774,8 +3538,8 @@ int dsi_ctrl_set_cmd_engine_state(struct dsi_ctrl *dsi_ctrl,
 	else
 		dsi_ctrl->hw.ops.cmd_engine_en(&dsi_ctrl->hw, false);
 
-	SDE_EVT32(dsi_ctrl->cell_index, state);
-	DSI_CTRL_DEBUG(dsi_ctrl, "Set cmd engine state = %d\n", state);
+	pr_debug("[DSI_%d] Set cmd engine state = %d\n", dsi_ctrl->cell_index,
+		 state);
 	dsi_ctrl_update_state(dsi_ctrl, DSI_CTRL_OP_CMD_ENGINE, state);
 error:
 	return rc;
@@ -3798,7 +3562,7 @@ int dsi_ctrl_set_vid_engine_state(struct dsi_ctrl *dsi_ctrl,
 	bool on;
 
 	if (!dsi_ctrl || (state >= DSI_CTRL_ENGINE_MAX)) {
-		DSI_CTRL_ERR(dsi_ctrl, "Invalid params\n");
+		pr_err("Invalid params\n");
 		return -EINVAL;
 	}
 
@@ -3806,8 +3570,8 @@ int dsi_ctrl_set_vid_engine_state(struct dsi_ctrl *dsi_ctrl,
 
 	rc = dsi_ctrl_check_state(dsi_ctrl, DSI_CTRL_OP_VID_ENGINE, state);
 	if (rc) {
-		DSI_CTRL_ERR(dsi_ctrl, "Controller state check failed, rc=%d\n",
-				rc);
+		pr_err("[DSI_%d] Controller state check failed, rc=%d\n",
+		       dsi_ctrl->cell_index, rc);
 		goto error;
 	}
 
@@ -3815,11 +3579,11 @@ int dsi_ctrl_set_vid_engine_state(struct dsi_ctrl *dsi_ctrl,
 	dsi_ctrl->hw.ops.video_engine_en(&dsi_ctrl->hw, on);
 
 	/* perform a reset when turning off video engine */
-	if (!on && dsi_ctrl->version < DSI_CTRL_VERSION_1_3)
+	if (!on)
 		dsi_ctrl->hw.ops.soft_reset(&dsi_ctrl->hw);
 
-	SDE_EVT32(dsi_ctrl->cell_index, state);
-	DSI_CTRL_DEBUG(dsi_ctrl, "Set video engine state = %d\n", state);
+	pr_debug("[DSI_%d] Set video engine state = %d\n", dsi_ctrl->cell_index,
+		 state);
 	dsi_ctrl_update_state(dsi_ctrl, DSI_CTRL_OP_VID_ENGINE, state);
 error:
 	mutex_unlock(&dsi_ctrl->ctrl_lock);
@@ -3840,7 +3604,7 @@ int dsi_ctrl_set_ulps(struct dsi_ctrl *dsi_ctrl, bool enable)
 	int rc = 0;
 
 	if (!dsi_ctrl) {
-		DSI_CTRL_ERR(dsi_ctrl, "Invalid params\n");
+		pr_err("Invalid params\n");
 		return -EINVAL;
 	}
 
@@ -3852,11 +3616,11 @@ int dsi_ctrl_set_ulps(struct dsi_ctrl *dsi_ctrl, bool enable)
 		rc = dsi_disable_ulps(dsi_ctrl);
 
 	if (rc) {
-		DSI_CTRL_ERR(dsi_ctrl, "Ulps state change(%d) failed, rc=%d\n",
-				enable,	rc);
+		pr_err("[DSI_%d] Ulps state change(%d) failed, rc=%d\n",
+			dsi_ctrl->cell_index, enable, rc);
 		goto error;
 	}
-	DSI_CTRL_DEBUG(dsi_ctrl, "ULPS state = %d\n", enable);
+	pr_debug("[DSI_%d] ULPS state = %d\n", dsi_ctrl->cell_index, enable);
 
 error:
 	mutex_unlock(&dsi_ctrl->ctrl_lock);
@@ -3878,13 +3642,13 @@ int dsi_ctrl_set_clamp_state(struct dsi_ctrl *dsi_ctrl,
 	int rc = 0;
 
 	if (!dsi_ctrl) {
-		DSI_CTRL_ERR(dsi_ctrl, "Invalid params\n");
+		pr_err("Invalid params\n");
 		return -EINVAL;
 	}
 
 	if (!dsi_ctrl->hw.ops.clamp_enable ||
 			!dsi_ctrl->hw.ops.clamp_disable) {
-		DSI_CTRL_DEBUG(dsi_ctrl, "No clamp control for DSI controller\n");
+		pr_debug("No clamp control for DSI controller\n");
 		return 0;
 	}
 
@@ -3892,11 +3656,12 @@ int dsi_ctrl_set_clamp_state(struct dsi_ctrl *dsi_ctrl,
 
 	rc = dsi_enable_io_clamp(dsi_ctrl, enable, ulps_enabled);
 	if (rc) {
-		DSI_CTRL_ERR(dsi_ctrl, "Failed to enable IO clamp\n");
+		pr_err("[DSI_%d] Failed to enable IO clamp\n",
+			dsi_ctrl->cell_index);
 		goto error;
 	}
 
-	DSI_CTRL_DEBUG(dsi_ctrl, "Clamp state = %d\n", enable);
+	pr_debug("[DSI_%d] Clamp state = %d\n", dsi_ctrl->cell_index, enable);
 error:
 	mutex_unlock(&dsi_ctrl->ctrl_lock);
 	return rc;
@@ -3917,7 +3682,7 @@ int dsi_ctrl_set_clock_source(struct dsi_ctrl *dsi_ctrl,
 	int rc = 0;
 
 	if (!dsi_ctrl || !source_clks) {
-		DSI_CTRL_ERR(dsi_ctrl, "Invalid params\n");
+		pr_err("Invalid params\n");
 		return -EINVAL;
 	}
 
@@ -3925,8 +3690,8 @@ int dsi_ctrl_set_clock_source(struct dsi_ctrl *dsi_ctrl,
 
 	rc = dsi_clk_update_parent(source_clks, &dsi_ctrl->clk_info.rcg_clks);
 	if (rc) {
-		DSI_CTRL_ERR(dsi_ctrl, "Failed to update link clk parent, rc=%d\n",
-				rc);
+		pr_err("[DSI_%d]Failed to update link clk parent, rc=%d\n",
+		       dsi_ctrl->cell_index, rc);
 		(void)dsi_clk_update_parent(&dsi_ctrl->clk_info.pll_op_clks,
 					    &dsi_ctrl->clk_info.rcg_clks);
 		goto error;
@@ -3935,7 +3700,7 @@ int dsi_ctrl_set_clock_source(struct dsi_ctrl *dsi_ctrl,
 	dsi_ctrl->clk_info.pll_op_clks.byte_clk = source_clks->byte_clk;
 	dsi_ctrl->clk_info.pll_op_clks.pixel_clk = source_clks->pixel_clk;
 
-	DSI_CTRL_DEBUG(dsi_ctrl, "Source clocks are updated\n");
+	pr_debug("[DSI_%d] Source clocks are updated\n", dsi_ctrl->cell_index);
 
 error:
 	mutex_unlock(&dsi_ctrl->ctrl_lock);
@@ -3955,7 +3720,7 @@ int dsi_ctrl_setup_misr(struct dsi_ctrl *dsi_ctrl,
 			u32 frame_count)
 {
 	if (!dsi_ctrl) {
-		DSI_CTRL_ERR(dsi_ctrl, "Invalid params\n");
+		pr_err("Invalid params\n");
 		return -EINVAL;
 	}
 
@@ -3989,8 +3754,8 @@ u32 dsi_ctrl_collect_misr(struct dsi_ctrl *dsi_ctrl)
 	if (!misr)
 		misr = dsi_ctrl->misr_cache;
 
-	DSI_CTRL_DEBUG(dsi_ctrl, "cached misr = %x, final = %x\n",
-			dsi_ctrl->misr_cache, misr);
+	pr_debug("DSI_%d cached misr = %x, final = %x\n",
+		dsi_ctrl->cell_index, dsi_ctrl->misr_cache, misr);
 
 	return misr;
 }
@@ -4000,7 +3765,7 @@ void dsi_ctrl_mask_error_status_interrupts(struct dsi_ctrl *dsi_ctrl, u32 idx,
 {
 	if (!dsi_ctrl || !dsi_ctrl->hw.ops.error_intr_ctrl
 			|| !dsi_ctrl->hw.ops.clear_error_status) {
-		DSI_CTRL_ERR(dsi_ctrl, "Invalid params\n");
+		pr_err("Invalid params\n");
 		return;
 	}
 
