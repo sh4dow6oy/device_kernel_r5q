@@ -1,6 +1,13 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
-/*
- * Copyright (c) 2012, 2014-2020, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012, 2014-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #ifndef __SDE_HDCP_H__
@@ -32,6 +39,11 @@ enum sde_hdcp_state {
 	HDCP_STATE_AUTHENTICATING,
 	HDCP_STATE_AUTHENTICATED,
 	HDCP_STATE_AUTH_FAIL,
+#ifdef CONFIG_SEC_DISPLAYPORT/*from sdm845, it's QCT code*/
+	HDCP_STATE_AUTH_ENC_NONE,
+	HDCP_STATE_AUTH_ENC_1X,
+	HDCP_STATE_AUTH_ENC_2P2
+#endif
 };
 
 enum sde_hdcp_version {
@@ -83,7 +95,6 @@ struct sde_hdcp_ops {
 	bool (*feature_supported)(void *input);
 	void (*force_encryption)(void *input, bool enable);
 	bool (*sink_support)(void *input);
-	void (*abort)(void *input, bool abort);
 	int (*set_mode)(void *input, bool mst_enabled);
 	int (*on)(void *input);
 	void (*off)(void *hdcp_ctrl);

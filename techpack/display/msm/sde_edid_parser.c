@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <drm/drm_edid.h>
@@ -450,7 +457,7 @@ static void _sde_edid_extract_audio_data_blocks(
 #if defined(CONFIG_SEC_DISPLAYPORT)
 	in_buf = (u8 *)edid_ctrl->edid;
 	if (in_buf[3] & (1<<6)) {
-		pr_info("%s: default audio format\n", __func__);
+		pr_info("default audio\n");
 		edid_ctrl->audio_channel_info |= 2;
 	}
 #endif
@@ -512,8 +519,7 @@ static void _sde_edid_extract_audio_data_blocks(
 #if defined(CONFIG_SEC_DISPLAYPORT)
 	edid_ctrl->audio_channel_info |= (bit_rate << 16);
 	edid_ctrl->audio_channel_info |= audio_ch;
-	pr_info("%s: Displayport Audio info : 0x%x\n", __func__,
-			edid_ctrl->audio_channel_info);
+	pr_info("DP Audio info: 0x%x\n", edid_ctrl->audio_channel_info);
 #endif
 	SDE_EDID_DEBUG("%s -", __func__);
 }
@@ -1200,7 +1206,7 @@ int _sde_edid_update_modes(struct drm_connector *connector,
 
 	SDE_EDID_DEBUG("%s +", __func__);
 	if (edid_ctrl->edid) {
-		drm_connector_update_edid_property(connector,
+		drm_mode_connector_update_edid_property(connector,
 			edid_ctrl->edid);
 
 #ifdef CONFIG_SEC_DISPLAYPORT
@@ -1225,7 +1231,7 @@ int _sde_edid_update_modes(struct drm_connector *connector,
 		return rc;
 	}
 
-	drm_connector_update_edid_property(connector, NULL);
+	drm_mode_connector_update_edid_property(connector, NULL);
 	SDE_EDID_DEBUG("%s null edid -", __func__);
 	return rc;
 }
@@ -1244,13 +1250,13 @@ u8 sde_get_edid_checksum(void *input)
 	edid = edid_ctrl->edid;
 
 	raw_edid = (u8 *)edid;
-#ifndef CONFIG_SEC_DISPLAYPORT
-	raw_edid += (edid->extensions * EDID_LENGTH);
-#else
+#ifdef CONFIG_SEC_DISPLAYPORT
 	/* fix Prevent_CXX Major defect.
 	 * Dangerous cast: Pointer "raw_edid"( 8 ) to int( 4 ).
 	 */
 	raw_edid = raw_edid + (edid->extensions * EDID_LENGTH);
+#else
+	raw_edid += (edid->extensions * EDID_LENGTH);
 #endif
 	last_block = (struct edid *)raw_edid;
 

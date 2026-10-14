@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016-2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
  * Copyright (C) 2013 Red Hat
  * Author: Rob Clark <robdclark@gmail.com>
  *
@@ -38,12 +38,12 @@
 #define MSM_MODE_FLAG_SEAMLESS_DMS			(1<<2)
 /* Request to switch the fps */
 #define MSM_MODE_FLAG_SEAMLESS_VRR			(1<<3)
-/* Request to switch the panel mode */
-#define MSM_MODE_FLAG_SEAMLESS_POMS			(1<<4)
 /* Request to switch the bit clk */
-#define MSM_MODE_FLAG_SEAMLESS_DYN_CLK			(1<<5)
+#define MSM_MODE_FLAG_SEAMLESS_DYN_CLK			(1<<4)
+/* Request to switch the panel mode */
+#define MSM_MODE_FLAG_SEAMLESS_POMS			(1<<5)
 
-#if defined(CONFIG_DISPLAY_SAMSUNG)
+#if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
 enum mdss_intf_events {
 	SS_EVENT_FRAME_UPDATE_POST = 0,
 	SS_EVENT_FRAME_UPDATE_PRE,
@@ -74,6 +74,8 @@ struct msm_kms_funcs {
 	irqreturn_t (*irq)(struct msm_kms *kms);
 	int (*enable_vblank)(struct msm_kms *kms, struct drm_crtc *crtc);
 	void (*disable_vblank)(struct msm_kms *kms, struct drm_crtc *crtc);
+	/* swap global atomic state: */
+	void (*swap_state)(struct msm_kms *kms, struct drm_atomic_state *state);
 	/* modeset, bracketing atomic_commit(): */
 	void (*prepare_fence)(struct msm_kms *kms,
 			struct drm_atomic_state *state);
@@ -126,9 +128,6 @@ struct msm_kms_funcs {
 	struct msm_gem_address_space *(*get_address_space)(
 			struct msm_kms *kms,
 			unsigned int domain);
-	struct device *(*get_address_space_device)(
-			struct msm_kms *kms,
-			unsigned int domain);
 #ifdef CONFIG_DEBUG_FS
 	/* debugfs: */
 	int (*debugfs_init)(struct msm_kms *kms, struct drm_minor *minor);
@@ -136,13 +135,13 @@ struct msm_kms_funcs {
 	/* handle continuous splash  */
 	int (*cont_splash_config)(struct msm_kms *kms);
 	/* check for continuous splash status */
-	bool (*check_for_splash)(struct msm_kms *kms, struct drm_crtc *crtc);
+	bool (*check_for_splash)(struct msm_kms *kms);
 	/* topology information */
 	int (*get_mixer_count)(const struct msm_kms *kms,
 			const struct drm_display_mode *mode,
-			const struct msm_resource_caps_info *res, u32 *num_lm);
+			u32 mode_max_width, u32 *num_lm);
 
-#if defined(CONFIG_DISPLAY_SAMSUNG)
+#if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
 	int (*ss_callback)(int display_ndx,
 			enum mdss_intf_events event, void *arg);
 #endif
@@ -182,8 +181,8 @@ struct msm_kms *mdp4_kms_init(struct drm_device *dev);
 static inline
 struct msm_kms *mdp4_kms_init(struct drm_device *dev) { return NULL; };
 #endif
+
 #ifdef CONFIG_DRM_MSM_MDP5
-struct msm_kms *mdp5_kms_init(struct drm_device *dev);
 int msm_mdss_init(struct drm_device *dev);
 void msm_mdss_destroy(struct drm_device *dev);
 struct msm_kms *mdp5_kms_init(struct drm_device *dev);
@@ -209,8 +208,8 @@ static inline int msm_mdss_disable(struct msm_mdss *mdss)
 {
 	return 0;
 }
-#endif
 
+#endif
 struct msm_kms *sde_kms_init(struct drm_device *dev);
 
 

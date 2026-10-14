@@ -1,6 +1,13 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
-/*
- * Copyright (c) 2016-2020, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2020, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #ifndef SDE_DBG_H_
@@ -33,8 +40,7 @@
 enum sde_dbg_evtlog_flag {
 	SDE_EVTLOG_CRITICAL = BIT(0),
 	SDE_EVTLOG_IRQ = BIT(1),
-	SDE_EVTLOG_VERBOSE = -1,
-	SDE_EVTLOG_EXTERNAL = BIT(3),
+	SDE_EVTLOG_VERBOSE = BIT(2),
 	SDE_EVTLOG_ALWAYS = -1
 };
 
@@ -49,22 +55,25 @@ enum sde_dbg_dump_context {
 	SDE_DBG_DUMP_CLK_ENABLED_CTX,
 };
 
-#define SDE_EVTLOG_DEFAULT_ENABLE (SDE_EVTLOG_CRITICAL | SDE_EVTLOG_IRQ | \
-		SDE_EVTLOG_EXTERNAL)
+#ifdef CONFIG_DRM_SDE_EVTLOG_DEBUG
+#define SDE_EVTLOG_DEFAULT_ENABLE (SDE_EVTLOG_CRITICAL | SDE_EVTLOG_IRQ)
+#else
+#define SDE_EVTLOG_DEFAULT_ENABLE 0
+#endif
 
 /*
  * evtlog will print this number of entries when it is called through
  * sysfs node or panic. This prevents kernel log from evtlog message
  * flood.
  */
-#define SDE_EVTLOG_PRINT_ENTRY	256
+#define SDE_EVTLOG_PRINT_ENTRY	1024
 
 /*
  * evtlog keeps this number of entries in memory for debug purpose. This
  * number must be greater than print entry to prevent out of bound evtlog
  * entry array access.
  */
-#define SDE_EVTLOG_ENTRY	(SDE_EVTLOG_PRINT_ENTRY * 32)
+#define SDE_EVTLOG_ENTRY	(SDE_EVTLOG_PRINT_ENTRY * 8)
 #define SDE_EVTLOG_MAX_DATA 15
 #define SDE_EVTLOG_BUF_MAX 512
 #define SDE_EVTLOG_BUF_ALIGN 32
@@ -82,7 +91,6 @@ struct sde_dbg_evtlog_log {
 	u32 data[SDE_EVTLOG_MAX_DATA];
 	u32 data_cnt;
 	int pid;
-	u8 cpu;
 };
 
 /**
@@ -128,14 +136,6 @@ extern struct sde_dbg_evtlog *sde_dbg_base_evtlog;
 		SDE_EVTLOG_DATA_LIMITER)
 
 /**
- * SDE_EVT32_EXTERNAL - Write a list of 32bit values for external display events
- * ... - variable arguments
- */
-#define SDE_EVT32_EXTERNAL(...) sde_evtlog_log(sde_dbg_base_evtlog, __func__, \
-		__LINE__, SDE_EVTLOG_EXTERNAL, ##__VA_ARGS__, \
-		SDE_EVTLOG_DATA_LIMITER)
-
-/**
  * SDE_DBG_DUMP - trigger dumping of all sde_dbg facilities
  * @va_args:	list of named register dump ranges and regions to dump, as
  *		registered previously through sde_dbg_reg_register_base and
@@ -174,8 +174,6 @@ extern struct sde_dbg_evtlog *sde_dbg_base_evtlog;
  */
 #define SDE_DBG_CTRL(...) sde_dbg_ctrl(__func__, ##__VA_ARGS__, \
 		SDE_DBG_DUMP_DATA_LIMITER)
-
-#if defined(CONFIG_DEBUG_FS)
 
 /**
  * sde_evtlog_init - allocate a new event log object
@@ -241,9 +239,11 @@ void sde_dbg_init_dbg_buses(u32 hwversion);
 /**
  * sde_dbg_init - initialize global sde debug facilities: evtlog, regdump
  * @dev:		device handle
+ * @power_ctrl:		power control callback structure for enabling clocks
+ *			during register dumping
  * Returns:		0 or -ERROR
  */
-int sde_dbg_init(struct device *dev);
+int sde_dbg_init(struct device *dev, struct sde_dbg_power_ctrl *power_ctrl);
 
 /**
  * sde_dbg_debugfs_register - register entries at the given debugfs dir
@@ -352,6 +352,12 @@ void sde_evtlog_set_filter(struct sde_dbg_evtlog *evtlog, char *filter);
 int sde_evtlog_get_filter(struct sde_dbg_evtlog *evtlog, int index,
 		char *buf, size_t bufsz);
 
+#if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
+void ss_sde_dbg_debugfs_open(void);
+ssize_t ss_sde_evtlog_dump_read(struct file *file, char __user *buff,
+		size_t count, loff_t *ppos);
+#endif
+
 #ifndef CONFIG_DRM_SDE_RSC
 static inline void sde_rsc_debug_dump(u32 mux_sel)
 {
@@ -359,7 +365,7 @@ static inline void sde_rsc_debug_dump(u32 mux_sel)
 #else
 /**
  * sde_rsc_debug_dump - sde rsc debug dump status
- * @mux_sel:»       select mux on rsc debug bus
+ * @mux_sel:	select mux on rsc debug bus
  */
 void sde_rsc_debug_dump(u32 mux_sel);
 #endif
@@ -370,102 +376,5 @@ void sde_rsc_debug_dump(u32 mux_sel);
  * @size:	size of the debug bus control array
  */
 void dsi_ctrl_debug_dump(u32 *entries, u32 size);
-
-#else
-static inline struct sde_dbg_evtlog *sde_evtlog_init(void)
-{
-	return NULL;
-}
-
-static inline void sde_evtlog_destroy(struct sde_dbg_evtlog *evtlog)
-{
-}
-
-static inline void sde_evtlog_log(struct sde_dbg_evtlog *evtlog,
-		const char *name, int line, int flag, ...)
-{
-}
-
-static inline void sde_evtlog_dump_all(struct sde_dbg_evtlog *evtlog)
-{
-}
-
-static inline bool sde_evtlog_is_enabled(struct sde_dbg_evtlog *evtlog,
-		u32 flag)
-{
-	return false;
-}
-
-static inline ssize_t sde_evtlog_dump_to_buffer(struct sde_dbg_evtlog *evtlog,
-		char *evtlog_buf, ssize_t evtlog_buf_size,
-		bool update_last_entry)
-{
-	return 0;
-}
-
-static inline void sde_dbg_init_dbg_buses(u32 hwversion)
-{
-}
-
-static inline int sde_dbg_init(struct device *dev)
-{
-	return 0;
-}
-
-static inline int sde_dbg_debugfs_register(struct device *dev)
-{
-	return 0;
-}
-
-static inline void sde_dbg_destroy(void)
-{
-}
-
-static inline void sde_dbg_dump(enum sde_dbg_dump_context mode,
-	const char *name, ...)
-{
-}
-
-static inline void sde_dbg_ctrl(const char *name, ...)
-{
-}
-
-static inline int sde_dbg_reg_register_base(const char *name,
-		void __iomem *base, size_t max_offset)
-{
-	return 0;
-}
-
-static inline void sde_dbg_reg_register_dump_range(const char *base_name,
-		const char *range_name, u32 offset_start, u32 offset_end,
-		uint32_t xin_id)
-{
-}
-
-static inline void sde_dbg_set_sde_top_offset(u32 blk_off)
-{
-}
-
-static inline void sde_evtlog_set_filter(
-		struct sde_dbg_evtlog *evtlog, char *filter)
-{
-}
-
-static inline int sde_evtlog_get_filter(struct sde_dbg_evtlog *evtlog,
-		int index, char *buf, size_t bufsz)
-{
-	return -EINVAL;
-}
-
-static inline void sde_rsc_debug_dump(u32 mux_sel)
-{
-}
-
-static inline void dsi_ctrl_debug_dump(u32 *entries, u32 size)
-{
-}
-
-#endif /* defined(CONFIG_DEBUG_FS) */
-
 
 #endif /* SDE_DBG_H_ */

@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2017, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include "msm_prop.h"
@@ -77,8 +84,7 @@ int msm_property_pop_dirty(struct msm_property_info *info,
 		return -EINVAL;
 	}
 
-	WARN_ON(!mutex_is_locked(&info->property_lock));
-
+	mutex_lock(&info->property_lock);
 	if (list_empty(&property_state->dirty_list)) {
 		rc = -EAGAIN;
 	} else {
@@ -88,6 +94,7 @@ int msm_property_pop_dirty(struct msm_property_info *info,
 			- property_state->values;
 		DRM_DEBUG_KMS("property %d dirty\n", rc);
 	}
+	mutex_unlock(&info->property_lock);
 
 	return rc;
 }
@@ -165,10 +172,10 @@ static void _msm_property_install_integer(struct msm_property_info *info,
 		 * Properties need to be attached to each drm object that
 		 * uses them, but only need to be created once
 		 */
-		if (!*prop) {
+		if (*prop == 0) {
 			*prop = drm_property_create_range(info->dev,
 					flags, name, min, max);
-			if (!*prop)
+			if (*prop == 0)
 				DRM_ERROR("create %s property failed\n", name);
 		}
 
@@ -221,7 +228,7 @@ void msm_property_install_enum(struct msm_property_info *info,
 		 * Properties need to be attached to each drm object that
 		 * uses them, but only need to be created once
 		 */
-		if (!*prop) {
+		if (*prop == 0) {
 			/* 'bitmask' is a special type of 'enum' */
 			if (is_bitmask)
 				*prop = drm_property_create_bitmask(info->dev,
@@ -231,7 +238,7 @@ void msm_property_install_enum(struct msm_property_info *info,
 				*prop = drm_property_create_enum(info->dev,
 						DRM_MODE_PROP_ENUM | flags,
 						name, values, num_values);
-			if (!*prop)
+			if (*prop == 0)
 				DRM_ERROR("create %s property failed\n", name);
 		}
 
@@ -272,11 +279,11 @@ void msm_property_install_blob(struct msm_property_info *info,
 		 * Properties need to be attached to each drm object that
 		 * uses them, but only need to be created once
 		 */
-		if (!*prop) {
+		if (*prop == 0) {
 			/* use 'create' for blob property place holder */
 			*prop = drm_property_create(info->dev,
 					DRM_MODE_PROP_BLOB | flags, name, 0);
-			if (!*prop)
+			if (*prop == 0)
 				DRM_ERROR("create %s property failed\n", name);
 		}
 
@@ -580,7 +587,7 @@ void *msm_property_get_blob(struct msm_property_info *info,
 		blob = property_state->values[property_idx].blob;
 		if (blob) {
 			len = blob->length;
-			rc = blob->data;
+			rc = &blob->data;
 		}
 	}
 

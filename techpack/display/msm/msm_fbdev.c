@@ -1,7 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-only
-
 /*
- * Copyright (c) 2020, The Linux Foundation. All rights reserved.
  * Copyright (C) 2013 Red Hat
  * Author: Rob Clark <robdclark@gmail.com>
  *
@@ -83,17 +80,15 @@ static int msm_fbdev_create(struct drm_fb_helper *helper,
 	uint32_t format;
 	int ret, pitch;
 
-	format = drm_mode_legacy_fb_format(sizes->surface_bpp,
-		sizes->surface_depth);
+	format = drm_mode_legacy_fb_format(sizes->surface_bpp, sizes->surface_depth);
 
 	DBG("create fbdev: %dx%d@%d (%dx%d)", sizes->surface_width,
 			sizes->surface_height, sizes->surface_bpp,
 			sizes->fb_width, sizes->fb_height);
 
 	pitch = align_pitch(sizes->surface_width, sizes->surface_bpp);
-	/* double buffer */
 	fb = msm_alloc_stolen_fb(dev, sizes->surface_width,
-			sizes->surface_height * 2, pitch, format);
+			sizes->surface_height, pitch, format);
 
 	if (IS_ERR(fb)) {
 		dev_err(dev->dev, "failed to allocate fb\n");
@@ -122,7 +117,7 @@ static int msm_fbdev_create(struct drm_fb_helper *helper,
 		goto fail_unlock;
 	}
 
-	DBG("fbi=%p, dev=%p", fbi, dev);
+	DBG("fbi=%pK, dev=%pK", fbi, dev);
 
 	fbdev->fb = fb;
 	helper->fb = fb;
@@ -130,7 +125,7 @@ static int msm_fbdev_create(struct drm_fb_helper *helper,
 	fbi->par = helper;
 	fbi->fbops = &msm_fb_ops;
 
-	strlcpy(fbi->fix.id, "msm", sizeof(fbi->fix.id));
+	strcpy(fbi->fix.id, "msm");
 
 	drm_fb_helper_fill_fix(fbi, fb->pitches[0], fb->format->depth);
 	drm_fb_helper_fill_var(fbi, helper, sizes->fb_width, sizes->fb_height);
@@ -146,7 +141,7 @@ static int msm_fbdev_create(struct drm_fb_helper *helper,
 	fbi->fix.smem_start = paddr;
 	fbi->fix.smem_len = bo->size;
 
-	DBG("par=%p, %dx%d", fbi->par, fbi->var.xres, fbi->var.yres);
+	DBG("par=%pK, %dx%d", fbi->par, fbi->var.xres, fbi->var.yres);
 	DBG("allocated %dx%d fb", fbdev->fb->width, fbdev->fb->height);
 
 	mutex_unlock(&dev->struct_mutex);
