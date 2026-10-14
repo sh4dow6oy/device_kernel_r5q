@@ -1,6 +1,15 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
 
 #ifndef _DP_PANEL_H_
@@ -17,7 +26,7 @@
 
 #define DP_RECEIVER_DSC_CAP_SIZE    15
 #define DP_RECEIVER_FEC_STATUS_SIZE 3
-#define DP_RECEIVER_EXT_CAP_SIZE 4
+
 /*
  * A source initiated power down flag is set
  * when the DP is powered off while physical
@@ -27,8 +36,6 @@
  * device suspends.
  */
 #define DP_PANEL_SRC_INITIATED_POWER_DOWN BIT(0)
-
-#define DP_EXT_REC_CAP_FIELD BIT(7)
 
 enum dp_lane_count {
 	DP_LANE_COUNT_1	= 1,
@@ -81,7 +88,6 @@ struct dp_dsc_caps {
 	bool dsc_capable;
 	u8 version;
 	bool block_pred_en;
-	u8 color_depth;
 };
 
 struct dp_audio;
@@ -90,7 +96,7 @@ struct dp_audio;
 
 struct dp_panel {
 	/* dpcd raw data */
-	u8 dpcd[DP_RECEIVER_CAP_SIZE + DP_RECEIVER_EXT_CAP_SIZE + 1];
+	u8 dpcd[DP_RECEIVER_CAP_SIZE + 1];
 	u8 ds_ports[DP_MAX_DOWNSTREAM_PORTS];
 	u8 dsc_dpcd[DP_RECEIVER_DSC_CAP_SIZE + 1];
 	u8 fec_dpcd;
@@ -104,7 +110,6 @@ struct dp_panel {
 
 	u32 vic;
 	u32 max_pclk_khz;
-	s64 mst_target_sc;
 
 	/* debug */
 	u32 max_bw_code;
@@ -156,10 +161,7 @@ struct dp_panel {
 	int (*set_edid)(struct dp_panel *dp_panel, u8 *edid);
 	int (*set_dpcd)(struct dp_panel *dp_panel, u8 *dpcd);
 	int (*setup_hdr)(struct dp_panel *dp_panel,
-		struct drm_msm_ext_hdr_metadata *hdr_meta,
-			bool dhdr_update, u64 core_clk_rate, bool flush);
-	int (*set_colorspace)(struct dp_panel *dp_panel,
-		u32 colorspace);
+		struct drm_msm_ext_hdr_metadata *hdr_meta);
 	void (*tpg_config)(struct dp_panel *dp_panel, bool enable);
 	int (*spd_config)(struct dp_panel *dp_panel);
 	bool (*hdr_supported)(struct dp_panel *dp_panel);
