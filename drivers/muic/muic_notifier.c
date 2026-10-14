@@ -4,6 +4,10 @@
 #include <linux/muic/muic.h>
 #include <linux/muic/muic_notifier.h>
 #include <linux/of.h>
+
+#define muic_ccic_notifier muic_notifier
+#define muic_ccic_uses_new_noti muic_uses_new_noti
+
 #if defined(CONFIG_DRV_SAMSUNG)
 #include <linux/sec_class.h>
 #endif
@@ -475,7 +479,7 @@ static int __init muic_notifier_init(void)
 #endif
 #else
 #if defined(CONFIG_DRV_SAMSUNG)
-	switch_device = sec_device_create(0, NULL, "switch");
+	switch_device = sec_device_create(NULL, "switch");
 
 	if (IS_ERR(switch_device)) {
 		pr_err("(%s): failed to created device (switch_device)!\n",
