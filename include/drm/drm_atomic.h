@@ -643,6 +643,30 @@ int __must_check drm_atomic_nonblocking_commit(struct drm_atomic_state *state);
 void drm_state_dump(struct drm_device *dev, struct drm_printer *p);
 
 /**
+ * for_each_connector_in_state - iterate over all connectors in an atomic update
+ * @__state: &struct drm_atomic_state pointer
+ * @connector: &struct drm_connector iteration cursor
+ * @connector_state: &struct drm_connector_state iteration cursor
+ * @__i: int iteration cursor, for macro-internal use
+ *
+ * This iterates over all connectors in an atomic update. Note that before the
+ * software state is committed (by calling drm_atomic_helper_swap_state(), this
+ * points to the new state, while afterwards it points to the old state. Due to
+ * this tricky confusion this macro is deprecated.
+ *
+ * FIXME:
+ *
+ * Replace all usage of this with one of the explicit iterators below and then
+ * remove this macro.
+ */
+#define for_each_connector_in_state(__state, connector, connector_state, __i) \
+	for ((__i) = 0;							\
+	     (__i) < (__state)->num_connector &&				\
+	     ((connector) = (__state)->connectors[__i].ptr,			\
+	     (connector_state) = (__state)->connectors[__i].state, 1); 	\
+	     (__i)++)							\
+		for_each_if (connector)
+/**
  * for_each_oldnew_connector_in_state - iterate over all connectors in an atomic update
  * @__state: &struct drm_atomic_state pointer
  * @connector: &struct drm_connector iteration cursor
