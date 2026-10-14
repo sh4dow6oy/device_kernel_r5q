@@ -5735,9 +5735,8 @@ struct drm_encoder *sde_encoder_init_with_ops(
 	drm_encoder_helper_add(drm_enc, &sde_encoder_helper_funcs);
 
 	if (disp_info->intf_type == DRM_MODE_CONNECTOR_DSI)
-		setup_timer(&sde_enc->vsync_event_timer,
-				sde_encoder_vsync_event_handler,
-				(unsigned long)sde_enc);
+		timer_setup(&sde_enc->vsync_event_timer,
+            sde_encoder_vsync_event_handler, 0);
 
 	for (i = 0; i < sde_enc->num_phys_encs; i++) {
 		phys = sde_enc->phys_encs[i];
