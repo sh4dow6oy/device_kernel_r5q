@@ -1,6 +1,15 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
 
 #ifndef _DP_LINK_H_
@@ -13,18 +22,17 @@
 #define DP_LINK_ENUM_STR(x)		#x
 
 enum dp_link_voltage_level {
-	DP_LINK_VOLTAGE_LEVEL_0,
-	DP_LINK_VOLTAGE_LEVEL_1,
-	DP_LINK_VOLTAGE_LEVEL_2,
-	DP_LINK_VOLTAGE_MAX = DP_LINK_VOLTAGE_LEVEL_2,
+	DP_LINK_VOLTAGE_LEVEL_0	= 0,
+	DP_LINK_VOLTAGE_LEVEL_1	= 1,
+	DP_LINK_VOLTAGE_LEVEL_2	= 2,
+	DP_LINK_VOLTAGE_MAX	= DP_LINK_VOLTAGE_LEVEL_2,
 };
 
 enum dp_link_preemaphasis_level {
-	DP_LINK_PRE_EMPHASIS_LEVEL_0,
-	DP_LINK_PRE_EMPHASIS_LEVEL_1,
-	DP_LINK_PRE_EMPHASIS_LEVEL_2,
-	DP_LINK_PRE_EMPHASIS_LEVEL_3,
-	DP_LINK_PRE_EMPHASIS_MAX = DP_LINK_PRE_EMPHASIS_LEVEL_3,
+	DP_LINK_PRE_EMPHASIS_LEVEL_0	= 0,
+	DP_LINK_PRE_EMPHASIS_LEVEL_1	= 1,
+	DP_LINK_PRE_EMPHASIS_LEVEL_2	= 2,
+	DP_LINK_PRE_EMPHASIS_MAX	= DP_LINK_PRE_EMPHASIS_LEVEL_2,
 };
 
 struct dp_link_sink_count {
@@ -187,7 +195,7 @@ static inline u32 dp_link_bit_depth_to_bpp(u32 tbd)
 	case DP_TEST_BIT_DEPTH_UNKNOWN:
 	default:
 #ifdef CONFIG_SEC_DISPLAYPORT
-		pr_debug("%s: tbd(%d)\n", __func__, tbd);
+		pr_debug("tbd(%d)\n", tbd);
 #endif
 		bpp = 0;
 	}

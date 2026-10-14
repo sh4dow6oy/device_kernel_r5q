@@ -1,24 +1,34 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
 
+#define pr_fmt(fmt)	"[drm-dp] %s: " fmt, __func__
+
 #include <linux/clk.h>
-#include <linux/pm_runtime.h>
-#include <drm/drmP.h>
 #include "dp_power.h"
 #include "dp_catalog.h"
-#include "dp_debug.h"
 
 #ifdef CONFIG_SEC_DISPLAYPORT
 #include <linux/regulator/consumer.h>
 #include <linux/delay.h>
 #include "secdp.h"
 
+#ifdef SECDP_USE_REDRIVER
 #if defined(CONFIG_COMBO_REDRIVER_PTN36502)
 #include <linux/combo_redriver/ptn36502.h>
-#elif defined(CONFIG_COMBO_REDRIVER_PS5169)
-#include <linux/combo_redriver/ps5169.h>
+#elif defined(CONFIG_COMBO_REDRIVER_NEXTIC)
+#include <linux/combo_redriver/nextic.h>
+#endif
 #endif
 
 #endif
@@ -34,6 +44,8 @@ struct dp_power_private {
 	struct clk *pixel1_parent;
 
 	struct dp_power dp_power;
+	struct sde_power_client *dp_core_client;
+	struct sde_power_handle *phandle;
 
 	bool core_clks_on;
 	bool link_clks_on;
@@ -41,6 +53,7 @@ struct dp_power_private {
 	bool strm1_clks_on;
 #ifdef CONFIG_SEC_DISPLAYPORT
 	bool aux_pullup_on;
+	struct mutex dp_clk_lock;
 
 	void (*redrv_onoff)(bool enable, int lane);
 	void (*redrv_aux_ctrl)(int cross);
@@ -52,7 +65,8 @@ struct dp_power_private *g_secdp_power;
 
 #define DP_ENUM_STR(x)	#x
 
-enum redriver_switch_t {
+enum redriver_switch_t
+{
 	REDRIVER_SWITCH_UNKNOWN = -1,
 	REDRIVER_SWITCH_RESET   =  0,
 	REDRIVER_SWITCH_CROSS,
@@ -74,7 +88,7 @@ static int dp_power_regulator_init(struct dp_power_private *power)
 			parser->mp[i].vreg_config,
 			parser->mp[i].num_vreg, 1);
 		if (rc) {
-			DP_ERR("failed to init vregs for %s\n",
+			pr_err("failed to init vregs for %s\n",
 				dp_parser_pm_name(i));
 			for (j = i - 1; j >= DP_CORE_PM; j--) {
 				msm_dss_config_vreg(&pdev->dev,
@@ -103,7 +117,7 @@ static void dp_power_regulator_deinit(struct dp_power_private *power)
 			parser->mp[i].vreg_config,
 			parser->mp[i].num_vreg, 0);
 		if (rc)
-			DP_ERR("failed to deinit vregs for %s\n",
+			pr_err("failed to deinit vregs for %s\n",
 				dp_parser_pm_name(i));
 	}
 }
@@ -120,10 +134,10 @@ static int secdp_aux_pullup_vreg_enable(bool on)
 	struct dp_power_private *power = g_secdp_power;
 	struct regulator *aux_pu_vreg = aux_pullup_vreg;
 
-	DP_DEBUG("+++, on(%d)\n", on);
+	pr_debug("+++, on(%d)\n", on);
 
 	if (!aux_pu_vreg) {
-		DP_ERR("vdda33 is null!\n");
+		pr_err("vdda33 is null!\n");
 		goto exit;
 	}
 
@@ -133,50 +147,49 @@ static int secdp_aux_pullup_vreg_enable(bool on)
 
 	if (on) {
 		if (power->aux_pullup_on) {
-			DP_INFO("already on\n");
+			pr_info("already on\n");
 			goto exit;
 		}
 
 		rc = regulator_set_load(aux_pu_vreg, QUSB2PHY_3P3_HPM_LOAD);
 		if (rc < 0) {
-			DP_ERR("Unable to set HPM of vdda33: %d\n", rc);
+			pr_err("Unable to set HPM of vdda33: %d\n", rc);
 			goto exit;
 		}
 
 		rc = regulator_set_voltage(aux_pu_vreg, QUSB2PHY_3P3_VOL_MIN,
 					QUSB2PHY_3P3_VOL_MAX);
 		if (rc) {
-			DP_ERR("Unable to set voltage for vdda33: %d\n", rc);
+			pr_err("Unable to set voltage for vdda33: %d\n", rc);
 			goto put_vdda33_lpm;
 		}
 
 		rc = regulator_enable(aux_pu_vreg);
 		if (rc) {
-			DP_ERR("Unable to enable vdda33: %d\n", rc);
+			pr_err("Unable to enable vdda33: %d\n", rc);
 			goto unset_vdd33;
 		}
 
-		DP_INFO("on success\n");
+		pr_info("on success\n");
 		power->aux_pullup_on = true;
 	} else {
 
 		rc = regulator_disable(aux_pu_vreg);
 		if (rc)
-			DP_ERR("Unable to disable vdda33: %d\n", rc);
+			pr_err("Unable to disable vdda33: %d\n", rc);
 
 unset_vdd33:
-		rc = regulator_set_voltage(aux_pu_vreg, 0,
-				QUSB2PHY_3P3_VOL_MAX);
+		rc = regulator_set_voltage(aux_pu_vreg, 0, QUSB2PHY_3P3_VOL_MAX);
 		if (rc)
-			DP_ERR("Unable to set 0 voltage for vdda33: %d\n", rc);
+			pr_err("Unable to set (0) voltage for vdda33: %d\n", rc);
 
 put_vdda33_lpm:
 		rc = regulator_set_load(aux_pu_vreg, 0);
 		if (rc < 0)
-			DP_ERR("Unable to set 0 HPM of vdda33: %d\n", rc);
+			pr_err("Unable to set (0) HPM of vdda33: %d\n", rc);
 
 		if (!rc)
-			DP_INFO("off success\n");
+			pr_info("off success\n");
 
 		power->aux_pullup_on = false;
 	}
@@ -198,7 +211,7 @@ static int dp_power_regulator_ctrl(struct dp_power_private *power, bool enable)
 			parser->mp[i].vreg_config,
 			parser->mp[i].num_vreg, enable);
 		if (rc) {
-			DP_ERR("failed to '%s' vregs for %s\n",
+			pr_err("failed to '%s' vregs for %s\n",
 					enable ? "enable" : "disable",
 					dp_parser_pm_name(i));
 			if (enable) {
@@ -222,13 +235,13 @@ error:
 
 static int dp_power_pinctrl_set(struct dp_power_private *power, bool active)
 {
-	int rc = -EFAULT;
+	int rc = 0;
 	struct pinctrl_state *pin_state;
 	struct dp_parser *parser;
 
 	parser = power->parser;
 
-	if (IS_ERR_OR_NULL(parser->pinctrl.pin))
+	if (IS_ERR_OR_NULL(parser->pinctrl.pin) || power->dp_power.sim_mode)
 		return 0;
 
 	if (parser->no_aux_switch && parser->lphw_hpd) {
@@ -238,15 +251,12 @@ static int dp_power_pinctrl_set(struct dp_power_private *power, bool active)
 			rc = pinctrl_select_state(parser->pinctrl.pin,
 				pin_state);
 			if (rc) {
-				DP_ERR("cannot direct hpd line to %s\n",
+				pr_err("cannot direct hpd line to %s\n",
 					active ? "ctrl" : "tlmm");
 				return rc;
 			}
 		}
 	}
-
-	if (parser->no_aux_switch)
-		return 0;
 
 	pin_state = active ? parser->pinctrl.state_active
 				: parser->pinctrl.state_suspend;
@@ -254,13 +264,9 @@ static int dp_power_pinctrl_set(struct dp_power_private *power, bool active)
 		rc = pinctrl_select_state(parser->pinctrl.pin,
 				pin_state);
 		if (rc)
-			DP_ERR("can not set %s pins\n",
+			pr_err("can not set %s pins\n",
 			       active ? "dp_active"
 			       : "dp_sleep");
-	} else {
-		DP_ERR("invalid '%s' pinstate\n",
-		       active ? "dp_active"
-		       : "dp_sleep");
 	}
 
 	return rc;
@@ -284,7 +290,7 @@ static int dp_power_clk_init(struct dp_power_private *power, bool enable)
 
 			rc = msm_dss_get_clk(dev, pm->clk_config, pm->num_clk);
 			if (rc) {
-				DP_ERR("failed to get %s clk. err=%d\n",
+				pr_err("failed to get %s clk. err=%d\n",
 					dp_parser_pm_name(module), rc);
 				goto exit;
 			}
@@ -292,25 +298,25 @@ static int dp_power_clk_init(struct dp_power_private *power, bool enable)
 
 		power->pixel_clk_rcg = devm_clk_get(dev, "pixel_clk_rcg");
 		if (IS_ERR(power->pixel_clk_rcg)) {
-			DP_DEBUG("Unable to get DP pixel clk RCG\n");
+			pr_debug("Unable to get DP pixel clk RCG\n");
 			power->pixel_clk_rcg = NULL;
 		}
 
 		power->pixel_parent = devm_clk_get(dev, "pixel_parent");
 		if (IS_ERR(power->pixel_parent)) {
-			DP_DEBUG("Unable to get DP pixel RCG parent\n");
+			pr_debug("Unable to get DP pixel RCG parent\n");
 			power->pixel_parent = NULL;
 		}
 
 		power->pixel1_clk_rcg = devm_clk_get(dev, "pixel1_clk_rcg");
 		if (IS_ERR(power->pixel1_clk_rcg)) {
-			DP_DEBUG("Unable to get DP pixel1 clk RCG\n");
+			pr_debug("Unable to get DP pixel1 clk RCG\n");
 			power->pixel1_clk_rcg = NULL;
 		}
 
 		power->pixel1_parent = devm_clk_get(dev, "pixel1_parent");
 		if (IS_ERR(power->pixel1_parent)) {
-			DP_DEBUG("Unable to get DP pixel1 RCG parent\n");
+			pr_debug("Unable to get DP pixel1 RCG parent\n");
 			power->pixel1_parent = NULL;
 		}
 	} else {
@@ -345,35 +351,53 @@ static int dp_power_clk_set_rate(struct dp_power_private *power,
 {
 	int rc = 0;
 	struct dss_module_power *mp;
+#if defined(CONFIG_SEC_DISPLAYPORT)
+	static bool prev[DP_MAX_PM];
 
+	mutex_lock(&power->dp_clk_lock);
+#endif
 	if (!power) {
-		DP_ERR("invalid power data\n");
+		pr_err("invalid power data\n");
 		rc = -EINVAL;
 		goto exit;
 	}
 
 	mp = &power->parser->mp[module];
 
+#if defined(CONFIG_SEC_DISPLAYPORT)
+	if (prev[module] == enable) {
+		pr_err("%d clk already %s\n", module, enable ? "enabled" : "disabled");
+		goto exit;
+	}
+#endif
+
 	if (enable) {
 		rc = msm_dss_clk_set_rate(mp->clk_config, mp->num_clk);
 		if (rc) {
-			DP_ERR("failed to set clks rate.\n");
+			pr_err("failed to set clks rate.\n");
 			goto exit;
 		}
 
 		rc = msm_dss_enable_clk(mp->clk_config, mp->num_clk, 1);
 		if (rc) {
-			DP_ERR("failed to enable clks\n");
+			pr_err("failed to enable clks\n");
 			goto exit;
 		}
 	} else {
 		rc = msm_dss_enable_clk(mp->clk_config, mp->num_clk, 0);
 		if (rc) {
-			DP_ERR("failed to disable clks\n");
+			pr_err("failed to disable clks\n");
 				goto exit;
 		}
 	}
+
+#if defined(CONFIG_SEC_DISPLAYPORT)
+	prev[module] = enable;
+#endif
 exit:
+#if defined(CONFIG_SEC_DISPLAYPORT)
+	mutex_unlock(&power->dp_clk_lock);
+#endif
 	return rc;
 }
 
@@ -385,7 +409,7 @@ static int dp_power_clk_enable(struct dp_power *dp_power,
 	struct dp_power_private *power;
 
 	if (!dp_power) {
-		DP_ERR("invalid power data\n");
+		pr_err("invalid power data\n");
 		rc = -EINVAL;
 		goto error;
 	}
@@ -395,33 +419,33 @@ static int dp_power_clk_enable(struct dp_power *dp_power,
 	mp = &power->parser->mp[pm_type];
 
 	if (pm_type >= DP_MAX_PM) {
-		DP_ERR("unsupported power module: %s\n",
+		pr_err("unsupported power module: %s\n",
 				dp_parser_pm_name(pm_type));
 		return -EINVAL;
 	}
 
 	if (enable) {
 		if (pm_type == DP_CORE_PM && power->core_clks_on) {
-			DP_DEBUG("core clks already enabled\n");
+			pr_debug("core clks already enabled\n");
 			return 0;
 		}
 
 		if ((pm_type == DP_STREAM0_PM) && (power->strm0_clks_on)) {
-			DP_DEBUG("strm0 clks already enabled\n");
+			pr_debug("strm0 clks already enabled\n");
 			return 0;
 		}
 
 		if ((pm_type == DP_STREAM1_PM) && (power->strm1_clks_on)) {
-			DP_DEBUG("strm1 clks already enabled\n");
+			pr_debug("strm1 clks already enabled\n");
 			return 0;
 		}
 
 		if ((pm_type == DP_CTRL_PM) && (!power->core_clks_on)) {
-			DP_DEBUG("Need to enable core clks before link clks\n");
+			pr_debug("Need to enable core clks before link clks\n");
 
 			rc = dp_power_clk_set_rate(power, pm_type, enable);
 			if (rc) {
-				DP_ERR("failed to enable clks: %s. err=%d\n",
+				pr_err("failed to enable clks: %s. err=%d\n",
 					dp_parser_pm_name(DP_CORE_PM), rc);
 				goto error;
 			} else {
@@ -430,48 +454,14 @@ static int dp_power_clk_enable(struct dp_power *dp_power,
 		}
 
 		if (pm_type == DP_LINK_PM && power->link_clks_on) {
-			DP_DEBUG("links clks already enabled\n");
+			pr_debug("links clks already enabled\n");
 			return 0;
 		}
 	}
-
-#ifdef CONFIG_SEC_DISPLAYPORT
-	if (!enable) {
-		/* consider below abnormal sequence :
-		 * CCIC_NOTIFY_ATTACH
-		 * -> no CCIC_NOTIFY_ID_DP_LINK_CONF, no CCIC_NOTIFY_ID_DP_HPD
-		 * -> CCIC_NOTIFY_DETACH
-		 */
-		if ((pm_type == DP_CORE_PM) && (!power->core_clks_on)) {
-			DP_DEBUG("core clks already disabled\n");
-			return 0;
-		}
-
-		if ((pm_type == DP_CTRL_PM) && (!power->link_clks_on)) {
-			DP_DEBUG("links clks already disabled\n");
-			return 0;
-		}
-
-		if ((pm_type == DP_STREAM0_PM) && (!power->strm0_clks_on)) {
-			DP_DEBUG("strm0 clks already disabled\n");
-			return 0;
-		}
-
-		if ((pm_type == DP_STREAM1_PM) && (!power->strm1_clks_on)) {
-			DP_DEBUG("strm1 clks already disabled\n");
-			return 0;
-		}
-
-		if (pm_type == DP_LINK_PM && !power->link_clks_on) {
-			DP_DEBUG("links clks already disabled\n");
-			return 0;
-		}
-	}
-#endif
 
 	rc = dp_power_clk_set_rate(power, pm_type, enable);
 	if (rc) {
-		DP_ERR("failed to '%s' clks for: %s. err=%d\n",
+		pr_err("failed to '%s' clks for: %s. err=%d\n",
 			enable ? "enable" : "disable",
 			dp_parser_pm_name(pm_type), rc);
 			goto error;
@@ -492,7 +482,7 @@ static int dp_power_clk_enable(struct dp_power *dp_power,
 	 * usecase, it is not going to flood the kernel logs. Also,
 	 * helpful in debugging the NOC issues.
 	 */
-	DP_INFO("core:%s link:%s strm0:%s strm1:%s\n",
+	pr_info("core:%s link:%s strm0:%s strm1:%s\n",
 		power->core_clks_on ? "on" : "off",
 		power->link_clks_on ? "on" : "off",
 		power->strm0_clks_on ? "on" : "off",
@@ -511,7 +501,7 @@ static int dp_power_request_gpios(struct dp_power_private *power)
 	};
 
 	if (!power) {
-		DP_ERR("invalid power data\n");
+		pr_err("invalid power data\n");
 		return -EINVAL;
 	}
 
@@ -524,7 +514,7 @@ static int dp_power_request_gpios(struct dp_power_private *power)
 		if (gpio_is_valid(gpio)) {
 			rc = devm_gpio_request(dev, gpio, gpio_names[i]);
 			if (rc) {
-				DP_ERR("request %s gpio failed, rc=%d\n",
+				pr_err("request %s gpio failed, rc=%d\n",
 					       gpio_names[i], rc);
 				goto error;
 			}
@@ -558,7 +548,7 @@ static void dp_power_set_gpio(struct dp_power_private *power, bool flip)
 			config->value = flip;
 
 		if (gpio_is_valid(config->gpio)) {
-			DP_DEBUG("gpio %s, value %d\n", config->gpio_name,
+			pr_debug("gpio %s, value %d\n", config->gpio_name,
 				config->value);
 
 			if (dp_power_find_gpio(config->gpio_name, "aux-en") ||
@@ -579,7 +569,7 @@ int secdp_power_request_gpios(struct dp_power *dp_power)
 	struct dp_power_private *power;
 
 	if (!dp_power) {
-		DP_ERR("invalid power data\n");
+		pr_err("invalid power data\n");
 		rc = -EINVAL;
 		goto exit;
 	}
@@ -591,30 +581,25 @@ exit:
 	return rc;
 }
 
-#if defined(CONFIG_COMBO_REDRIVER_PTN36502) || defined(CONFIG_COMBO_REDRIVER_PS5169)
+#ifdef SECDP_USE_REDRIVER
 static inline char *secdp_redriver_switch_to_string(int event)
 {
 	switch (event) {
-	case REDRIVER_SWITCH_UNKNOWN:
-		return DP_ENUM_STR(REDRIVER_SWITCH_UNKNOWN);
-	case REDRIVER_SWITCH_RESET:
-		return DP_ENUM_STR(REDRIVER_SWITCH_RESET);
-	case REDRIVER_SWITCH_CROSS:
-		return DP_ENUM_STR(REDRIVER_SWITCH_CROSS);
-	case REDRIVER_SWITCH_THROU:
-		return DP_ENUM_STR(REDRIVER_SWITCH_THROU);
-	default:
-		return "unknown";
+	case REDRIVER_SWITCH_UNKNOWN:	return DP_ENUM_STR(REDRIVER_SWITCH_UNKNOWN);
+	case REDRIVER_SWITCH_RESET:		return DP_ENUM_STR(REDRIVER_SWITCH_RESET);
+	case REDRIVER_SWITCH_CROSS:		return DP_ENUM_STR(REDRIVER_SWITCH_CROSS);
+	case REDRIVER_SWITCH_THROU:		return DP_ENUM_STR(REDRIVER_SWITCH_THROU);
+	default:						return "unknown";
 	}
 }
-#endif
 
 #if defined(CONFIG_COMBO_REDRIVER_PTN36502)
 static void secdp_ptn36502_aux_ctrl(int cross)
 {
-	DP_DEBUG("+++ cross: %s\n", secdp_redriver_switch_to_string(cross));
+	pr_debug("+++ cross: %s\n", secdp_redriver_switch_to_string(cross));
 
-	switch (cross) {
+	switch (cross)
+	{
 	case REDRIVER_SWITCH_CROSS:
 		ptn36502_config(AUX_CROSS_MODE, 0);
 		break;
@@ -625,14 +610,14 @@ static void secdp_ptn36502_aux_ctrl(int cross)
 		ptn36502_config(SAFE_STATE, 0);
 		break;
 	default:
-		DP_INFO("unknown: %d\n", cross);
+		pr_info("unknown: %d\n", cross);
 		break;
 	}
 }
 
 static void secdp_ptn36502_onoff(bool enable, int lane)
 {
-	DP_DEBUG("+++ enable(%d), lane(%d)\n", enable, lane);
+	pr_debug("+++ enable(%d), lane(%d)\n", enable, lane);
 
 	if (enable) {
 		int val = -1;
@@ -642,14 +627,16 @@ static void secdp_ptn36502_onoff(bool enable, int lane)
 		else if (lane == 4)
 			ptn36502_config(DP4_LANE_MODE, 1);
 		else {
-			DP_ERR("error! unknown lane: %d\n", lane);
+			pr_err("error! unknown lane: %d\n", lane);
 			goto exit;
 		}
 
 		val = ptn36502_i2c_read(Chip_ID);
-		DP_INFO("Chip_ID:  0x%x\n", val);
+		pr_info("Chip_ID:  0x%x\n", val);
+
 		val = ptn36502_i2c_read(Chip_Rev);
-		DP_INFO("Chip_Rev: 0x%x\n", val);
+		pr_info("Chip_Rev: 0x%x\n", val);
+
 	} else {
 		ptn36502_config(SAFE_STATE, 0);
 	}
@@ -657,42 +644,58 @@ static void secdp_ptn36502_onoff(bool enable, int lane)
 exit:
 	return;
 }
-#elif defined(CONFIG_COMBO_REDRIVER_PS5169)
-static void secdp_ps5169_aux_ctrl(int cross)
+#elif defined(CONFIG_COMBO_REDRIVER_NEXTIC)
+static void secdp_nextic_aux_ctrl(int cross)
 {
-	/*
-	 * ps5169 does not support AUX switching function.
-	 * It needs to be done by AUX switch IC
-	 */
-	DP_DEBUG("+++ cross: %s, do nothing!\n",
-		secdp_redriver_switch_to_string(cross));
+	pr_debug("+++ cross: %s\n", secdp_redriver_switch_to_string(cross));
+
+	switch (cross)
+	{
+	case REDRIVER_SWITCH_CROSS:
+		//.TODO:
+		break;
+	case REDRIVER_SWITCH_THROU:
+		//.TODO:
+		break;
+	case REDRIVER_SWITCH_RESET:
+		//.TODO:
+		break;
+	default:
+		pr_info("unknown: %d\n", cross);
+		break;
+	}
 }
 
-static void secdp_ps5169_onoff(bool enable, int lane)
+static void secdp_nextic_onoff(bool enable, int lane)
 {
-	DP_DEBUG("+++ enable(%d), lane(%d)\n", enable, lane);
+	pr_debug("+++ enable(%d), lane(%d)\n", enable, lane);
 
 	if (enable) {
+		int val = -1;
+
 		if (lane == 2)
-			ps5169_config(DP2_LANE_USB_MODE, 1);
+			//.TODO:
 		else if (lane == 4)
-			ps5169_config(DP_ONLY_MODE, 1);
+			//.TODO:
 		else {
-			DP_ERR("error! unknown lane: %d\n", lane);
+			pr_err("error! unknown lane: %d\n", lane);
 			goto exit;
 		}
 
-		DP_INFO("Chip_ID1:  0x%x, Chip_Rev1: 0x%x\n",
-			ps5169_i2c_read(Chip_ID1), ps5169_i2c_read(Chip_Rev1));
-		DP_INFO("Chip_ID2:  0x%x, Chip_Rev2: 0x%x\n",
-			ps5169_i2c_read(Chip_ID2), ps5169_i2c_read(Chip_Rev2));
+		//.TODO:
+		pr_info("Chip_ID:  0x%x\n", val);
+
+		//.TODO:
+		pr_info("Chip_Rev: 0x%x\n", val);
+
 	} else {
-		ps5169_config(CLEAR_STATE, 0);
+		//.TODO:
 	}
 
 exit:
 	return;
 }
+#endif
 #endif
 
 void secdp_redriver_onoff(bool enable, int lane)
@@ -713,29 +716,22 @@ static void secdp_redriver_aux_ctrl(int cross)
 
 static void secdp_redriver_register(struct dp_power_private *power)
 {
-	int use_redrv;
-
-	if (!power || !power->parser) {
-		DP_ERR("invalid power!\n");
+	if (!power) {
+		pr_err("invalid power!\n");
 		goto end;
 	}
 
-	use_redrv = power->parser->use_redrv;
-	DP_DEBUG("++ use_redrv(%d)\n", use_redrv);
-
-	if (!use_redrv) {
-		DP_INFO("nothing registered!\n");
-		goto end;
-	}
-
+#ifdef SECDP_USE_REDRIVER
 #if defined(CONFIG_COMBO_REDRIVER_PTN36502)
 	power->redrv_onoff = secdp_ptn36502_onoff;
 	power->redrv_aux_ctrl = secdp_ptn36502_aux_ctrl;
-	DP_INFO("ptn36502 API registered!\n");
-#elif defined (CONFIG_COMBO_REDRIVER_PS5169)
-	power->redrv_onoff = secdp_ps5169_onoff;
-	power->redrv_aux_ctrl = secdp_ps5169_aux_ctrl;
-	DP_INFO("ps5169 API registered!\n");
+#elif defined(CONFIG_COMBO_REDRIVER_NEXTIC)
+	power->redrv_onoff = secdp_nextic_onoff;
+	power->redrv_aux_ctrl = secdp_nextic_aux_ctrl;
+#else
+	panic("cannot be hit here!\n");
+#endif
+	pr_info("done\n");
 #endif
 
 end:
@@ -762,25 +758,39 @@ static void secdp_power_set_gpio(bool flip)
 
 	parser = power->parser;
 
-	DP_DEBUG("flip(%d), aux_sel_inv(%d), use_redrv(%d)\n",
-		flip, parser->aux_sel_inv, parser->use_redrv);
+	pr_debug("+++, flip(%d), aux_sel_inv(%d), aux_sw_redrv(%d)\n", flip,
+		parser->aux_sel_inv, parser->aux_sw_redrv);
 
 	if (parser->aux_sel_inv)
 		sel_val = true;
+
+#if 0 /*use flip instead*/
+	config = mp->gpio_config;
+	for (i = 0; i < mp->num_gpio; i++) {
+		if (gpio_is_valid(config->gpio)) {
+			if (dp_power_find_gpio(config->gpio_name, "usbplug-cc")) {
+				dir = gpio_get_value(config->gpio);
+				pr_info("%s -> dir: %d\n", config->gpio_name, dir);
+				break;
+			}
+		}
+		config++;
+	}
+
+	usleep_range(100, 120);
+#endif
 
 	config = mp->gpio_config;
 	for (i = 0; i < mp->num_gpio; i++) {
 		if (gpio_is_valid(config->gpio)) {
 			if (dp_power_find_gpio(config->gpio_name, "aux-sel")) {
-				if (parser->use_redrv == SECDP_REDRV_PTN36502)
+				if (!parser->aux_sw_redrv)
+					gpio_direction_output(config->gpio, (!flip ? sel_val : !sel_val));
+				else
 					gpio_direction_output(config->gpio, 0);
-				else /* SECDP_REDRV_PS5169 or SECDP_REDRV_NONE */
-					gpio_direction_output(config->gpio,
-						(!flip ? sel_val : !sel_val));
 
 				usleep_range(100, 120);
-				DP_INFO("%s -> set %d\n", config->gpio_name,
-					gpio_get_value(config->gpio));
+				pr_info("%s -> set %d\n", config->gpio_name, gpio_get_value(config->gpio));
 				break;
 			}
 		}
@@ -793,8 +803,7 @@ static void secdp_power_set_gpio(bool flip)
 		if (gpio_is_valid(config->gpio)) {
 			if (dp_power_find_gpio(config->gpio_name, "aux-en")) {
 				gpio_direction_output(config->gpio, 0);
-				DP_INFO("%s -> %d\n", config->gpio_name,
-					gpio_get_value(config->gpio));
+				pr_info("%s -> %d\n", config->gpio_name, gpio_get_value(config->gpio));
 				break;
 			}
 		}
@@ -810,14 +819,14 @@ static void secdp_power_unset_gpio(void)
 	struct dss_module_power *mp = &power->parser->mp[DP_CORE_PM];
 	struct dss_gpio *config;
 
-	DP_DEBUG("+++\n");
+	pr_debug("+++\n");
 
 	config = mp->gpio_config;
 	for (i = 0; i < mp->num_gpio; i++) {
 		if (gpio_is_valid(config->gpio)) {
 			if (dp_power_find_gpio(config->gpio_name, "aux-en")) {
 				gpio_direction_output(config->gpio, 1);
-				DP_INFO("%s -> 1\n", config->gpio_name);
+				pr_info("%s -> 1\n", config->gpio_name);
 				break;
 			}
 		}
@@ -829,7 +838,7 @@ static void secdp_power_unset_gpio(void)
 		if (gpio_is_valid(config->gpio)) {
 			if (dp_power_find_gpio(config->gpio_name, "aux-sel")) {
 				gpio_direction_output(config->gpio, 0);
-				DP_INFO("%s -> 0\n", config->gpio_name);
+				pr_info("%s -> 0\n", config->gpio_name);
 				break;
 			}
 		}
@@ -845,7 +854,7 @@ void secdp_config_gpios_factory(int aux_sel, bool on)
 	struct dp_power_private *power = g_secdp_power;
 	struct dp_parser *parser;
 
-	DP_DEBUG("+++ (%d,%d)\n", aux_sel, on);
+	pr_debug("+++ (%d,%d)\n", aux_sel, on);
 
 	parser = power->parser;
 
@@ -858,7 +867,7 @@ void secdp_config_gpios_factory(int aux_sel, bool on)
 		else if (aux_sel == 0)
 			secdp_redriver_aux_ctrl(REDRIVER_SWITCH_THROU);
 		else
-			DP_ERR("unknown <%d>\n", aux_sel);
+			pr_err("unknown <%d>\n", aux_sel);
 	} else {
 		secdp_redriver_aux_ctrl(REDRIVER_SWITCH_RESET);
 		secdp_power_unset_gpio();
@@ -875,17 +884,15 @@ enum plug_orientation secdp_get_plug_orientation(void)
 	struct dp_parser *parser;
 
 	parser = power->parser;
-	DP_INFO("+++ cc_dir_inv: %d\n", parser->cc_dir_inv);
+	pr_info("+++ cc_dir_inv: %d\n", parser->cc_dir_inv);
 
 	for (i = 0; i < mp->num_gpio; i++) {
 		if (gpio_is_valid(config->gpio)) {
-			if (dp_power_find_gpio(config->gpio_name,
-					"usbplug-cc")) {
+			if (dp_power_find_gpio(config->gpio_name, "usbplug-cc")) {
 				dir = gpio_get_value(config->gpio);
 				if (parser->cc_dir_inv)
 					dir = !dir;
-				DP_INFO("orientation: %s\n",
-					!dir ? "CC1" : "CC2");
+				pr_info("orientation: %s\n", !dir ? "CC1" : "CC2");
 				if (dir == 0)
 					return ORIENTATION_CC1;
 				else /* if (dir == 1) */
@@ -918,7 +925,7 @@ bool secdp_get_clk_status(enum dp_pm_type type)
 		ret = power->link_clks_on;
 		break;
 	default:
-		DP_ERR("invalid type:%d\n", type);
+		pr_err("invalid type:%d\n", type);
 		break;
 	}
 
@@ -945,7 +952,7 @@ static int dp_power_config_gpios(struct dp_power_private *power, bool flip,
 #ifndef CONFIG_SEC_DISPLAYPORT
 		rc = dp_power_request_gpios(power);
 		if (rc) {
-			DP_ERR("gpio request failed\n");
+			pr_err("gpio request failed\n");
 			return rc;
 		}
 
@@ -970,13 +977,14 @@ static int dp_power_config_gpios(struct dp_power_private *power, bool flip,
 }
 
 static int dp_power_client_init(struct dp_power *dp_power,
-	struct sde_power_handle *phandle, struct drm_device *drm_dev)
+		struct sde_power_handle *phandle)
 {
 	int rc = 0;
 	struct dp_power_private *power;
+	char dp_client_name[DP_CLIENT_NAME_SIZE];
 
-	if (!drm_dev) {
-		DP_ERR("invalid drm_dev\n");
+	if (!dp_power) {
+		pr_err("invalid power data\n");
 		return -EINVAL;
 	}
 
@@ -984,31 +992,37 @@ static int dp_power_client_init(struct dp_power *dp_power,
 
 	rc = dp_power_regulator_init(power);
 	if (rc) {
-		DP_ERR("failed to init regulators\n");
+		pr_err("failed to init regulators\n");
 		goto error_power;
 	}
 
 	rc = dp_power_clk_init(power, true);
 	if (rc) {
-		DP_ERR("failed to init clocks\n");
+		pr_err("failed to init clocks\n");
 		goto error_clk;
 	}
-	dp_power->phandle = phandle;
-	dp_power->drm_dev = drm_dev;
+
+	power->phandle = phandle;
+	snprintf(dp_client_name, DP_CLIENT_NAME_SIZE, "dp_core_client");
+	power->dp_core_client = sde_power_client_create(phandle,
+			dp_client_name);
+	if (IS_ERR_OR_NULL(power->dp_core_client)) {
+		pr_err("[%s] client creation failed for DP", dp_client_name);
+		rc = -EINVAL;
+		goto error_client;
+	}
 
 #ifdef CONFIG_SEC_DISPLAYPORT
 	rc = dp_power_pinctrl_set(power, false);
 	if (rc) {
-		DP_ERR("failed to set pinctrl state\n");
+		pr_err("failed to set pinctrl state\n");
 		goto error_client;
 	}
 #endif
 	return 0;
 
-#ifdef CONFIG_SEC_DISPLAYPORT
 error_client:
 	dp_power_clk_init(power, false);
-#endif
 error_clk:
 	dp_power_regulator_deinit(power);
 error_power:
@@ -1020,12 +1034,13 @@ static void dp_power_client_deinit(struct dp_power *dp_power)
 	struct dp_power_private *power;
 
 	if (!dp_power) {
-		DP_ERR("invalid power data\n");
+		pr_err("invalid power data\n");
 		return;
 	}
 
 	power = container_of(dp_power, struct dp_power_private, dp_power);
 
+	sde_power_client_destroy(power->phandle, power->dp_core_client);
 	dp_power_clk_init(power, false);
 	dp_power_regulator_deinit(power);
 }
@@ -1036,7 +1051,7 @@ static int dp_power_set_pixel_clk_parent(struct dp_power *dp_power, u32 strm_id)
 	struct dp_power_private *power;
 
 	if (!dp_power || strm_id >= DP_STREAM_MAX) {
-		DP_ERR("invalid power data. stream %d\n", strm_id);
+		pr_err("invalid power data. stream %d\n", strm_id);
 		rc = -EINVAL;
 		goto exit;
 	}
@@ -1056,93 +1071,56 @@ exit:
 	return rc;
 }
 
-static u64 dp_power_clk_get_rate(struct dp_power *dp_power, char *clk_name)
-{
-	size_t i;
-	enum dp_pm_type j;
-	struct dss_module_power *mp;
-	struct dp_power_private *power;
-	bool clk_found = false;
-	u64 rate = 0;
-
-	if (!clk_name) {
-		DP_ERR("invalid pointer for clk_name\n");
-		return 0;
-	}
-
-	power = container_of(dp_power, struct dp_power_private, dp_power);
-	mp = &dp_power->phandle->mp;
-	for (i = 0; i < mp->num_clk; i++) {
-		if (!strcmp(mp->clk_config[i].clk_name, clk_name)) {
-			rate = clk_get_rate(mp->clk_config[i].clk);
-			clk_found = true;
-			break;
-		}
-	}
-
-	for (j = DP_CORE_PM; j < DP_MAX_PM && !clk_found; j++) {
-		mp = &power->parser->mp[j];
-		for (i = 0; i < mp->num_clk; i++) {
-			if (!strcmp(mp->clk_config[i].clk_name, clk_name)) {
-				rate = clk_get_rate(mp->clk_config[i].clk);
-				clk_found = true;
-				break;
-			}
-		}
-	}
-
-	return rate;
-}
-
 static int dp_power_init(struct dp_power *dp_power, bool flip)
 {
 	int rc = 0;
 	struct dp_power_private *power;
 
 	if (!dp_power) {
-		DP_ERR("invalid power data\n");
+		pr_err("invalid power data\n");
 		rc = -EINVAL;
 		goto exit;
 	}
 
-	DP_DEBUG("+++\n");
+	pr_debug("+++\n");
 
 	power = container_of(dp_power, struct dp_power_private, dp_power);
 
 	rc = dp_power_regulator_ctrl(power, true);
 	if (rc) {
-		DP_ERR("failed to enable regulators\n");
+		pr_err("failed to enable regulators\n");
 		goto exit;
 	}
 
 	rc = dp_power_pinctrl_set(power, true);
 	if (rc) {
-		DP_ERR("failed to set pinctrl state\n");
+		pr_err("failed to set pinctrl state\n");
 		goto err_pinctrl;
 	}
 
 	rc = dp_power_config_gpios(power, flip, true);
 	if (rc) {
-		DP_ERR("failed to enable gpios\n");
+		pr_err("failed to enable gpios\n");
 		goto err_gpio;
 	}
 
-	rc = pm_runtime_get_sync(dp_power->drm_dev->dev);
-	if (rc < 0) {
-		DP_ERR("Power resource enable failed\n");
+	rc = sde_power_resource_enable(power->phandle,
+		power->dp_core_client, true);
+	if (rc) {
+		pr_err("Power resource enable failed\n");
 		goto err_sde_power;
 	}
 
 	rc = dp_power_clk_enable(dp_power, DP_CORE_PM, true);
 	if (rc) {
-		DP_ERR("failed to enable DP core clocks\n");
+		pr_err("failed to enable DP core clocks\n");
 		goto err_clk;
 	}
 
 	return 0;
 
 err_clk:
-	pm_runtime_put_sync(dp_power->drm_dev->dev);
+	sde_power_resource_enable(power->phandle, power->dp_core_client, false);
 err_sde_power:
 	dp_power_config_gpios(power, flip, false);
 err_gpio:
@@ -1159,21 +1137,26 @@ static int dp_power_deinit(struct dp_power *dp_power)
 	struct dp_power_private *power;
 
 	if (!dp_power) {
-		DP_ERR("invalid power data\n");
+		pr_err("invalid power data\n");
 		rc = -EINVAL;
 		goto exit;
 	}
 
-	DP_DEBUG("+++\n");
+	pr_debug("+++\n");
 
 	power = container_of(dp_power, struct dp_power_private, dp_power);
+
+	dp_power_clk_enable(dp_power, DP_CORE_PM, false);
 
 	if (power->link_clks_on)
 		dp_power_clk_enable(dp_power, DP_LINK_PM, false);
 
-	dp_power_clk_enable(dp_power, DP_CORE_PM, false);
-	pm_runtime_put_sync(dp_power->drm_dev->dev);
-
+	rc = sde_power_resource_enable(power->phandle,
+			power->dp_core_client, false);
+	if (rc) {
+		pr_err("Power resource disable failed, rc=%d\n", rc);
+		goto exit;
+	}
 	dp_power_config_gpios(power, false, false);
 	dp_power_pinctrl_set(power, false);
 	dp_power_regulator_ctrl(power, false);
@@ -1188,7 +1171,7 @@ struct dp_power *dp_power_get(struct dp_parser *parser)
 	struct dp_power *dp_power;
 
 	if (!parser) {
-		DP_ERR("invalid input\n");
+		pr_err("invalid input\n");
 		rc = -EINVAL;
 		goto error;
 	}
@@ -1208,12 +1191,12 @@ struct dp_power *dp_power_get(struct dp_parser *parser)
 	dp_power->deinit = dp_power_deinit;
 	dp_power->clk_enable = dp_power_clk_enable;
 	dp_power->set_pixel_clk_parent = dp_power_set_pixel_clk_parent;
-	dp_power->clk_get_rate = dp_power_clk_get_rate;
 	dp_power->power_client_init = dp_power_client_init;
 	dp_power->power_client_deinit = dp_power_client_deinit;
 
 #ifdef CONFIG_SEC_DISPLAYPORT
 	secdp_redriver_register(power);
+	mutex_init(&power->dp_clk_lock);
 	g_secdp_power = power;
 #endif
 

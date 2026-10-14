@@ -46,9 +46,8 @@ void dp_logger_print_date_time(void)
 	nsec = do_div(time, 1000000000);
 	sec = get_seconds() - (sys_tz.tz_minuteswest * 60);
 	time_to_tm(sec, 0, &tm);
-	snprintf(tmp, sizeof(tmp), "!@[%02d-%02d %02d:%02d:%02d.%03lu]",
-		tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec,
-		nsec / 1000000);
+	snprintf(tmp, sizeof(tmp), "!@[%02d-%02d %02d:%02d:%02d.%03lu]", tm.tm_mon + 1, tm.tm_mday,
+						tm.tm_hour, tm.tm_min, tm.tm_sec, nsec / 1000000);
 
 	secdp_logger_print("%s\n", tmp);
 }
@@ -68,21 +67,20 @@ void secdp_logger_print(const char *fmt, ...)
 	char buf[MAX_STR_LEN] = {0,};
 	u64 time;
 	unsigned long nsec;
-
 	volatile unsigned int curpos;
 
 	if (!is_secdp_logger_init)
 		return;
 
-	if (log_max_count == 0)
+	if (!log_max_count)
 		return;
-	else if (log_max_count > 0)
+
+	if (log_max_count > 0)
 		log_max_count--;
 
 	time = local_clock();
 	nsec = do_div(time, 1000000000);
-	len = snprintf(buf, sizeof(buf), "[%5lu.%06ld] ",
-			(unsigned long)time, nsec / 1000);
+	len = snprintf(buf, sizeof(buf), "[%5lu.%06ld] ", (unsigned long)time, nsec / 1000);
 
 	va_start(args, fmt);
 	len += vsnprintf(buf + len, MAX_STR_LEN - len, fmt, args);
@@ -111,9 +109,10 @@ void secdp_logger_hex_dump(void *buf, void *pref, size_t size)
 	if (!is_secdp_logger_init)
 		return;
 
-	if (log_max_count == 0)
+	if (!log_max_count)
 		return;
-	else if (log_max_count > 0)
+
+	if (log_max_count > 0)
 		log_max_count--;
 
 	for (i = 0; i < size; i++) {
@@ -125,15 +124,14 @@ void secdp_logger_hex_dump(void *buf, void *pref, size_t size)
 		}
 	}
 
-	len = i % 16;
-	if (len != 0) {
+	if (i % 16) {
+		len = ptmp - tmp;
 		tmp[len] = 0x0;
-		secdp_logger_print("%s\n", tmp);
+		secdp_logger_print("%s%s\n", (char *)pref, tmp);
 	}
 }
 
-static ssize_t secdp_logger_read(struct file *file, char __user *buf,
-		size_t len, loff_t *offset)
+static ssize_t secdp_logger_read(struct file *file, char __user *buf, size_t len, loff_t *offset)
 {
 	loff_t pos = *offset;
 	ssize_t count;

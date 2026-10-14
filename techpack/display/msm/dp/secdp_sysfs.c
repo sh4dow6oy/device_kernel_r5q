@@ -11,6 +11,8 @@
  * GNU General Public License for more details.
  *
  */
+#define pr_fmt(fmt)	"[drm-dp] %s: " fmt, __func__
+
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/device.h>
@@ -20,7 +22,6 @@
 #include <linux/displayport_bigdata.h>
 #endif
 
-#include "dp_debug.h"
 #include "secdp.h"
 #include "secdp_sysfs.h"
 #include "sde_edid_parser.h"
@@ -59,7 +60,7 @@ static int secdp_check_store_args(const char *buf, size_t size)
 	int ret;
 
 	if (strnchr(buf, size, '-')) {
-		DP_ERR("range is forbidden!\n");
+		pr_err("range is forbidden!\n");
 		ret = -1;
 		goto exit;
 	}
@@ -71,13 +72,13 @@ exit:
 
 #ifdef CONFIG_SEC_FACTORY
 static ssize_t dp_sbu_sw_sel_store(struct class *dev,
-		struct class_attribute *attr, const char *buf, size_t size)
+				struct class_attribute *attr, const char *buf, size_t size)
 {
 	int val[10] = {0,};
 	int sbu_sw_sel, sbu_sw_oe;
 
 	if (secdp_check_store_args(buf, size)) {
-		DP_ERR("args error!\n");
+		pr_err("args error!\n");
 		goto exit;
 	}
 
@@ -85,14 +86,14 @@ static ssize_t dp_sbu_sw_sel_store(struct class *dev,
 
 	sbu_sw_sel = val[1];
 	sbu_sw_oe = val[2];
-	DP_INFO("sbu_sw_sel(%d), sbu_sw_oe(%d)\n", sbu_sw_sel, sbu_sw_oe);
+	pr_info("sbu_sw_sel(%d), sbu_sw_oe(%d)\n", sbu_sw_sel, sbu_sw_oe);
 
 	if (sbu_sw_oe == 0/*on*/)
 		secdp_config_gpios_factory(sbu_sw_sel, true);
 	else if (sbu_sw_oe == 1/*off*/)
 		secdp_config_gpios_factory(sbu_sw_sel, false);
 	else
-		DP_ERR("unknown sbu_sw_oe value: %d\n", sbu_sw_oe);
+		pr_err("unknown sbu_sw_oe value: %d\n", sbu_sw_oe);
 
 exit:
 	return size;
@@ -100,6 +101,8 @@ exit:
 
 static CLASS_ATTR_WO(dp_sbu_sw_sel);
 #endif
+
+#define SECDP_DEX_ADAPTER_SKIP	"SkipAdapterCheck"
 
 static ssize_t dex_show(struct class *class,
 				struct class_attribute *attr, char *buf)
@@ -110,16 +113,17 @@ static ssize_t dex_show(struct class *class,
 
 	if (!secdp_get_cable_status() || !secdp_get_hpd_status() ||
 			secdp_get_poor_connection_status() || !secdp_get_link_train_status()) {
-		DP_INFO("cable is out\n");
-		dex->prev = dex->curr = dex->status = DEX_DISABLED;
+		pr_info("cable is out\n");
+		dex->prev = dex->curr = dex->dex_node_status = DEX_DISABLED;
 	}
 
-	DP_INFO("prev: %d, curr: %d, status: %d\n",
-			dex->prev, dex->curr, dex->status);
-	rc = scnprintf(buf, PAGE_SIZE, "%d\n", dex->status);
+	pr_info("prev:%d, curr:%d, status:%d, %s:%d\n",
+			dex->prev, dex->curr, dex->dex_node_status,
+			SECDP_DEX_ADAPTER_SKIP, secdp_dex_adapter_skip_show());
+	rc = scnprintf(buf, PAGE_SIZE, "%d\n", dex->dex_node_status);
 
-	if (dex->status == DEX_DURING_MODE_CHANGE)
-		dex->status = dex->curr;
+	if (dex->dex_node_status == DEX_DURING_MODE_CHANGE)
+		dex->dex_node_status = dex->curr;
 
 	return rc;
 }
@@ -143,17 +147,17 @@ static ssize_t dex_store(struct class *class,
 	struct secdp_dex *dex = &sec->dex;
 
 	if (secdp_check_if_lpm_mode()) {
-		DP_INFO("it's LPM mode. skip\n");
+		pr_info("it's LPM mode. skip\n");
 		goto exit;
 	}
 
 	if (size >= MAX_DEX_STORE_LEN) {
-		DP_ERR("too long args! %d\n", size);
+		pr_err("too long args! %d\n", size);
 		goto exit;
 	}
 
 	if (secdp_check_store_args(buf, size)) {
-		DP_ERR("args error!\n");
+		pr_err("args error!\n");
 		goto exit;
 	}
 
@@ -162,30 +166,16 @@ static ssize_t dex_store(struct class *class,
 	p   = str;
 	tok = strsep(&p, ",");
 	len = strlen(tok);
-	DP_DEBUG("tok: %s, len: %d\n", tok, len);
+	pr_debug("tok: %s, len: %d\n", tok, len);
 
 	if (!strncmp(DEX_TAG_HMD, tok, len)) {
-		/* called by HmtManager to inform list of supported HMD devices
-		 *
-		 * Format :
-		 *   HMD,NUM,NAME01,VID01,PID01,NAME02,VID02,PID02,...
-		 *
-		 *   HMD  : tag
-		 *   NUM  : num of HMD dev ..... max 2 bytes to decimal (max 32)
-		 *   NAME : name of HMD ...... max 14 bytes, char string
-		 *   VID  : vendor  id ....... 4 bytes to hexadecimal
-		 *   PID  : product id ....... 4 bytes to hexadecimal
-		 *
-		 * ex) HMD,2,PicoVR,2d40,0000,Nreal light,0486,573c
-		 *
-		 * call hmd store function with tag(HMD),NUM removed
-		 */
 		int num_hmd = 0, sz = 0, ret;
 
 		tok = strsep(&p, ",");
 		sz  = strlen(tok);
 		ret = kstrtouint(tok, 10, &num_hmd);
-		DP_DEBUG("HMD num: %d, sz:%d, ret:%d\n", num_hmd, sz, ret);
+		pr_debug("[%s] num:%d,sz:%d,ret:%d\n", DEX_TAG_HMD,
+			num_hmd, sz, ret);
 		if (!ret) {
 			ret = secdp_store_hmd_dev(str + (len + sz + 2),
 					size - (len + sz + 2), num_hmd);
@@ -198,32 +188,50 @@ static ssize_t dex_store(struct class *class,
 	}
 	mutex_unlock(&sec->hmd_lock);
 
+	if (!strncmp(SECDP_DEX_ADAPTER_SKIP, tok, len)) {
+		int param = 0, sz = 0, ret;
+
+		tok = strsep(&p, ",");
+		sz  = strlen(tok);
+		ret = kstrtouint(tok, 2, &param);
+		if (ret) {
+			pr_err("error:%d\n", ret);
+			goto exit;
+		}
+
+		pr_debug("[%s] param:%d,sz:%d,ret:%d\n", SECDP_DEX_ADAPTER_SKIP,
+			param, sz, ret);
+
+		secdp_dex_adapter_skip_store((!param) ? false : true);
+		goto exit;
+	}
+
 	get_options(buf, ARRAY_SIZE(val), val);
-	DP_INFO("%d(0x%02x)\n", val[1], val[1]);
+	pr_info("%d(0x%02x)\n", val[1], val[1]);
 	setting_ui = (val[1] & 0xf0) >> 4;
 	run = (val[1] & 0x0f);
 
-	DP_INFO("setting_ui: %d, run: %d, cable: %d\n",
+	pr_info("setting_ui: %d, run: %d, cable: %d\n",
 		setting_ui, run, sec->cable_connected);
 
 	dex->setting_ui = setting_ui;
-	dex->status = dex->curr = run;
+	dex->dex_node_status = dex->curr = run;
 
 	mutex_lock(&sec->notifier_lock);
 	if (!sec->ccic_noti_registered) {
 		int rc;
 
-		DP_DEBUG("notifier get registered by dex\n");
+		pr_debug("notifier get registered by dex\n");
 
 		/* cancel immediately */
 		rc = cancel_delayed_work(&sec->ccic_noti_reg_work);
-		DP_DEBUG("cancel_work, rc(%d)\n", rc);
+		pr_debug("cancel_work, rc(%d)\n", rc);
 		destroy_delayed_work_on_stack(&sec->ccic_noti_reg_work);
 
 		/* register */
 		rc = secdp_ccic_noti_register_ex(sec, false);
 		if (rc)
-			DP_ERR("noti register fail, rc(%d)\n", rc);
+			pr_err("noti register fail, rc(%d)\n", rc);
 
 		mutex_unlock(&sec->notifier_lock);
 		goto exit;
@@ -232,8 +240,8 @@ static ssize_t dex_store(struct class *class,
 
 	if (!secdp_get_cable_status() || !secdp_get_hpd_status() ||
 			secdp_get_poor_connection_status() || !secdp_get_link_train_status()) {
-		DP_INFO("cable is out\n");
-		dex->prev = dex->curr = dex->status = DEX_DISABLED;
+		pr_info("cable is out\n");
+		dex->prev = dex->curr = dex->dex_node_status = DEX_DISABLED;
 		goto exit;
 	}
 
@@ -244,14 +252,12 @@ static ssize_t dex_store(struct class *class,
 	}
 
 	if (dex->curr == dex->prev) {
-		DP_INFO("dex is %s already\n",
-			dex->curr ? "enabled" : "disabled");
+		pr_info("dex is %s already\n", dex->curr ? "enabled" : "disabled");
 		goto exit;
 	}
-
+	
 	if (dex->curr != dex->setting_ui) {
-		DP_INFO("values of cur(%d) and setting_ui(%d) are difference\n",
-			dex->curr, dex->setting_ui);
+		pr_info("values of cur(%d) and setting_ui(%d) are difference\n", dex->curr, dex->setting_ui);
 		goto exit;
 	}
 
@@ -263,12 +269,12 @@ static ssize_t dex_store(struct class *class,
 #endif
 
 	if (sec->dex.res == DEX_RES_NOT_SUPPORT) {
-		DP_DEBUG("this dongle does not support dex\n");
+		pr_debug("this dongle does not support dex\n");
 		goto exit;
 	}
 
 	if (!secdp_check_dex_reconnect()) {
-		DP_INFO("not need reconnect\n");
+		pr_info("not need reconnect\n");
 		goto exit;
 	}
 
@@ -286,14 +292,13 @@ static ssize_t dex_ver_show(struct class *class,
 {
 	int rc;
 	struct secdp_sysfs_private *sysfs = g_secdp_sysfs;
-	struct secdp_misc *sec = sysfs->sec;
-	struct secdp_dex *dex = &sec->dex;
+	struct secdp_adapter *adapter = &sysfs->sec->adapter;
 
-	DP_INFO("branch revision: HW(0x%X), SW(0x%X, 0x%X)\n",
-		dex->fw_ver[0], dex->fw_ver[1], dex->fw_ver[2]);
+	pr_info("branch revision: HW(0x%X), SW(0x%X, 0x%X)\n",
+		adapter->fw_ver[0], adapter->fw_ver[1], adapter->fw_ver[2]);
 
 	rc = scnprintf(buf, PAGE_SIZE, "%02X%02X\n",
-		dex->fw_ver[1], dex->fw_ver[2]);
+		adapter->fw_ver[1], adapter->fw_ver[2]);
 
 	return rc;
 }
@@ -312,72 +317,142 @@ static ssize_t monitor_info_show(struct class *class,
 
 	info = secdp_get_panel_info();
 	if (!info) {
-		DP_ERR("unable to find panel info\n");
+		pr_err("unable to find panel info\n");
 		goto exit;
 	}
 
 	edid_ctrl = info->edid_ctrl;
 	if (!edid_ctrl) {
-		DP_ERR("unable to find edid_ctrl\n");
+		pr_err("unable to find edid_ctrl\n");
 		goto exit;
 	}
 
 	edid = edid_ctrl->edid;
 	if (!edid) {
-		DP_ERR("unable to find edid\n");
+		pr_err("unable to find edid\n");
 		goto exit;
 	}
 
-	DP_DEBUG("prod_code[0]: %02x, [1]: %02x\n",
-		edid->prod_code[0], edid->prod_code[1]);
+	pr_debug("prod_code[0]: %02x, [1]: %02x\n", edid->prod_code[0], edid->prod_code[1]);
 	prod_id |= (edid->prod_code[0] << 8) | (edid->prod_code[1]);
-	DP_DEBUG("prod_id: %04x\n", prod_id);
+	pr_debug("prod_id: %04x\n", prod_id);
 
-	rc = snprintf(buf, SZ_32, "%s,0x%x,0x%x\n",
+	rc = sprintf(buf, "%s,0x%x,0x%x\n",
 			edid_ctrl->vendor_id, prod_id, edid->serial); /* byte order? */
+
 exit:
 	return rc;
 }
 
 static CLASS_ATTR_RO(monitor_info);
 
-#ifdef CONFIG_SEC_DISPLAYPORT_BIGDATA
-static ssize_t dp_error_info_show(struct class *class,
-		struct class_attribute *attr, char *buf)
+#ifdef CONFIG_SEC_DISPLAYPORT_ENG
+static ssize_t dp_forced_resolution_show(struct class *class,
+				struct class_attribute *attr, char *buf)
 {
-	return _secdp_bigdata_show(class, attr, buf);
+	char tmp[MAX_DEX_STORE_LEN] = {0,};
+	int  rc = 0, vic = 1;
+
+	if (forced_resolution) {
+		rc = scnprintf(buf, PAGE_SIZE,
+			"%d: %s", forced_resolution,
+			secdp_vic_to_string(forced_resolution));
+
+	} else {
+		while (secdp_vic_to_string(vic) != NULL) {
+			rc += scnprintf(buf + rc, PAGE_SIZE - rc,
+				"%d: %s", vic, secdp_vic_to_string(vic));
+			vic++;
+		}
+	}
+
+	secdp_show_hmd_dev(tmp);
+	rc += scnprintf(buf + rc, PAGE_SIZE - rc, "\n<< HMD >>\n%s\n", tmp);
+
+	return rc;
 }
 
-static ssize_t dp_error_info_store(struct class *dev,
-		struct class_attribute *attr, const char *buf, size_t size)
+static ssize_t dp_forced_resolution_store(struct class *dev,
+				struct class_attribute *attr, const char *buf, size_t size)
 {
-	return _secdp_bigdata_store(dev, attr, buf, size);
+	int val[10] = {0, };
+
+	get_options(buf, 10, val);
+
+	if (val[1] <= 0)
+		forced_resolution = 0;
+	else
+		forced_resolution = val[1];
+
+	return size;
 }
 
-static CLASS_ATTR_RW(dp_error_info);
+static CLASS_ATTR_RW(dp_forced_resolution);
+
+static ssize_t dp_unit_test_show(struct class *class,
+				struct class_attribute *attr, char *buf)
+{
+	struct secdp_sysfs_private *sysfs = g_secdp_sysfs;
+	int rc, cmd = sysfs->test_cmd;
+	bool res = false;
+
+	pr_info("test_cmd: %s\n", secdp_utcmd_to_str(cmd));
+
+	switch (cmd) {
+	case SECDP_UTCMD_EDID_PARSE:
+		res = secdp_unit_test_edid_parse();
+		break;
+	default:
+		pr_info("invalid test_cmd: %d\n", cmd);
+		break;
+	}
+
+	rc = scnprintf(buf, 3, "%d\n", res ? 1 : 0);
+	return rc;
+}
+
+static ssize_t dp_unit_test_store(struct class *dev,
+				struct class_attribute *attr, const char *buf, size_t size)
+{
+	struct secdp_sysfs_private *sysfs = g_secdp_sysfs;
+	int val[10] = {0, };
+
+	if (secdp_check_store_args(buf, size)) {
+		pr_err("args error!\n");
+		goto exit;
+	}
+
+	get_options(buf, ARRAY_SIZE(val), val);
+	sysfs->test_cmd = val[1];
+
+	pr_info("test_cmd: %d...%s\n", sysfs->test_cmd, secdp_utcmd_to_str(sysfs->test_cmd));
+
+exit:
+	return size;
+}
+
+static CLASS_ATTR_RW(dp_unit_test);
 #endif
 
 #ifdef SECDP_SELF_TEST
 struct secdp_sef_test_item g_self_test[] = {
-	{DP_ENUM_STR(ST_CLEAR_CMD), .arg_cnt = 0, .arg_str = "clear all configurations"},
-	{DP_ENUM_STR(ST_LANE_CNT), .arg_cnt = 1, .arg_str = "lane_count: 1 = 1 lane, 2 = 2 lane, 4 = 4 lane, -1 = disable"},
-	{DP_ENUM_STR(ST_LINK_RATE), .arg_cnt = 1, .arg_str = "link_rate: 1 = 1.62G , 2 = 2.7G, 3 = 5.4G, -1 = disable"},
-	{DP_ENUM_STR(ST_CONNECTION_TEST), .arg_cnt = 1, .arg_str = "reconnection time(sec) : range = 5 ~ 50, -1 = disable"},
-	{DP_ENUM_STR(ST_HDCP_TEST), .arg_cnt = 1, .arg_str = "hdcp on/off time(sec): range = 5 ~ 50, -1 = disable"},
-	{DP_ENUM_STR(ST_EDID), .arg_cnt = 0, .arg_str = "need to write edid to \"sys/class/dp_sec/dp_edid\" sysfs node, -1 = disable"},
-	{DP_ENUM_STR(ST_PREEM_TUN), .arg_cnt = 16, .arg_str = "pre-emphasis calibration value, -1 = disable"},
-	{DP_ENUM_STR(ST_VOLTAGE_TUN), .arg_cnt = 16, .arg_str = "voltage-level calibration value, -1 = disable"},
+	{DP_ENUM_STR(ST_CLEAR_CMD), .arg_cnt = 0, .arg_str = "clear all configurations"}, 
+	{DP_ENUM_STR(ST_LANE_CNT), .arg_cnt = 1, .arg_str = "lane_count: 1 = 1 lane, 2 = 2 lane, 4 = 4 lane, -1 = disable"}, 
+	{DP_ENUM_STR(ST_LINK_RATE), .arg_cnt = 1, .arg_str = "link_rate: 1 = 1.62G , 2 = 2.7G, 3 = 5.4G, -1 = disable"}, 
+	{DP_ENUM_STR(ST_CONNECTION_TEST), .arg_cnt = 1, .arg_str = "reconnection time(sec) : range = 5 ~ 50, -1 = disable"}, 
+	{DP_ENUM_STR(ST_HDCP_TEST), .arg_cnt = 1, .arg_str = "hdcp on/off time(sec): range = 5 ~ 50, -1 = disable"}, 
+	{DP_ENUM_STR(ST_EDID), .arg_cnt = 0, .arg_str = "need to write edid to \"sys/class/dp_sec/dp_edid\" sysfs node, -1 = disable"}, 
+	{DP_ENUM_STR(ST_PREEM_TUN), .arg_cnt = 16, .arg_str = "pre-emphasis calibration value, -1 = disable"}, 
+	{DP_ENUM_STR(ST_VOLTAGE_TUN), .arg_cnt = 16, .arg_str = "voltage-level calibration value, -1 = disable"}, 
 };
 
 int secdp_self_test_status(int cmd)
 {
 	if (cmd >= ST_MAX)
-		return -EINVAL;
+		return -1;
 
-	if (g_self_test[cmd].enabled) {
-		DP_INFO("%s : %s\n", g_self_test[cmd].cmd_str,
-			g_self_test[cmd].enabled ? "true" : "false");
-	}
+	if (g_self_test[cmd].enabled)
+		pr_info("%s : %s\n", g_self_test[cmd].cmd_str, g_self_test[cmd].enabled ? "true" : "false");
 
 	return g_self_test[cmd].enabled ? g_self_test[cmd].arg_cnt : -1;
 }
@@ -393,13 +468,12 @@ void secdp_self_register_clear_func(int cmd, void (*func)(void))
 		return;
 
 	g_self_test[cmd].clear = func;
-	DP_INFO("%s : clear func was registered.\n", g_self_test[cmd].cmd_str);
+	pr_info("%s : clear func was registered.\n", g_self_test[cmd].cmd_str);
 }
 
 u8 *secdp_self_test_get_edid(void)
 {
 	struct secdp_sysfs_private *sysfs = g_secdp_sysfs;
-
 	return	sysfs->sec->self_test_edid;
 }
 
@@ -410,7 +484,7 @@ static void secdp_self_test_reconnect_work(struct work_struct *work)
 	static unsigned long test_cnt;
 
 	if (!secdp_get_cable_status() || !secdp_get_hpd_status()) {
-		DP_INFO("cable is out\n");
+		pr_info("cable is out\n");
 		test_cnt = 0;
 		return;
 	}
@@ -419,10 +493,9 @@ static void secdp_self_test_reconnect_work(struct work_struct *work)
 		sysfs->sec->self_test_reconnect_callback();
 
 	test_cnt++;
-	DP_INFO("test_cnt :%lu\n", test_cnt);
+	pr_info("test_cnt :%lu\n", test_cnt);
 
-	schedule_delayed_work(&sysfs->sec->self_test_reconnect_work,
-		msecs_to_jiffies(delay * 1000));
+	schedule_delayed_work(&sysfs->sec->self_test_reconnect_work, msecs_to_jiffies(delay * 1000));
 }
 
 void secdp_self_test_start_reconnect(void (*func)(void))
@@ -433,11 +506,10 @@ void secdp_self_test_start_reconnect(void (*func)(void))
 	if (delay > 50 || delay < 5)
 		delay = g_self_test[ST_CONNECTION_TEST].arg[0] = 10;
 
-	DP_INFO("start reconnect test : delay %d sec\n", delay);
+	pr_info("start reconnect test : delay %d sec\n", delay);
 
 	sysfs->sec->self_test_reconnect_callback = func;
-	schedule_delayed_work(&sysfs->sec->self_test_reconnect_work,
-		msecs_to_jiffies(delay * 1000));
+	schedule_delayed_work(&sysfs->sec->self_test_reconnect_work, msecs_to_jiffies(delay * 1000));
 }
 
 static void secdp_self_test_hdcp_test_work(struct work_struct *work)
@@ -447,7 +519,7 @@ static void secdp_self_test_hdcp_test_work(struct work_struct *work)
 	static unsigned long test_cnt;
 
 	if (!secdp_get_cable_status() || !secdp_get_hpd_status()) {
-		DP_INFO("cable is out\n");
+		pr_info("cable is out\n");
 		test_cnt = 0;
 		return;
 	}
@@ -461,56 +533,49 @@ static void secdp_self_test_hdcp_test_work(struct work_struct *work)
 		sysfs->sec->self_test_hdcp_on_callback();
 
 	test_cnt++;
-	DP_INFO("test_cnt :%lu\n", test_cnt);
+	pr_info("test_cnt :%lu\n", test_cnt);
 
-	schedule_delayed_work(&sysfs->sec->self_test_hdcp_test_work,
-		msecs_to_jiffies(delay * 1000));
+	schedule_delayed_work(&sysfs->sec->self_test_hdcp_test_work, msecs_to_jiffies(delay * 1000));
 
 }
 
-void secdp_self_test_start_hdcp_test(void (*func_on)(void),
-		void (*func_off)(void))
+void secdp_self_test_start_hdcp_test(void (*func_on)(void), void (*func_off)(void))
 {
 	struct secdp_sysfs_private *sysfs = g_secdp_sysfs;
 	int delay = g_self_test[ST_HDCP_TEST].arg[0];
 
 	if (delay == 0) {
-		DP_INFO("hdcp test is aborted\n");
+		pr_info("hdcp test is aborted\n");
 		return;
 	}
 
 	if (delay > 50 || delay < 5)
 		delay = g_self_test[ST_HDCP_TEST].arg[0] = 10;
 
-	DP_INFO("start hdcp test : delay %d sec\n", delay);
+	pr_info("start hdcp test : delay %d sec\n", delay);
 
 	sysfs->sec->self_test_hdcp_on_callback = func_on;
 	sysfs->sec->self_test_hdcp_off_callback = func_off;
 
-	schedule_delayed_work(&sysfs->sec->self_test_hdcp_test_work,
-		msecs_to_jiffies(delay * 1000));
+	schedule_delayed_work(&sysfs->sec->self_test_hdcp_test_work, msecs_to_jiffies(delay * 1000));
 }
 
 static ssize_t dp_self_test_show(struct class *class,
 				struct class_attribute *attr, char *buf)
 {
-	int i, j, rc = 0;
+	int i, j;
+	int rc = 0;
 
 	for (i = 0; i < ST_MAX; i++) {
+
 		rc += scnprintf(buf + rc, PAGE_SIZE - rc,
-				"%d. %s : %s\n   ==>", i,
-				g_self_test[i].cmd_str, g_self_test[i].arg_str);
-
+				"%d. %s : %s\n   ==>", i, g_self_test[i].cmd_str, g_self_test[i].arg_str);
 		if (g_self_test[i].enabled) {
-			rc += scnprintf(buf + rc, PAGE_SIZE - rc,
-					"current value : enabled - arg :");
-
-			for (j = 0; j < g_self_test[i].arg_cnt; j++) {
-				rc += scnprintf(buf + rc, PAGE_SIZE - rc,
-						"0x%x ", g_self_test[i].arg[j]);
-			}
-
+			rc += scnprintf(buf + rc, PAGE_SIZE - rc, "current value : enabled - arg :");
+			for (j = 0; j < g_self_test[i].arg_cnt; j++)
+				rc += scnprintf(buf + rc, PAGE_SIZE - rc, "0x%x ", g_self_test[i].arg[j]);
 			rc += scnprintf(buf + rc, PAGE_SIZE - rc, "\n\n");
+
 		} else {
 			rc += scnprintf(buf + rc, PAGE_SIZE - rc,
 				"current value : disabled\n\n");
@@ -532,22 +597,23 @@ static void dp_self_test_clear_func(int cmd)
 }
 
 static ssize_t dp_self_test_store(struct class *dev,
-		struct class_attribute *attr, const char *buf, size_t size)
+				struct class_attribute *attr, const char *buf, size_t size)
 {
 	int val[ST_ARG_CNT + 2] = {0, };
 	int arg, arg_cnt, cmd, i;
 
 	if (secdp_check_store_args(buf, size)) {
-		DP_ERR("args error!\n");
+		pr_err("args error!\n");
 		goto end;
 	}
 
 	get_options(buf, ARRAY_SIZE(val), val);
+
 	cmd = val[1];
 	arg = val[2];
 
 	if (cmd < 0 || cmd >= ST_MAX) {
-		DP_INFO("invalid cmd\n");
+		pr_info("invalid cmd\n");
 		goto end;
 	}
 
@@ -555,26 +621,27 @@ static ssize_t dp_self_test_store(struct class *dev,
 		for (i = 1; i < ST_MAX; i++)
 			dp_self_test_clear_func(i);
 
-		DP_INFO("cmd : ST_CLEAR_CMD\n");
+		pr_info("cmd : ST_CLEAR_CMD\n");
 		goto end;
 	}
 
 	g_self_test[cmd].enabled = arg < 0 ? false : true;
+
 	if (g_self_test[cmd].enabled) {
 		if ((val[0] - 1) != g_self_test[cmd].arg_cnt) {
-			DP_INFO("invalid param.\n");
+			pr_info("invalid param.\n");
 			goto end;
 		}
-
+		
 		arg_cnt = g_self_test[cmd].arg_cnt < ST_ARG_CNT ? g_self_test[cmd].arg_cnt : ST_ARG_CNT;
-		memcpy(g_self_test[cmd].arg, val + 2, sizeof(int) * arg_cnt);
+		memcpy(g_self_test[cmd].arg, val + 2, sizeof(int) * arg_cnt); 
 	} else {
 		dp_self_test_clear_func(cmd);
 	}
-
-	DP_INFO("cmd: %d. %s, enabled:%s\n", cmd,
+	
+	pr_info("cmd: %d. %s, enabled:%s\n", cmd,
 				cmd < ST_MAX ? g_self_test[cmd].cmd_str : "null",
-				cmd < ST_MAX ? (g_self_test[cmd].enabled ? "true" : "false") : "null");
+				cmd < ST_MAX ? (g_self_test[cmd].enabled ? "true" : "false"): "null");
 end:
 	return size;
 }
@@ -582,7 +649,7 @@ end:
 static CLASS_ATTR_RW(dp_self_test);
 
 static ssize_t dp_edid_show(struct class *class,
-		struct class_attribute *attr, char *buf)
+				struct class_attribute *attr, char *buf)
 {
 	struct secdp_sysfs_private *sysfs = g_secdp_sysfs;
 	int i, flag = 0;
@@ -592,12 +659,13 @@ static ssize_t dp_edid_show(struct class *class,
 			"EDID test is %s\n", g_self_test[ST_EDID].enabled ? "enabled" : "disabled");
 
 	for (i = 0; i < ST_EDID_SIZE; i++) {
+
 		rc += scnprintf(buf + rc, PAGE_SIZE - rc,
 				"0x%02x ", sysfs->sec->self_test_edid[i]);
 		if (!((i+1)%8)) {
-			rc += scnprintf(buf + rc, PAGE_SIZE - rc,
-					"%s", flag ? "\n" : "  ");
+			rc += scnprintf(buf + rc, PAGE_SIZE - rc, "%s", flag ? "\n" : "  ");
 			flag = !flag;
+
 			if (!((i+1) % 128))
 				rc += scnprintf(buf + rc, PAGE_SIZE - rc, "\n");
 		}
@@ -607,7 +675,7 @@ static ssize_t dp_edid_show(struct class *class,
 }
 
 static ssize_t dp_edid_store(struct class *dev,
-		struct class_attribute *attr, const char *buf, size_t size)
+				struct class_attribute *attr, const char *buf, size_t size)
 {
 	struct secdp_sysfs_private *sysfs = g_secdp_sysfs;
 	int val[ST_EDID_SIZE + 1] = {0, };
@@ -615,14 +683,15 @@ static ssize_t dp_edid_store(struct class *dev,
 	size_t i, j = 0;
 
 	if (secdp_check_store_args(buf, size)) {
-		DP_ERR("args error!\n");
+		pr_err("args error!\n");
 		goto error;
 	}
 
 	temp = kzalloc(size, GFP_KERNEL);
 	if (!temp) {
-		DP_ERR("buffer alloc error\n");
+		pr_err("buffer alloc error\n");
 		dp_self_test_clear_func(ST_EDID);
+
 		goto error;
 	}
 
@@ -632,18 +701,20 @@ static ssize_t dp_edid_store(struct class *dev,
 			temp[j++] = buf[i];
 	}
 
-	get_options(temp, ARRAY_SIZE(val), val);
+	get_options(buf, ARRAY_SIZE(val), val);
 
 	if (val[0] % 128) {
-		DP_ERR("invalid EDID(%d)\n", val[0]);
+		pr_err("invalid EDID(%d)\n", val[0]);
 		dp_self_test_clear_func(ST_EDID);
+
 		goto end;
 	}
 
 	memset(sysfs->sec->self_test_edid, 0, sizeof(ST_EDID_SIZE));
 
-	for (i = 0; i < val[0]; i++)
+	for (i = 0; i < val[0]; i++) {
 		sysfs->sec->self_test_edid[i] = (u8)val[i+1];
+	}
 
 	g_self_test[ST_EDID].enabled = true;
 end:
@@ -655,336 +726,113 @@ error:
 static CLASS_ATTR_RW(dp_edid);
 #endif
 
-#ifdef CONFIG_SEC_DISPLAYPORT_ENG
-static ssize_t dp_forced_resolution_show(struct class *class,
+#ifdef CONFIG_SEC_DISPLAYPORT_BIGDATA
+static ssize_t dp_error_info_show(struct class *class,
 				struct class_attribute *attr, char *buf)
 {
-	char tmp[SZ_1K] = {0,};
-	int  rc = 0, vic = 1;
-
-	if (forced_resolution) {
-		rc = scnprintf(buf, PAGE_SIZE,
-			"%d: %s", forced_resolution,
-			secdp_vic_to_string(forced_resolution));
-
-	} else {
-		while (secdp_vic_to_string(vic) != NULL) {
-			rc += scnprintf(buf + rc, PAGE_SIZE - rc,
-				"%d: %s", vic, secdp_vic_to_string(vic));
-			vic++;
-		}
-	}
-
-	secdp_show_hmd_dev(tmp);
-	rc += scnprintf(buf + rc, PAGE_SIZE - rc, "\n< HMD >\n%s\n", tmp);
-
-	memset(tmp, 0, ARRAY_SIZE(tmp));
-
-	secdp_show_phy_param(tmp);
-	rc += scnprintf(buf + rc, PAGE_SIZE - rc, "\n< DP-PHY >\n%s\n", tmp);
-
-	return rc;
+	return _secdp_bigdata_show(class, attr, buf);
 }
 
-static ssize_t dp_forced_resolution_store(struct class *dev,
-		struct class_attribute *attr, const char *buf, size_t size)
+static ssize_t dp_error_info_store(struct class *dev,
+				struct class_attribute *attr, const char *buf, size_t size)
 {
-	int val[10] = {0, };
-
-	if (secdp_check_store_args(buf, size)) {
-		DP_ERR("args error!\n");
-		goto exit;
-	}
-
-	get_options(buf, ARRAY_SIZE(val), val);
-
-	if (val[1] <= 0)
-		forced_resolution = 0;
-	else
-		forced_resolution = val[1];
-
-exit:
-	return size;
+	return _secdp_bigdata_store(dev, attr, buf, size);
 }
 
-static CLASS_ATTR_RW(dp_forced_resolution);
+static CLASS_ATTR_RW(dp_error_info);
+#endif
 
-static ssize_t dp_unit_test_show(struct class *class,
-				struct class_attribute *attr, char *buf)
-{
-	struct secdp_sysfs_private *sysfs = g_secdp_sysfs;
-	int rc, cmd = sysfs->test_cmd;
-	bool res = false;
-
-	DP_INFO("test_cmd: %s\n", secdp_utcmd_to_str(cmd));
-
-	switch (cmd) {
-	case SECDP_UTCMD_EDID_PARSE:
-		res = secdp_unit_test_edid_parse();
-		break;
-	default:
-		DP_INFO("invalid test_cmd: %d\n", cmd);
-		break;
-	}
-
-	rc = scnprintf(buf, 3, "%d\n", res ? 1 : 0);
-	return rc;
-}
-
-static ssize_t dp_unit_test_store(struct class *dev,
-		struct class_attribute *attr, const char *buf, size_t size)
-{
-	struct secdp_sysfs_private *sysfs = g_secdp_sysfs;
-	int val[10] = {0, };
-
-	if (secdp_check_store_args(buf, size)) {
-		DP_ERR("args error!\n");
-		goto exit;
-	}
-
-	get_options(buf, ARRAY_SIZE(val), val);
-	sysfs->test_cmd = val[1];
-
-	DP_INFO("test_cmd: %d...%s\n", sysfs->test_cmd,
-		secdp_utcmd_to_str(sysfs->test_cmd));
-
-exit:
-	return size;
-}
-
-static CLASS_ATTR_RW(dp_unit_test);
-
-static ssize_t dp_aux_cfg_show(struct class *class,
-		struct class_attribute *attr, char *buf)
-{
-	char tmp[SZ_1K] = {0,};
-	int  rc = 0;
-
-	secdp_aux_cfg_show(tmp);
-	rc += scnprintf(buf + rc, PAGE_SIZE - rc, "\n< AUX cfg >\n%s\n", tmp);
-
-	return rc;
-}
-
-static ssize_t dp_aux_cfg_store(struct class *dev,
-		struct class_attribute *attr, const char *buf, size_t size)
-{
-	char tmp[SZ_1K] = {0,};
-
-	memcpy(tmp, buf, size);
-	secdp_aux_cfg_store(tmp);
-
-	return size;
-}
-
-static CLASS_ATTR_RW(dp_aux_cfg);
-
-static ssize_t dp_preshoot_show(struct class *class,
-		struct class_attribute *attr, char *buf)
-{
-	char tmp[SZ_64] = {0,};
-	int  rc = 0;
-
-	secdp_catalog_preshoot_show(tmp);
-	rc = snprintf(buf + rc, PAGE_SIZE - rc, "%s\n", tmp);
-
-	return rc;
-}
-
-static ssize_t dp_preshoot_store(struct class *dev,
-		struct class_attribute *attr, const char *buf, size_t size)
-{
-	char tmp[SZ_64] = {0,};
-
-	memcpy(tmp, buf, min(ARRAY_SIZE(tmp), size));
-	secdp_catalog_preshoot_store(tmp);
-
-	return size;
-}
-
-static CLASS_ATTR_RW(dp_preshoot);
-
+#ifdef SECDP_CALIBRATE_VXPX
 static ssize_t dp_vx_lvl_show(struct class *class,
-		struct class_attribute *attr, char *buf)
+				struct class_attribute *attr, char *buf)
 {
-	char tmp[SZ_1K] = {0,};
-	int  rc = 0;
-
-	secdp_parse_vxpx_show(DP_HW_LEGACY, DP_PARAM_VX, tmp);
-	rc += scnprintf(buf + rc, PAGE_SIZE - rc, "%s\n", tmp);
-
-	return rc;
+	pr_debug("+++\n");
+	secdp_catalog_vx_show();
+	return 0;
 }
 
 static ssize_t dp_vx_lvl_store(struct class *dev,
-		struct class_attribute *attr, const char *buf, size_t size)
+				struct class_attribute *attr, const char *buf, size_t size)
 {
-	char tmp[SZ_64] = {0,};
+	int i, val[30] = {0, };
 
-	memcpy(tmp, buf, size);
-	secdp_parse_vxpx_store(DP_HW_LEGACY, DP_PARAM_VX, tmp);
+	if (secdp_check_store_args(buf, size)) {
+		pr_err("args error!\n");
+		goto exit;
+	}
 
+	pr_debug("+++, size(%d)\n", (int)size);
+
+	get_options(buf, ARRAY_SIZE(val), val);
+	for (i = 0; i < 16; i=i+4)
+		pr_debug("%02x,%02x,%02x,%02x\n", val[i+1],val[i+2],val[i+3],val[i+4]);
+
+	secdp_catalog_vx_store(&val[1], 16);
+exit:
 	return size;
 }
 
 static CLASS_ATTR_RW(dp_vx_lvl);
 
 static ssize_t dp_px_lvl_show(struct class *class,
-		struct class_attribute *attr, char *buf)
+				struct class_attribute *attr, char *buf)
 {
-	char tmp[SZ_1K] = {0,};
-	int  rc = 0;
-
-	secdp_parse_vxpx_show(DP_HW_LEGACY, DP_PARAM_PX, tmp);
-	rc += scnprintf(buf + rc, PAGE_SIZE - rc, "%s\n", tmp);
-
-	return rc;
+	pr_debug("+++\n");
+	secdp_catalog_px_show();
+	return 0;
 }
 
 static ssize_t dp_px_lvl_store(struct class *dev,
-		struct class_attribute *attr, const char *buf, size_t size)
+				struct class_attribute *attr, const char *buf, size_t size)
 {
-	char tmp[SZ_64] = {0,};
+	int i, val[30] = {0, };
 
-	memcpy(tmp, buf, size);
-	secdp_parse_vxpx_store(DP_HW_LEGACY, DP_PARAM_PX, tmp);
+	if (secdp_check_store_args(buf, size)) {
+		pr_err("args error!\n");
+		goto exit;
+	}
 
+	pr_debug("+++, size(%d)\n", (int)size);
+
+	get_options(buf, ARRAY_SIZE(val), val);
+	for (i = 0; i < 16; i=i+4)
+		pr_debug("%02x,%02x,%02x,%02x\n", val[i+1],val[i+2],val[i+3],val[i+4]);
+
+	secdp_catalog_px_store(&val[1], 16);
+exit:
 	return size;
 }
 
 static CLASS_ATTR_RW(dp_px_lvl);
 
-static ssize_t dp_vx_lvl_hbr2_hbr3_show(struct class *class,
-		struct class_attribute *attr, char *buf)
-{
-	char tmp[SZ_1K] = {0,};
-	int  rc = 0;
-
-	secdp_parse_vxpx_show(DP_HW_V123_HBR2_HBR3, DP_PARAM_VX, tmp);
-	rc += scnprintf(buf + rc, PAGE_SIZE - rc, "%s\n", tmp);
-
-	return rc;
-}
-
-static ssize_t dp_vx_lvl_hbr2_hbr3_store(struct class *dev,
-		struct class_attribute *attr, const char *buf, size_t size)
-{
-	char tmp[SZ_64] = {0,};
-
-	memcpy(tmp, buf, size);
-	secdp_parse_vxpx_store(DP_HW_V123_HBR2_HBR3, DP_PARAM_VX, tmp);
-
-	return size;
-
-}
-
-static CLASS_ATTR_RW(dp_vx_lvl_hbr2_hbr3);
-
-static ssize_t dp_px_lvl_hbr2_hbr3_show(struct class *class,
-		struct class_attribute *attr, char *buf)
-{
-	char tmp[SZ_1K] = {0,};
-	int  rc = 0;
-
-	secdp_parse_vxpx_show(DP_HW_V123_HBR2_HBR3, DP_PARAM_PX, tmp);
-	rc += scnprintf(buf + rc, PAGE_SIZE - rc, "%s\n", tmp);
-
-	return rc;
-}
-
-static ssize_t dp_px_lvl_hbr2_hbr3_store(struct class *dev,
-		struct class_attribute *attr, const char *buf, size_t size)
-{
-	char tmp[SZ_64] = {0,};
-
-	memcpy(tmp, buf, size);
-	secdp_parse_vxpx_store(DP_HW_V123_HBR2_HBR3, DP_PARAM_PX, tmp);
-
-	return size;
-}
-
-static CLASS_ATTR_RW(dp_px_lvl_hbr2_hbr3);
-
-static ssize_t dp_vx_lvl_hbr_rbr_show(struct class *class,
-		struct class_attribute *attr, char *buf)
-{
-	char tmp[SZ_1K] = {0,};
-	int  rc = 0;
-
-	secdp_parse_vxpx_show(DP_HW_V123_HBR_RBR, DP_PARAM_VX, tmp);
-	rc += scnprintf(buf + rc, PAGE_SIZE - rc, "%s\n", tmp);
-
-	return rc;
-}
-
-static ssize_t dp_vx_lvl_hbr_rbr_store(struct class *dev,
-		struct class_attribute *attr, const char *buf, size_t size)
-{
-	char tmp[SZ_64] = {0,};
-
-	memcpy(tmp, buf, size);
-	secdp_parse_vxpx_store(DP_HW_V123_HBR_RBR, DP_PARAM_VX, tmp);
-
-	return size;
-}
-
-static CLASS_ATTR_RW(dp_vx_lvl_hbr_rbr);
-
-static ssize_t dp_px_lvl_hbr_rbr_show(struct class *class,
-		struct class_attribute *attr, char *buf)
-{
-	char tmp[SZ_1K] = {0,};
-	int  rc = 0;
-
-	secdp_parse_vxpx_show(DP_HW_V123_HBR_RBR, DP_PARAM_PX, tmp);
-	rc += scnprintf(buf + rc, PAGE_SIZE - rc, "%s\n", tmp);
-
-	return rc;
-}
-
-static ssize_t dp_px_lvl_hbr_rbr_store(struct class *dev,
-		struct class_attribute *attr, const char *buf, size_t size)
-{
-	char tmp[SZ_64] = {0,};
-
-	memcpy(tmp, buf, size);
-	secdp_parse_vxpx_store(DP_HW_V123_HBR_RBR, DP_PARAM_PX, tmp);
-
-	return size;
-}
-
-static CLASS_ATTR_RW(dp_px_lvl_hbr_rbr);
-
 static ssize_t dp_pref_skip_show(struct class *class,
-		struct class_attribute *attr, char *buf)
+				struct class_attribute *attr, char *buf)
 {
 	int skip, rc;
 
-	DP_DEBUG("+++\n");
+	pr_debug("+++\n");
 
 	skip = secdp_debug_prefer_skip_show();
-	rc = snprintf(buf, SZ_8, "%d\n", skip);
+	rc = sprintf(buf, "%d\n", skip);
 
 	return rc;
 }
 
 static ssize_t dp_pref_skip_store(struct class *dev,
-		struct class_attribute *attr, const char *buf, size_t size)
+				struct class_attribute *attr, const char *buf, size_t size)
 {
 	int i, val[30] = {0, };
 
 	if (secdp_check_store_args(buf, size)) {
-		DP_ERR("args error!\n");
+		pr_err("args error!\n");
 		goto exit;
 	}
 
-	DP_DEBUG("+++, size(%d)\n", (int)size);
+	pr_debug("+++, size(%d)\n", (int)size);
 
 	get_options(buf, ARRAY_SIZE(val), val);
-	for (i = 0; i < 16; i = i + 4) {
-		DP_DEBUG("%02x,%02x,%02x,%02x\n",
-			val[i+1], val[i+2], val[i+3], val[i+4]);
-	}
+	for (i = 0; i < 16; i=i+4)
+		pr_debug("%02x,%02x,%02x,%02x\n", val[i+1],val[i+2],val[i+3],val[i+4]);
 
 	secdp_debug_prefer_skip_store(val[1]);
 exit:
@@ -994,35 +842,33 @@ exit:
 static CLASS_ATTR_RW(dp_pref_skip);
 
 static ssize_t dp_pref_ratio_show(struct class *class,
-		struct class_attribute *attr, char *buf)
+				struct class_attribute *attr, char *buf)
 {
 	int ratio, rc;
 
-	DP_DEBUG("+++\n");
+	pr_debug("+++\n");
 
 	ratio = secdp_debug_prefer_ratio_show();
-	rc = snprintf(buf, SZ_8, "%d\n", ratio);
+	rc = sprintf(buf, "%d\n", ratio);
 
 	return rc;
 }
 
 static ssize_t dp_pref_ratio_store(struct class *dev,
-		struct class_attribute *attr, const char *buf, size_t size)
+				struct class_attribute *attr, const char *buf, size_t size)
 {
 	int i, val[30] = {0, };
 
 	if (secdp_check_store_args(buf, size)) {
-		DP_ERR("args error!\n");
+		pr_err("args error!\n");
 		goto exit;
 	}
 
-	DP_DEBUG("+++, size(%d)\n", (int)size);
+	pr_debug("+++, size(%d)\n", (int)size);
 
 	get_options(buf, ARRAY_SIZE(val), val);
-	for (i = 0; i < 16; i = i + 4) {
-		DP_DEBUG("%02x,%02x,%02x,%02x\n",
-			val[i+1], val[i+2], val[i+3], val[i+4]);
-	}
+	for (i = 0; i < 16; i=i+4)
+		pr_debug("%02x,%02x,%02x,%02x\n", val[i+1],val[i+2],val[i+3],val[i+4]);
 
 	secdp_debug_prefer_ratio_store(val[1]);
 exit:
@@ -1042,21 +888,17 @@ enum {
 #ifdef CONFIG_SEC_FACTORY
 	DP_SBU_SW_SEL,
 #endif
+#ifdef CONFIG_SEC_DISPLAYPORT_ENG
+	DP_FORCED_RES,
+	DP_UNIT_TEST,
+#endif
 #ifdef SECDP_SELF_TEST
 	DP_SELF_TEST,
 	DP_EDID,
 #endif
-#ifdef CONFIG_SEC_DISPLAYPORT_ENG
-	DP_FORCED_RES,
-	DP_UNIT_TEST,
-	DP_AUX_CFG,
-	DP_PRESHOOT,
+#ifdef SECDP_CALIBRATE_VXPX
 	DP_VX_LVL,
 	DP_PX_LVL,
-	DP_VX_LVL_HBR2_HBR3,
-	DP_PX_LVL_HBR2_HBR3,
-	DP_VX_LVL_HBR_RBR,
-	DP_PX_LVL_HBR_RBR,
 	DP_PREF_SKIP,
 	DP_PREF_RATIO,
 #endif
@@ -1072,21 +914,17 @@ static struct attribute *secdp_class_attrs[] = {
 #ifdef CONFIG_SEC_FACTORY
 	[DP_SBU_SW_SEL]	= &class_attr_dp_sbu_sw_sel.attr,
 #endif
+#ifdef CONFIG_SEC_DISPLAYPORT_ENG
+	[DP_FORCED_RES]	= &class_attr_dp_forced_resolution.attr,
+	[DP_UNIT_TEST]	= &class_attr_dp_unit_test.attr,
+#endif
 #ifdef SECDP_SELF_TEST
 	[DP_SELF_TEST]	= &class_attr_dp_self_test.attr,
 	[DP_EDID]	= &class_attr_dp_edid.attr,
 #endif
-#ifdef CONFIG_SEC_DISPLAYPORT_ENG
-	[DP_FORCED_RES]	= &class_attr_dp_forced_resolution.attr,
-	[DP_UNIT_TEST]	= &class_attr_dp_unit_test.attr,
-	[DP_AUX_CFG]	= &class_attr_dp_aux_cfg.attr,
-	[DP_PRESHOOT]	= &class_attr_dp_preshoot.attr,
+#ifdef SECDP_CALIBRATE_VXPX
 	[DP_VX_LVL]	= &class_attr_dp_vx_lvl.attr,
 	[DP_PX_LVL]	= &class_attr_dp_px_lvl.attr,
-	[DP_VX_LVL_HBR2_HBR3]	= &class_attr_dp_vx_lvl_hbr2_hbr3.attr,
-	[DP_PX_LVL_HBR2_HBR3]	= &class_attr_dp_px_lvl_hbr2_hbr3.attr,
-	[DP_VX_LVL_HBR_RBR]	= &class_attr_dp_vx_lvl_hbr_rbr.attr,
-	[DP_PX_LVL_HBR_RBR]	= &class_attr_dp_px_lvl_hbr_rbr.attr,
 	[DP_PREF_SKIP]	= &class_attr_dp_pref_skip.attr,
 	[DP_PREF_RATIO]	= &class_attr_dp_pref_ratio.attr,
 #endif
@@ -1094,7 +932,7 @@ static struct attribute *secdp_class_attrs[] = {
 };
 ATTRIBUTE_GROUPS(secdp_class);
 
-struct secdp_sysfs *secdp_sysfs_init(void)
+struct secdp_sysfs* secdp_sysfs_init(void)
 {
 	struct class *dp_class;
 	struct secdp_sysfs *sysfs;
@@ -1102,7 +940,7 @@ struct secdp_sysfs *secdp_sysfs_init(void)
 
 	dp_class = kzalloc(sizeof(*dp_class), GFP_KERNEL);
 	if (!dp_class) {
-		DP_ERR("fail to alloc sysfs->dp_class\n");
+		pr_err("fail to alloc sysfs->dp_class\n");
 		goto err_exit;
 	}
 
@@ -1112,13 +950,13 @@ struct secdp_sysfs *secdp_sysfs_init(void)
 
 	rc = class_register(dp_class);
 	if (rc < 0) {
-		DP_ERR("couldn't register secdp sysfs class, rc: %d\n", rc);
+		pr_err("couldn't register secdp sysfs class, rc: %d\n", rc);
 		goto free_exit;
 	}
 
 	sysfs = kzalloc(sizeof(*sysfs), GFP_KERNEL);
 	if (!sysfs) {
-		DP_ERR("fail to alloc sysfs\n");
+		pr_err("fail to alloc sysfs\n");
 		goto free_exit;
 	}
 
@@ -1128,7 +966,7 @@ struct secdp_sysfs *secdp_sysfs_init(void)
 	secdp_bigdata_init(dp_class);
 #endif
 
-	DP_DEBUG("success, rc:%d\n", rc);
+	pr_debug("success\n", rc);
 	return sysfs;
 
 free_exit:
@@ -1139,14 +977,14 @@ err_exit:
 
 void secdp_sysfs_deinit(struct secdp_sysfs *sysfs)
 {
-	DP_DEBUG("+++\n");
+	pr_debug("+++\n");
 
 	if (sysfs) {
 		if (sysfs->dp_class) {
 			class_unregister(sysfs->dp_class);
 			kzfree(sysfs->dp_class);
 			sysfs->dp_class = NULL;
-			DP_DEBUG("freeing dp_class done\n");
+			pr_debug("freeing dp_class done\n");
 		}
 
 		kzfree(sysfs);
@@ -1160,7 +998,7 @@ struct secdp_sysfs *secdp_sysfs_get(struct device *dev, struct secdp_misc *sec)
 	struct secdp_sysfs *dp_sysfs;
 
 	if (!dev || !sec) {
-		DP_ERR("invalid input\n");
+		pr_err("invalid input\n");
 		rc = -EINVAL;
 		goto error;
 	}
@@ -1178,10 +1016,8 @@ struct secdp_sysfs *secdp_sysfs_get(struct device *dev, struct secdp_misc *sec)
 	g_secdp_sysfs = sysfs;
 
 #ifdef SECDP_SELF_TEST
-	INIT_DELAYED_WORK(&sec->self_test_reconnect_work,
-		secdp_self_test_reconnect_work);
-	INIT_DELAYED_WORK(&sec->self_test_hdcp_test_work,
-		secdp_self_test_hdcp_test_work);
+	INIT_DELAYED_WORK(&sec->self_test_reconnect_work, secdp_self_test_reconnect_work);
+	INIT_DELAYED_WORK(&sec->self_test_hdcp_test_work, secdp_self_test_hdcp_test_work);
 #endif
 	return dp_sysfs;
 
