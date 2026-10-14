@@ -4557,14 +4557,15 @@ static int _sde_encoder_wakeup_time(struct drm_encoder *drm_enc,
 	return 0;
 }
 
-static void sde_encoder_vsync_event_handler(unsigned long data)
+static void sde_encoder_vsync_event_handler(struct timer_list *timer)
 {
-	struct drm_encoder *drm_enc = (struct drm_encoder *) data;
-	struct sde_encoder_virt *sde_enc;
+	struct sde_encoder_virt *sde_enc =
+		from_timer(sde_enc, timer, vsync_event_timer);
 	struct msm_drm_private *priv;
 	struct msm_drm_thread *event_thread;
 
-	if (!drm_enc || !drm_enc->dev || !drm_enc->dev->dev_private) {
+	if (!drm_enc || !drm_enc->dev ||
+	    !drm_enc->dev->dev_private) {
 		SDE_ERROR("invalid encoder parameters\n");
 		return;
 	}
