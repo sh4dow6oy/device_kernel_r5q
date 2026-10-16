@@ -894,7 +894,7 @@ static int drm_atomic_plane_check(struct drm_plane *plane,
 	}
 
 	/* Check whether this plane supports the fb pixel format. */
-	ret = drm_plane_check_pixel_format(plane, state->fb->format->format);
+	ret = drm_plane_check_pixel_format(plane, state->fb->format->format, state->fb->modifier);
 	if (ret) {
 		struct drm_format_name_buf format_name;
 		DRM_DEBUG_ATOMIC("Invalid pixel format %s\n",
@@ -1840,7 +1840,7 @@ static struct drm_pending_vblank_event *create_vblank_event(
 
 	e->event.base.type = DRM_EVENT_FLIP_COMPLETE;
 	e->event.base.length = sizeof(e->event);
-	e->event.user_data = user_data;
+	e->event.base.user_data = user_data;
 
 	return e;
 }
