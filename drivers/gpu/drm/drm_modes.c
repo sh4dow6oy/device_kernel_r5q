@@ -1158,7 +1158,7 @@ static const char * const drm_mode_status_names[] = {
 
 #undef MODE_STATUS
 
-static const char *drm_get_mode_status_name(enum drm_mode_status status)
+const char *drm_get_mode_status_name(enum drm_mode_status status)
 {
 	int index = status + 3;
 
@@ -1564,7 +1564,8 @@ void drm_mode_convert_to_umode(struct drm_mode_modeinfo *out,
  * Returns:
  * Zero on success, negative errno on failure.
  */
-int drm_mode_convert_umode(struct drm_display_mode *out,
+int drm_mode_convert_umode(struct drm_device *dev,
+			   struct drm_display_mode *out,
 			   const struct drm_mode_modeinfo *in)
 {
 	int ret = -EINVAL;
