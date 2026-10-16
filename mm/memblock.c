@@ -20,6 +20,7 @@
 #include <linux/seq_file.h>
 #include <linux/memblock.h>
 #include <linux/memory.h>
+#include <linux/kmemleak.h>
 
 #include <asm/sections.h>
 #include <linux/io.h>
