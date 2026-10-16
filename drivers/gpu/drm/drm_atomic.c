@@ -33,7 +33,7 @@
 #include <linux/sync_file.h>
 
 #include "drm_crtc_internal.h"
-#include "msm/sde/sde_trace.h"
+#include "../../../techpack/display/msm/sde/sde_trace.h"
 
 void __drm_crtc_commit_free(struct kref *kref)
 {
