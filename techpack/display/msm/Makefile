@@ -2,6 +2,7 @@
 ccflags-y := -I$(srctree)/include/drm -I$(srctree)/techpack/display/msm -I$(srctree)/techpack/display/msm/dsi -I$(srctree)/techpack/display/msm/dp
 ccflags-y += -I$(srctree)/techpack/display/msm/sde
 ccflags-y += -I$(srctree)/techpack/display/rotator
+ccflags-y += -I$(srctree)/drivers/gpu/drm/msm/hdmi
 
 ccflags-$(CONFIG_DISPLAY_SAMSUNG) += -I$(srctree)/techpack/display/msm/samsung
 #ccflags-$(CONFIG_DISPLAY_SAMSUNG) += -Idrivers/gpu/drm/msm/samsung
