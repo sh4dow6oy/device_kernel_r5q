@@ -92,7 +92,7 @@ int sde_wb_connector_get_modes(struct drm_connector *connector, void *display)
 				SDE_ERROR("failed to create mode\n");
 				break;
 			}
-			ret = drm_mode_convert_umode(mode,
+			ret = drm_mode_convert_umode(wb_dev->drm_dev, mode,
 					&wb_dev->modes[i]);
 			if (ret) {
 				SDE_ERROR("failed to convert mode %d\n", ret);
