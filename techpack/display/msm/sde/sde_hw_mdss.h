@@ -118,6 +118,11 @@ enum sde_hw_blk_type {
 	SDE_HW_BLK_MAX,
 };
 
+enum sde_uidle {
+	UIDLE = 0x1,
+	UIDLE_MAX,
+};
+
 enum sde_mdp {
 	MDP_TOP = 0x1,
 	MDP_MAX,
