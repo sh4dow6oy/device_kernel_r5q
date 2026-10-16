@@ -1241,6 +1241,9 @@ int hdcp2_app_comm(void *ctx, enum hdcp2_app_cmd cmd,
 	case HDCP2_CMD_TIMEOUT:
 		rc = hdcp2_app_timeout(handle);
 		break;
+	case HDCP2_CMD_SET_HW_KEY:
+		rc = hdcp2_app_set_hw_key(handle);
+		break;
 	case HDCP2_CMD_EN_ENCRYPTION:
 		rc = hdcp2_app_enable_encryption(handle);
 		break;
