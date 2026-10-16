@@ -519,6 +519,126 @@ static void __init_memblock memblock_insert_region(struct memblock_type *type,
 	type->total_size += size;
 }
 
+#define NAME_SIZE	14
+struct reserved_mem_reg {
+	phys_addr_t	base;
+	long		size;
+	bool		nomap;			/*  1/16 byte */
+	bool		reusable;		/*  1/16 byte */
+	char		name[NAME_SIZE];	/* 14/16 byte */
+};
+
+static struct reserved_mem_reg kernel_mem_reg[] = {
+	[MEMSIZE_KERNEL_KERNEL]		= {0, 0, false, false, "Kernel    "},
+	[MEMSIZE_KERNEL_PAGING]		= {0, 0, false, false, "paging    "},
+	[MEMSIZE_KERNEL_LOGBUF]		= {0, 0, false, false, "log_buffer"},
+	[MEMSIZE_KERNEL_PIDHASH]	= {0, 0, false, false, "pid_hash  "},
+	[MEMSIZE_KERNEL_VFSHASH]	= {0, 0, false, false, "vfs_hash  "},
+	[MEMSIZE_KERNEL_MM_INIT]	= {0, 0, false, false, "mm_init   "},
+	[MEMSIZE_KERNEL_OTHERS]		= {0, 0, false, false, "others    "},
+};
+
+#define MAX_RESERVED_MEM_REG	64
+static struct reserved_mem_reg reserved_mem_reg[MAX_RESERVED_MEM_REG];
+static int reserved_mem_reg_count;
+
+static enum memsize_kernel_type memsize_kernel_type = MEMSIZE_KERNEL_STOP;
+static const char *memsize_reserved_name;
+
+void set_memsize_kernel_type(enum memsize_kernel_type type)
+{
+	memsize_kernel_type = type;
+}
+
+void set_memsize_reserved_name(const char *name)
+{
+	memsize_reserved_name = name;
+}
+
+void unset_memsize_reserved_name(void)
+{
+	memsize_reserved_name = NULL;
+}
+
+/* assume that freeing region is NOT bigger than the previous region */
+void free_memsize_reserved(phys_addr_t free_base, phys_addr_t free_size)
+{
+	int i;
+	struct reserved_mem_reg *rmem_reg;
+	phys_addr_t free_end, end;
+
+	for (i = 0 ; i < reserved_mem_reg_count; i++)
+	{
+		rmem_reg = &reserved_mem_reg[i];
+
+		end = rmem_reg->base + rmem_reg->size;
+		if (free_base < rmem_reg->base ||
+		    free_base >= end)
+			continue;
+
+		free_end = free_base + free_size;
+		if (free_base == rmem_reg->base) {
+			rmem_reg->size -= free_size;
+			if (rmem_reg->size != 0)
+				rmem_reg->base += free_size;
+		} else if (free_end == end) {
+			rmem_reg->size -= free_size;
+		} else {
+			record_memsize_reserved(rmem_reg->name,
+				free_end, end - free_end, rmem_reg->nomap,
+				rmem_reg->reusable);
+			rmem_reg->size = free_base - rmem_reg->base;
+		}
+	}
+}
+
+void record_memsize_size_only(enum memsize_kernel_type type, long size)
+{
+	struct reserved_mem_reg *rmem_reg;
+
+	if (type >= ARRAY_SIZE(kernel_mem_reg)) {
+		pr_err("type index is out ouf kernel_mem_reg\n");
+		return;
+	}
+	rmem_reg = &kernel_mem_reg[type];
+	rmem_reg->size += size;
+}
+
+void record_memsize_reserved(const char *name, phys_addr_t base,
+			     phys_addr_t size, bool nomap, bool reusable)
+{
+	struct reserved_mem_reg *rmem_reg;
+	char *found;
+	int name_size;
+
+	if (reserved_mem_reg_count == ARRAY_SIZE(reserved_mem_reg)) {
+		pr_err("not enough space on reserved_mem_reg\n");
+		return;
+	}
+	rmem_reg = &reserved_mem_reg[reserved_mem_reg_count++];
+
+	rmem_reg->base = base;
+	rmem_reg->size = size;
+	rmem_reg->nomap = nomap;
+	rmem_reg->reusable = reusable;
+
+	if (!name) {
+		strcpy(rmem_reg->name, "unknown");
+	} else {
+		name_size = strlen(name);
+		found = strstr(name, "_region");
+		if (found)
+			name_size = found - name;
+		found = strchr(name, '@');
+		if (found && (name_size > found - name))
+			name_size = found - name;
+		if (name_size > NAME_SIZE - 1)
+			name_size = NAME_SIZE - 1;
+		strncpy(rmem_reg->name, name, name_size);
+		rmem_reg->name[NAME_SIZE - 1] = '\0';
+	}
+}
+
 /**
  * memblock_add_range - add new memblock region
  * @type: memblock type to add new region into
