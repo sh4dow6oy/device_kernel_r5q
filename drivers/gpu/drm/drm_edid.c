@@ -5210,6 +5210,7 @@ s3d_structure_from_display_mode(const struct drm_display_mode *mode)
  */
 int
 drm_hdmi_vendor_infoframe_from_display_mode(struct hdmi_vendor_infoframe *frame,
+					    const struct drm_connector *connector,
 					    const struct drm_display_mode *mode)
 {
 	int err;
