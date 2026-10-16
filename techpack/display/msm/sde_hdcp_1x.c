@@ -21,7 +21,7 @@
 #include <linux/msm_hdcp.h>
 #include <drm/drm_dp_helper.h>
 #include "sde_hdcp.h"
-#include "hdmi.xml.h"
+#include <../../drivers/gpu/drm/msm/hdmi/hdmi.xml.h>
 #include "video/msm_hdmi_hdcp_mgr.h"
 #include "dp/dp_reg.h"
 
