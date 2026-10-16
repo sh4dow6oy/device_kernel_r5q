@@ -2219,7 +2219,13 @@ static int sde_rot_parse_dt(struct device_node *np,
 
 		pdev = of_find_device_by_node(phargs.np);
 		if (pdev) {
-			slice = llcc_slice_getd(&pdev->dev, "rotator");
+#ifdef LLCC_ROTATOR
+			/* Daca LLCC_ROTATOR este definit in llcc-qcom.h (API 4.19 standard) */
+			slice = llcc_slice_getd(LLCC_ROTATOR);
+#else
+			/* Fallback compatibilitate direct prin Device Node pe 4.19 */
+			slice = llcc_slice_getd_by_request(&pdev->dev, "rotator");
+#endif
 			if (IS_ERR_OR_NULL(slice)) {
 				rot->pdev = NULL;
 				SDE_ERROR("failed to get system cache %ld\n",
