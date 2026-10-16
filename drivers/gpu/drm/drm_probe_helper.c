@@ -99,8 +99,15 @@ drm_mode_validate_pipeline(struct drm_display_mode *mode,
 		return ret;
 
 	/* Step 2: Validate against encoders and crtcs */
-	drm_connector_for_each_possible_encoder(connector, encoder, i) {
+	for (i = 0; i < DRM_CONNECTOR_MAX_ENCODER; i++) {
 		struct drm_crtc *crtc;
+
+		if (!connector->encoder_ids[i])
+			continue;
+
+		encoder = drm_encoder_find(dev, NULL, connector->encoder_ids[i]);
+		if (!encoder)
+			continue;
 
 		ret = drm_encoder_mode_valid(encoder, mode);
 		if (ret != MODE_OK) {
@@ -473,7 +480,7 @@ retry:
 	if (connector->status == connector_status_disconnected) {
 		DRM_DEBUG_KMS("[CONNECTOR:%d:%s] disconnected\n",
 			connector->base.id, connector->name);
-		drm_connector_update_edid_property(connector, NULL);
+		drm_connector_attach_edid_property(connector);
 		verbose_prune = false;
 		goto prune;
 	}
