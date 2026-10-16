@@ -6,6 +6,8 @@
 
 #include "sde_hwio.h"
 #include "sde_hw_catalog.h"
+#include "sde_hw_uidle.h"
+#include "sde_hw_mdss.h"
 #include "sde_hw_top.h"
 #include "sde_dbg.h"
 #include "sde_kms.h"
