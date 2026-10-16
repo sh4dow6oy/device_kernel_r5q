@@ -389,8 +389,10 @@ EXPORT_SYMBOL(drm_atomic_set_mode_for_crtc);
  * Zero on success, error code on failure. Cannot return -EDEADLK.
  */
 int drm_atomic_set_mode_prop_for_crtc(struct drm_crtc_state *state,
-                                      struct drm_property_blob *blob)
+				      struct drm_property_blob *blob)
 {
+	struct drm_device *dev = state->crtc->dev;
+
 	if (blob == state->mode_blob)
 		return 0;
 
@@ -401,9 +403,9 @@ int drm_atomic_set_mode_prop_for_crtc(struct drm_crtc_state *state,
 
 	if (blob) {
 		if (blob->length != sizeof(struct drm_mode_modeinfo) ||
-		    drm_mode_convert_umode(&state->mode,
-		                           (const struct drm_mode_modeinfo *)
-		                            blob->data))
+		    drm_mode_convert_umode(dev, &state->mode,
+					   (const struct drm_mode_modeinfo *)
+					    blob->data))
 			return -EINVAL;
 
 		state->mode_blob = drm_property_blob_get(blob);
@@ -445,7 +447,6 @@ drm_atomic_replace_property_blob_from_id(struct drm_device *dev,
 
 	return 0;
 }
-
 /**
  * drm_atomic_crtc_set_property - set property on CRTC
  * @crtc: the drm CRTC to set a property on
