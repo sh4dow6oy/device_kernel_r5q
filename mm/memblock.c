@@ -866,6 +866,14 @@ static int __init_memblock memblock_remove_range(struct memblock_type *type,
 	if (ret)
 		return ret;
 
+	if (memsize_reserved_name && type == &memblock.memory)
+		record_memsize_reserved(memsize_reserved_name, base, size,
+					true, false);
+	else if (memsize_reserved_name && type == &memblock.reserved)
+		free_memsize_reserved(base, size);
+	else if (memsize_kernel_type != MEMSIZE_KERNEL_STOP
+			&& type == &memblock.reserved)
+		record_memsize_size_only(memsize_kernel_type, size * -1);
 	for (i = end_rgn - 1; i >= start_rgn; i--)
 		memblock_remove_region(type, i);
 	return 0;
