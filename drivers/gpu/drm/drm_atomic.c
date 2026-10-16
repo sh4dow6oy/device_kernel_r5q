@@ -1830,7 +1830,7 @@ int drm_atomic_debugfs_init(struct drm_minor *minor)
  */
 
 static struct drm_pending_vblank_event *create_vblank_event(
-		struct drm_device *dev, uint64_t user_data)
+		struct drm_crtc *crtc, uint64_t user_data)
 {
 	struct drm_pending_vblank_event *e = NULL;
 
@@ -1840,7 +1840,8 @@ static struct drm_pending_vblank_event *create_vblank_event(
 
 	e->event.base.type = DRM_EVENT_FLIP_COMPLETE;
 	e->event.base.length = sizeof(e->event);
-	e->event.base.user_data = user_data;
+	e->event.vbl.crtc_id = crtc->base.id;
+	e->event.vbl.user_data = user_data;
 
 	return e;
 }
