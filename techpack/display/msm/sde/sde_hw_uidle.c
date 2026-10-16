@@ -4,6 +4,7 @@
  *
  */
 
+#if 0
 #include "sde_hwio.h"
 #include "sde_hw_catalog.h"
 #include "sde_hw_uidle.h"
@@ -219,3 +220,4 @@ struct sde_hw_uidle *sde_hw_uidle_init(enum sde_uidle idx,
 	return c;
 }
 
+#endif
