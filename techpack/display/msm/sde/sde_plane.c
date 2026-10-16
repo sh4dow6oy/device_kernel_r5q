@@ -5034,7 +5034,7 @@ static void sde_plane_destroy(struct drm_plane *plane)
 		msm_property_destroy(&psde->property_info);
 		mutex_destroy(&psde->lock);
 
-		drm_plane_helper_disable(plane);
+		drm_plane_helper_disable(plane, NULL);
 
 		/* this will destroy the states as well */
 		drm_plane_cleanup(plane);
