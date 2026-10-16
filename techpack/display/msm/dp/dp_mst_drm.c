@@ -1248,7 +1248,7 @@ dp_mst_add_connector(struct drm_dp_mst_topology_mgr *mgr,
 		connector->funcs->reset(connector);
 
 	for (i = 1; i < MAX_DP_MST_DRM_BRIDGES; i++) {
-		drm_connector_attach_encoder(connector,
+		drm_mode_connector_attach_encoder(connector,
 				dp_mst->mst_bridge[i].encoder);
 	}
 
@@ -1465,7 +1465,7 @@ dp_mst_add_fixed_connector(struct drm_dp_mst_topology_mgr *mgr,
 
 	/* re-attach encoders from first available encoders */
 	for (i = enc_idx; i < MAX_DP_MST_DRM_BRIDGES; i++)
-		drm_connector_attach_encoder(connector,
+		drm_mode_connector_attach_encoder(connector,
 				dp_mst->mst_bridge[i].encoder);
 
 	drm_modeset_unlock_all(dev);
