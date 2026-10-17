@@ -4716,30 +4716,11 @@ u32 drm_add_display_info(struct drm_connector *connector,
 	info->color_formats |= DRM_COLOR_FORMAT_RGB444;
 	drm_parse_cea_ext(connector, (struct edid *)edid);
 
-	/*
-	 * Digital sink with "DFP 1.x compliant TMDS" according to EDID 1.3?
-	 *
-	 * For such displays, the DFP spec 1.0, section 3.10 "EDID support"
-	 * tells us to assume 8 bpc color depth if the EDID doesn't have
-	 * extensions which tell otherwise.
-	 */
-	if ((info->bpc == 0) && (edid->revision < 4) &&
-	    (edid->input & DRM_EDID_DIGITAL_TYPE_DVI)) {
-		info->bpc = 8;
-		DRM_DEBUG("%s: Assigning DFP sink color depth as %d bpc.\n",
-			  connector->name, info->bpc);
-	}
+	drm_hdmi_extract_vsdbs_info(connector, (struct edid *)edid);
+	drm_hdmi_extract_extended_blk_info(connector, (struct edid *)edid);
 
-	return 0;
-}
-	/* Extract audio and video latency fields for the sink */
-	drm_hdmi_extract_vsdbs_info(connector, edid);
-	/* Extract info from extended tag blocks */
-	drm_hdmi_extract_extended_blk_info(connector, edid);
-
-	/* Only defined for 1.4 with digital displays */
 	if (edid->revision < 4)
-		return;
+		return 0;
 
 	switch (edid->input & DRM_EDID_DIGITAL_DEPTH_MASK) {
 	case DRM_EDID_DIGITAL_DEPTH_6:
@@ -4767,34 +4748,13 @@ u32 drm_add_display_info(struct drm_connector *connector,
 	}
 
 	DRM_DEBUG("%s: Assigning EDID-1.4 digital sink color depth as %d bpc.\n",
-			  connector->name, info->bpc);
+		  connector->name, info->bpc);
 
 	if (edid->features & DRM_EDID_FEATURE_RGB_YCRCB444)
 		info->color_formats |= DRM_COLOR_FORMAT_YCRCB444;
 	if (edid->features & DRM_EDID_FEATURE_RGB_YCRCB422)
 		info->color_formats |= DRM_COLOR_FORMAT_YCRCB422;
-}
 
-static int validate_displayid(u8 *displayid, int length, int idx)
-{
-	int i;
-	u8 csum = 0;
-	struct displayid_hdr *base;
-
-	base = (struct displayid_hdr *)&displayid[idx];
-
-	DRM_DEBUG_KMS("base revision 0x%x, length %d, %d %d\n",
-		      base->rev, base->bytes, base->prod_id, base->ext_count);
-
-	if (base->bytes + 5 > length - idx)
-		return -EINVAL;
-	for (i = idx; i <= base->bytes + 5; i++) {
-		csum += displayid[i];
-	}
-	if (csum) {
-		DRM_NOTE("DisplayID checksum invalid, remainder is %d\n", csum);
-		return -EINVAL;
-	}
 	return 0;
 }
 
