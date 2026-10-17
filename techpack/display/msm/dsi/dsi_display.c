@@ -8086,7 +8086,7 @@ int dsi_display_pre_disable(struct dsi_display *display)
 	int rc = 0;
 	struct samsung_display_driver_data *vdd;
 
-	vdd = display->panel->panel_private;
+	vdd = (struct samsung_display_driver_data *)display->panel->priv;
 
 	if (!display) {
 		pr_err("Invalid params\n");
