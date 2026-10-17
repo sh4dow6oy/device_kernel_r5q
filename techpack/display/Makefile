@@ -1,5 +1,21 @@
 # SPDX-License-Identifier: GPL-2.0-only
 
+# Include-uri globale pentru tot Techpack Display
+subdir-ccflags-y += -I$(srctree)/techpack/display/msm
+subdir-ccflags-y += -I$(srctree)/techpack/display/msm/sde
+subdir-ccflags-y += -I$(srctree)/techpack/display/msm/dsi
+subdir-ccflags-y += -I$(srctree)/techpack/display/msm/dp
+subdir-ccflags-y += -I$(srctree)/techpack/display/msm/samsung
+subdir-ccflags-y += -I$(srctree)/techpack/display/rotator
+subdir-ccflags-y += -I$(srctree)/drivers/gpu/drm/msm
+subdir-ccflags-y += -I$(srctree)/drivers/gpu/drm/msm/hdmi
+
+LINUXINCLUDE += -I$(srctree)/techpack/display/msm \
+		-I$(srctree)/techpack/display/msm/sde \
+		-I$(srctree)/techpack/display/msm/dsi \
+		-I$(srctree)/techpack/display/msm/dp \
+		-I$(srctree)/drivers/gpu/drm/msm/hdmi
+
 # auto-detect subdirs
 ifeq ($(CONFIG_ARCH_KONA), y)
 include $(srctree)/techpack/display/config/konadisp.conf
