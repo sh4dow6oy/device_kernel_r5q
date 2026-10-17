@@ -85,31 +85,28 @@ static int dsi_display_config_clk_gating(struct dsi_display *display,
 	enum dsi_clk_gate_type const default_clk_select = PIXEL_CLK | DSI_PHY;
 
 	if (!display) {
-		DSI_ERR("Invalid params\n");
+		pr_err("Invalid params\n");
 		return -EINVAL;
 	}
 
 	if (display->panel->host_config.force_hs_clk_lane) {
-		DSI_DEBUG("no dsi clock gating for continuous clock mode\n");
+		pr_debug("no dsi clock gating for continuous clock mode\n");
 		return 0;
 	}
 
 	mctrl = &display->ctrl[display->clk_master_idx];
 	if (!mctrl) {
-		DSI_ERR("Invalid controller\n");
+		pr_err("Invalid controller\n");
 		return -EINVAL;
 	}
 
-	clk_selection = display->clk_gating_config;
-
-	if (!enable) {
-		/* for disable path, make sure to disable all clk gating */
-		clk_selection = DSI_CLK_ALL;
-	} else if (!clk_selection || clk_selection > DSI_CLK_NONE) {
-		/* Default selection, no overrides */
-		clk_selection = default_clk_select;
-	} else if (clk_selection == DSI_CLK_NONE) {
-		clk_selection = 0;
+	rc = dsi_ctrl_config_clk_gating(mctrl->ctrl, enable, PIXEL_CLK |
+							DSI_PHY);
+	if (rc) {
+		pr_err("[%s] failed to %s clk gating, rc=%d\n",
+				display->name, enable ? "enable" : "disable",
+				rc);
+		return rc;
 	}
 
 	DSI_DEBUG("%s clock gating Byte:%s Pixel:%s PHY:%s\n",
@@ -133,13 +130,11 @@ static int dsi_display_config_clk_gating(struct dsi_display *display,
 		 * In Split DSI usecase we should not enable clock gating on
 		 * DSI PHY1 to ensure no display atrifacts are seen.
 		 */
-		clk_selection &= ~DSI_PHY;
-		rc = dsi_ctrl_config_clk_gating(ctrl->ctrl, enable,
-				clk_selection);
+		rc = dsi_ctrl_config_clk_gating(ctrl->ctrl, enable, PIXEL_CLK);
 		if (rc) {
-			DSI_ERR("[%s] failed to %s clk gating for clocks %d, rc=%d\n",
+			pr_err("[%s] failed to %s pixel clk gating, rc=%d\n",
 				display->name, enable ? "enable" : "disable",
-				clk_selection, rc);
+				rc);
 			return rc;
 		}
 	}
@@ -247,34 +242,35 @@ int dsi_display_set_backlight(struct drm_connector *connector,
 	bl_scale = panel->bl_config.bl_scale;
 	bl_temp = bl_lvl * bl_scale / MAX_BL_SCALE_LEVEL;
 
-	bl_scale_sv = panel->bl_config.bl_scale_sv;
-	bl_temp = (u32)bl_temp * bl_scale_sv / MAX_SV_BL_SCALE_LEVEL;
+	bl_scale_ad = panel->bl_config.bl_scale_ad;
+	bl_temp = (u32)bl_temp * bl_scale_ad / MAX_AD_BL_SCALE_LEVEL;
 
-	DSI_DEBUG("bl_scale = %u, bl_scale_sv = %u, bl_lvl = %u\n",
-		bl_scale, bl_scale_sv, (u32)bl_temp);
+	pr_debug("bl_scale = %u, bl_scale_ad = %u, bl_lvl = %u\n",
+		bl_scale, bl_scale_ad, (u32)bl_temp);
+
 	rc = dsi_display_clk_ctrl(dsi_display->dsi_clk_handle,
 			DSI_CORE_CLK, DSI_CLK_ON);
 	if (rc) {
-		DSI_ERR("[%s] failed to enable DSI core clocks, rc=%d\n",
+		pr_err("[%s] failed to enable DSI core clocks, rc=%d\n",
 		       dsi_display->name, rc);
 		goto error;
 	}
 
 	rc = dsi_panel_set_backlight(panel, (u32)bl_temp);
 	if (rc)
-		DSI_ERR("unable to set backlight\n");
+		pr_err("unable to set backlight\n");
 
 	rc = dsi_display_clk_ctrl(dsi_display->dsi_clk_handle,
 			DSI_CORE_CLK, DSI_CLK_OFF);
 	if (rc) {
-		DSI_ERR("[%s] failed to disable DSI core clocks, rc=%d\n",
+		pr_err("[%s] failed to disable DSI core clocks, rc=%d\n",
 		       dsi_display->name, rc);
 		goto error;
 	}
 
 error:
 	mutex_unlock(&panel->panel_lock);
-#if defined(CONFIG_DISPLAY_SAMSUNG)
+#if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
 	ss_set_exclusive_tx_lock_from_qct(panel->panel_private, false);
 #endif
 	return rc;
@@ -334,7 +330,7 @@ static int dsi_display_cmd_engine_disable(struct dsi_display *display)
 	mutex_lock(&m_ctrl->ctrl->ctrl_lock);
 
 	if (display->cmd_engine_refcount == 0) {
-		DSI_ERR("[%s] Invalid refcount\n", display->name);
+		pr_err("[%s] Invalid refcount\n", display->name);
 		goto done;
 	} else if (display->cmd_engine_refcount > 1) {
 		display->cmd_engine_refcount--;
@@ -349,13 +345,13 @@ static int dsi_display_cmd_engine_disable(struct dsi_display *display)
 		rc = dsi_ctrl_set_cmd_engine_state(ctrl->ctrl,
 						   DSI_CTRL_ENGINE_OFF);
 		if (rc)
-			DSI_ERR("[%s] failed to enable cmd engine, rc=%d\n",
+			pr_err("[%s] failed to enable cmd engine, rc=%d\n",
 			       display->name, rc);
 	}
 
 	rc = dsi_ctrl_set_cmd_engine_state(m_ctrl->ctrl, DSI_CTRL_ENGINE_OFF);
 	if (rc) {
-		DSI_ERR("[%s] failed to enable cmd engine, rc=%d\n",
+		pr_err("[%s] failed to enable cmd engine, rc=%d\n",
 		       display->name, rc);
 		goto error;
 	}
