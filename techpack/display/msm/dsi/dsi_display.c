@@ -81,8 +81,6 @@ static int dsi_display_config_clk_gating(struct dsi_display *display,
 {
 	int rc = 0, i = 0;
 	struct dsi_display_ctrl *mctrl, *ctrl;
-	enum dsi_clk_gate_type clk_selection;
-	enum dsi_clk_gate_type const default_clk_select = PIXEL_CLK | DSI_PHY;
 
 	if (!display) {
 		pr_err("Invalid params\n");
@@ -106,19 +104,6 @@ static int dsi_display_config_clk_gating(struct dsi_display *display,
 		pr_err("[%s] failed to %s clk gating, rc=%d\n",
 				display->name, enable ? "enable" : "disable",
 				rc);
-		return rc;
-	}
-
-	DSI_DEBUG("%s clock gating Byte:%s Pixel:%s PHY:%s\n",
-		enable ? "Enabling" : "Disabling",
-		clk_selection & BYTE_CLK ? "yes" : "no",
-		clk_selection & PIXEL_CLK ? "yes" : "no",
-		clk_selection & DSI_PHY ? "yes" : "no");
-	rc = dsi_ctrl_config_clk_gating(mctrl->ctrl, enable, clk_selection);
-	if (rc) {
-		DSI_ERR("[%s] failed to %s clk gating for clocks %d, rc=%d\n",
-				display->name, enable ? "enable" : "disable",
-				clk_selection, rc);
 		return rc;
 	}
 
