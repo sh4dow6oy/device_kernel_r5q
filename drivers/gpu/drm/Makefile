@@ -3,6 +3,7 @@
 # Makefile for the drm device driver.  This driver provides support for the
 # Direct Rendering Infrastructure (DRI) in XFree86 4.1.0 and higher.
 
+ccflags-y += -I$(srctree)/techpack/display
 ccflags-y += -I$(srctree)/techpack/display/msm
 ccflags-y += -I$(srctree)/techpack/display/msm/sde
 
