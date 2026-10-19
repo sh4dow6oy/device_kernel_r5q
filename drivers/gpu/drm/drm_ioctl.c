@@ -38,7 +38,6 @@
 #include <linux/pci.h>
 #include <linux/export.h>
 #include <linux/nospec.h>
-#include "msm/sde/sde_trace.h"
 
 /**
  * DOC: getunique and setversion story
