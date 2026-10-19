@@ -8062,13 +8062,15 @@ int dsi_display_post_enable(struct dsi_display *display)
 			pr_err("[%s] panel post-enable failed, rc=%d\n",
 				display->name, rc);
 	}
-
-#if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
+	
+#if defined(CONFIG_DISPLAY_SAMSUNG)
 	if (!vdd->dtsi_data.samsung_tcon_clk_on_support) {
 		/* remove the clk vote for CMD mode panels */
-		if (display->config.panel_mode == DSI_OP_CMD_MODE)
+		if (display->config.panel_mode == DSI_OP_CMD_MODE) {
+			SDE_EVT32(SDE_EVTLOG_FUNC_CASE1); // case 04627046
 			dsi_display_clk_ctrl(display->dsi_clk_handle,
 				DSI_ALL_CLKS, DSI_CLK_OFF);
+		}
 	}
 #else
 	/* remove the clk vote for CMD mode panels */
@@ -8078,7 +8080,7 @@ int dsi_display_post_enable(struct dsi_display *display)
 #endif
 
 	mutex_unlock(&display->display_lock);
-	pr_err("-- : ndx=%d\n", vdd->ndx);
+	LCD_ERR("-- : ndx=%d\n", vdd->ndx);
 	return rc;
 }
 
@@ -8199,7 +8201,7 @@ int dsi_display_disable(struct dsi_display *display)
 	if (!display->poms_pending) {
 		rc = dsi_panel_disable(display->panel);
 		if (rc)
-			DSI_ERR("[%s] failed to disable DSI panel, rc=%d\n",
+			pr_err("[%s] failed to disable DSI panel, rc=%d\n",
 				display->name, rc);
 	}
 	mutex_unlock(&display->display_lock);
