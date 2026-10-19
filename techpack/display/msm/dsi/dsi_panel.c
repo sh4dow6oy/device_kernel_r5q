@@ -23,9 +23,8 @@
 #include "dsi_panel.h"
 #include "dsi_ctrl_hw.h"
 #include "dsi_parser.h"
-#if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
+
 #include "ss_dsi_panel_common.h"
-#endif
 
 /**
  * topology is currently defined by a set of following 3 values:
@@ -1923,7 +1922,6 @@ error:
 	return rc;
 }
 
-#if defined(CONFIG_DISPLAY_SAMSUNG)
 char *cmd_set_prop_map[SS_DSI_CMD_SET_MAX] = {
 	"qcom,mdss-dsi-pre-on-command",
 	"qcom,mdss-fd-on-factory-command",
@@ -2943,7 +2941,6 @@ error:
 
 }
 
-#if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
 /* ss_dsi_panel_parse_cmd_sets_sub:
  * parse and save samsung mipi commands for each panel revision.
  * If the panel revision has no dtsi data,
