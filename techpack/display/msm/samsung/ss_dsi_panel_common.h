@@ -28,6 +28,8 @@ Copyright (C) 2012, Samsung Electronics. All rights reserved.
 #ifndef SS_DSI_PANEL_COMMON_H
 #define SS_DSI_PANEL_COMMON_H
 
+#include "dsi_defs.h"
+
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/of_gpio.h>
@@ -71,7 +73,6 @@ Copyright (C) 2012, Samsung Electronics. All rights reserved.
 #include "sde_encoder.h"
 #include "sde_encoder_phys.h"
 
-#include "dsi_defs.h"
 #include "dsi_panel.h"
 #include "ss_ddi_spi_common.h"
 #include "ss_dpui_common.h"
