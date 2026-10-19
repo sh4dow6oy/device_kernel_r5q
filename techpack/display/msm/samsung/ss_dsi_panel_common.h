@@ -71,6 +71,7 @@ Copyright (C) 2012, Samsung Electronics. All rights reserved.
 #include "sde_encoder.h"
 #include "sde_encoder_phys.h"
 
+#include "dsi_defs.h"
 #include "dsi_panel.h"
 #include "ss_ddi_spi_common.h"
 #include "ss_dpui_common.h"
