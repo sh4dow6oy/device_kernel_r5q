@@ -8037,20 +8037,29 @@ error:
 int dsi_display_post_enable(struct dsi_display *display)
 {
 	int rc = 0;
-#if defined(CONFIG_DISPLAY_SAMSUNG)
-	struct samsung_display_driver_data *vdd = display->panel->panel_private;
 
-	LCD_ERR("++ : ndx=%d\n", vdd->ndx);
-#endif
-
-	if (!display) {
-		pr_err("Invalid params\n");
+	if (!display || !display->panel) {
+		pr_err("Invalid display/panel params\n");
 		return -EINVAL;
 	}
 
+#if defined(CONFIG_DISPLAY_SAMSUNG)
+	struct samsung_display_driver_data *vdd =
+		display->panel->panel_private;
+
+	if (!vdd) {
+		pr_err("Samsung display driver data is NULL\n");
+		return -EINVAL;
+	}
+
+	pr_err("dsi_display_post_enable: ++ ndx=%d\n", vdd->ndx);
+#endif
+
 	mutex_lock(&display->display_lock);
 
-	if (display->panel->cur_mode->dsi_mode_flags & DSI_MODE_FLAG_POMS) {
+	if (display->panel->cur_mode &&
+	    (display->panel->cur_mode->dsi_mode_flags &
+	     DSI_MODE_FLAG_POMS)) {
 		if (display->config.panel_mode == DSI_OP_CMD_MODE)
 			dsi_panel_mode_switch_to_cmd(display->panel);
 
@@ -8060,27 +8069,29 @@ int dsi_display_post_enable(struct dsi_display *display)
 		rc = dsi_panel_post_enable(display->panel);
 		if (rc)
 			pr_err("[%s] panel post-enable failed, rc=%d\n",
-				display->name, rc);
+			       display->name, rc);
 	}
-	
+
 #if defined(CONFIG_DISPLAY_SAMSUNG)
 	if (!vdd->dtsi_data.samsung_tcon_clk_on_support) {
-		/* remove the clk vote for CMD mode panels */
 		if (display->config.panel_mode == DSI_OP_CMD_MODE) {
-			SDE_EVT32(SDE_EVTLOG_FUNC_CASE1); // case 04627046
+			SDE_EVT32(SDE_EVTLOG_FUNC_CASE1);
 			dsi_display_clk_ctrl(display->dsi_clk_handle,
-				DSI_ALL_CLKS, DSI_CLK_OFF);
+					     DSI_ALL_CLKS, DSI_CLK_OFF);
 		}
 	}
 #else
-	/* remove the clk vote for CMD mode panels */
 	if (display->config.panel_mode == DSI_OP_CMD_MODE)
 		dsi_display_clk_ctrl(display->dsi_clk_handle,
-			DSI_ALL_CLKS, DSI_CLK_OFF);
+				     DSI_ALL_CLKS, DSI_CLK_OFF);
 #endif
 
 	mutex_unlock(&display->display_lock);
-	LCD_ERR("-- : ndx=%d\n", vdd->ndx);
+
+#if defined(CONFIG_DISPLAY_SAMSUNG)
+	pr_err("dsi_display_post_enable: -- ndx=%d\n", vdd->ndx);
+#endif
+
 	return rc;
 }
 
