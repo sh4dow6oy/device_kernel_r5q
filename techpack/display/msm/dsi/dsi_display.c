@@ -29,8 +29,11 @@
 #include "dsi_drm.h"
 #include "dsi_clk.h"
 #include "dsi_pwr.h"
+
+/* Antete Samsung puse în ordinea corectă de dependență */
+#include "ss_dsi_panel.h"
 #include "ss_dsi_panel_common.h"
-#endif
+
 #include "sde_dbg.h"
 #include "dsi_parser.h"
 
