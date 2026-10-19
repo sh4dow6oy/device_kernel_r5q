@@ -74,7 +74,6 @@ Copyright (C) 2012, Samsung Electronics. All rights reserved.
 #include "dsi_panel.h"
 #include "ss_ddi_spi_common.h"
 #include "ss_dpui_common.h"
-#include "dsi_samsung_defs.h"
 
 #include "ss_dsi_panel_sysfs.h"
 #include "ss_dsi_panel_debug.h"
