@@ -65,12 +65,12 @@ Copyright (C) 2012, Samsung Electronics. All rights reserved.
 #endif
 
 #include "dsi_display.h"
-#include "dsi_panel.h"
 #include "sde_kms.h"
 #include "sde_connector.h"
 #include "sde_encoder.h"
 #include "sde_encoder_phys.h"
 
+#include "dsi_panel.h"
 #include "ss_ddi_spi_common.h"
 #include "ss_dpui_common.h"
 
