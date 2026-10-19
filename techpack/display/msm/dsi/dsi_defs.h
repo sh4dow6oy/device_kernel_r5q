@@ -1086,7 +1086,6 @@ struct dsi_panel_cmd_set {
 	u32 ctrl_idx;
 	struct dsi_cmd_desc *cmds;
 
-#if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
 #define SUPPORT_PANEL_REVISION	20
 	int read_startoffset;
 	char *name;
