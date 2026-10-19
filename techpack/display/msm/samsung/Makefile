@@ -1,4 +1,5 @@
 ccflags-y := -Wformat -I$(srctree)/include/drm -I$(srctree)/techpack/display/msm -I$(srctree)/techpack/display/msm/dsi -I$(srctree)/techpack/display/msm/sde -I$(srctree)/techpack/display/msm/samsung
+ccflags-y += -Wformat -I$(srctree)/drivers/gpu/drm/msm/dsi-staging -I$(srctree)/drivers/gpu/drm/msm -I$(srctree)/drivers/gpu/drm -I$(srctree)/drivers/gpu/drm/msm/sde
 
 obj-y += ss_dsi_panel_sysfs.o
 obj-y += ss_dsi_panel_debug.o
