@@ -7854,9 +7854,10 @@ int dsi_display_enable(struct dsi_display *display)
 {
 	int rc = 0;
 	struct dsi_display_mode *mode;
-	struct samsung_display_driver_data *vdd;
 
-	vdd = display->panel->panel_private;
+#if defined(CONFIG_DISPLAY_SAMSUNG)
+	struct samsung_display_driver_data *vdd = display->panel->panel_private;
+#endif
 
 	if (!display || !display->panel) {
 		pr_err("Invalid params\n");
@@ -7864,12 +7865,11 @@ int dsi_display_enable(struct dsi_display *display)
 	}
 
 	if (!display->panel->cur_mode) {
-		pr_err("no valid mode set for the display");
+		pr_err("no valid mode set for the display\n");
 		return -EINVAL;
 	}
 	SDE_EVT32(SDE_EVTLOG_FUNC_ENTRY);
 
-	pr_err("++ : ndx=%d\n", vdd->ndx);
 	/* Engine states and panel states are populated during splash
 	 * resource init and hence we return early
 	 */
@@ -8037,16 +8037,17 @@ error:
 int dsi_display_post_enable(struct dsi_display *display)
 {
 	int rc = 0;
-	struct samsung_display_driver_data *vdd;
+#if defined(CONFIG_DISPLAY_SAMSUNG)
+	struct samsung_display_driver_data *vdd = display->panel->panel_private;
 
-	vdd = display->panel->panel_private;
+	LCD_ERR("++ : ndx=%d\n", vdd->ndx);
+#endif
 
 	if (!display) {
 		pr_err("Invalid params\n");
 		return -EINVAL;
 	}
 
-	pr_err("++ : ndx=%d\n", vdd->ndx);
 	mutex_lock(&display->display_lock);
 
 	if (display->panel->cur_mode->dsi_mode_flags & DSI_MODE_FLAG_POMS) {
@@ -8059,7 +8060,7 @@ int dsi_display_post_enable(struct dsi_display *display)
 		rc = dsi_panel_post_enable(display->panel);
 		if (rc)
 			pr_err("[%s] panel post-enable failed, rc=%d\n",
-			       display->name, rc);
+				display->name, rc);
 	}
 
 #if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
@@ -8084,24 +8085,26 @@ int dsi_display_post_enable(struct dsi_display *display)
 int dsi_display_pre_disable(struct dsi_display *display)
 {
 	int rc = 0;
-	struct samsung_display_driver_data *vdd;
 
-	vdd = display->panel->panel_private;
+#if defined(CONFIG_DISPLAY_SAMSUNG)
+	struct samsung_display_driver_data *vdd = display->panel->panel_private;
+#endif
 
 	if (!display) {
 		pr_err("Invalid params\n");
 		return -EINVAL;
 	}
 
-	pr_err("++ : ndx=%d\n", vdd->ndx);
 	mutex_lock(&display->display_lock);
 
-#if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
+#if defined(CONFIG_DISPLAY_SAMSUNG)
 	if (!vdd->dtsi_data.samsung_tcon_clk_on_support) {
 		/* enable the clk vote for CMD mode panels */
-		if (display->config.panel_mode == DSI_OP_CMD_MODE)
+		if (display->config.panel_mode == DSI_OP_CMD_MODE) {
+			SDE_EVT32(SDE_EVTLOG_FUNC_CASE1); // case 04627046
 			dsi_display_clk_ctrl(display->dsi_clk_handle,
 				DSI_ALL_CLKS, DSI_CLK_ON);
+		}
 	}
 #else
 	/* enable the clk vote for CMD mode panels */
@@ -8109,31 +8112,58 @@ int dsi_display_pre_disable(struct dsi_display *display)
 		dsi_display_clk_ctrl(display->dsi_clk_handle,
 			DSI_ALL_CLKS, DSI_CLK_ON);
 #endif
-
 	if (display->poms_pending) {
 		if (display->config.panel_mode == DSI_OP_CMD_MODE)
 			dsi_panel_pre_mode_switch_to_video(display->panel);
 
-		if (display->config.panel_mode == DSI_OP_VIDEO_MODE)
+		if (display->config.panel_mode == DSI_OP_VIDEO_MODE) {
+			/*
+			 * Add unbalanced vote for clock & cmd engine to enable
+			 * async trigger of pre video to cmd mode switch.
+			 */
+			rc = dsi_display_clk_ctrl(display->dsi_clk_handle,
+					DSI_ALL_CLKS, DSI_CLK_ON);
+			if (rc) {
+				pr_err("[%s]failed to enable all clocks,rc=%d",
+						display->name, rc);
+				goto exit;
+			}
+
+			rc = dsi_display_cmd_engine_enable(display);
+			if (rc) {
+				pr_err("[%s]failed to enable cmd engine,rc=%d",
+						display->name, rc);
+				goto error_disable_clks;
+			}
+
 			dsi_panel_pre_mode_switch_to_cmd(display->panel);
+		}
 	} else {
 		rc = dsi_panel_pre_disable(display->panel);
 		if (rc)
 			pr_err("[%s] panel pre-disable failed, rc=%d\n",
-			       display->name, rc);
+				display->name, rc);
 	}
+	goto exit;
 
+error_disable_clks:
+	rc = dsi_display_clk_ctrl(display->dsi_clk_handle,
+			DSI_ALL_CLKS, DSI_CLK_OFF);
+	if (rc)
+		pr_err("[%s] failed to disable all DSI clocks, rc=%d\n",
+		       display->name, rc);
+
+exit:
 	mutex_unlock(&display->display_lock);
-	pr_err("-- : ndx=%d\n", vdd->ndx);
 	return rc;
 }
 
 int dsi_display_disable(struct dsi_display *display)
 {
 	int rc = 0;
-	struct samsung_display_driver_data *vdd;
-
-	vdd = display->panel->panel_private;
+#if defined(CONFIG_DISPLAY_SAMSUNG)
+	struct samsung_display_driver_data *vdd = display->panel->panel_private;
+#endif
 
 	if (!display) {
 		pr_err("Invalid params\n");
@@ -8141,8 +8171,8 @@ int dsi_display_disable(struct dsi_display *display)
 	}
 
 	SDE_EVT32(SDE_EVTLOG_FUNC_ENTRY);
-#if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
-	pr_err("++ : ndx=%d\n", vdd->ndx);
+#if defined(CONFIG_DISPLAY_SAMSUNG)
+	LCD_ERR("++ : ndx=%d\n", vdd->ndx);
 #endif
 	mutex_lock(&display->display_lock);
 
@@ -8169,17 +8199,17 @@ int dsi_display_disable(struct dsi_display *display)
 	if (!display->poms_pending) {
 		rc = dsi_panel_disable(display->panel);
 		if (rc)
-			pr_err("[%s] failed to disable DSI panel, rc=%d\n",
-			       display->name, rc);
+			DSI_ERR("[%s] failed to disable DSI panel, rc=%d\n",
+				display->name, rc);
 	}
-
 	mutex_unlock(&display->display_lock);
 	SDE_EVT32(SDE_EVTLOG_FUNC_EXIT);
-#if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
-	pr_err("-- : ndx=%d\n", vdd->ndx);
+#if defined(CONFIG_DISPLAY_SAMSUNG)
+	LCD_ERR("-- : ndx=%d\n", vdd->ndx);
 #endif
 	return rc;
 }
+
 
 int dsi_display_update_pps(char *pps_cmd, void *disp)
 {
