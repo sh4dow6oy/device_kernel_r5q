@@ -13,7 +13,6 @@ subdir-$(CONFIG_SECURITY_LOADPIN)	+= loadpin
 subdir-$(CONFIG_SECURITY_SAFESETID)    += safesetid
 subdir-$(CONFIG_SECURITY_LOCKDOWN_LSM)	+= lockdown
 subdir-$(CONFIG_BPF_LSM)		+= bpf
-subdir-$(CONFIG_ARCH_QCOM)		+= pfe
 
 # always enable default capabilities
 obj-y					+= commoncap.o
