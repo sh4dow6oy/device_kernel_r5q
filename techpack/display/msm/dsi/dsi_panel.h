@@ -223,7 +223,10 @@ struct dsi_panel {
 
 	char dsc_pps_cmd[DSI_CMD_PPS_SIZE];
 
+	/* Declarata neconditional pentru a preveni erorile de tip no member */
 	void *panel_private;
+
+#if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
 	struct device_node *self_display_of_node;
 	struct dsi_parser_utils self_display_utils;
 #if defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
