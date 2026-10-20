@@ -182,9 +182,6 @@ int inode_init_always(struct super_block *sb, struct inode *inode)
 	mapping_set_gfp_mask(mapping, GFP_HIGHUSER_MOVABLE);
 	mapping->private_data = NULL;
 	mapping->writeback_index = 0;
-#if defined(CONFIG_SDP) && !defined(CONFIG_FSCRYPT_SDP)
-	mapping->userid = 0;
-#endif
 	inode->i_private = NULL;
 	inode->i_mapping = mapping;
 	INIT_HLIST_HEAD(&inode->i_dentry);	/* buggered by rcu freeing */
@@ -1572,25 +1569,31 @@ retry:
 }
 EXPORT_SYMBOL(iput);
 
+#ifdef CONFIG_BLOCK
 /**
  *	bmap	- find a block number in a file
- *	@inode: inode of file
- *	@block: block to find
+ *	@inode:  inode owning the block number being requested
+ *	@block: pointer containing the block to find
  *
- *	Returns the block number on the device holding the inode that
- *	is the disk block number for the block of the file requested.
- *	That is, asked for block 4 of inode 1 the function will return the
- *	disk block relative to the disk start that holds that block of the
- *	file.
+ *	Replaces the value in *block with the block number on the device holding
+ *	corresponding to the requested block number in the file.
+ *	That is, asked for block 4 of inode 1 the function will replace the
+ *	4 in *block, with disk block relative to the disk start that holds that
+ *	block of the file.
+ *
+ *	Returns -EINVAL in case of error, 0 otherwise. If mapping falls into a
+ *	hole, returns 0 and *block is also set to 0.
  */
-sector_t bmap(struct inode *inode, sector_t block)
+int bmap(struct inode *inode, sector_t *block)
 {
-	sector_t res = 0;
-	if (inode->i_mapping->a_ops->bmap)
-		res = inode->i_mapping->a_ops->bmap(inode->i_mapping, block);
-	return res;
+	if (!inode->i_mapping->a_ops->bmap)
+		return -EINVAL;
+
+	*block = inode->i_mapping->a_ops->bmap(inode->i_mapping, *block);
+	return 0;
 }
 EXPORT_SYMBOL(bmap);
+#endif
 
 /*
  * Update times in overlayed inode from underlying real inode
@@ -1883,7 +1886,6 @@ int file_update_time(struct file *file)
 	struct inode *inode = file_inode(file);
 	struct timespec64 now;
 	int sync_it = 0;
-	int need_sync = 0;
 	int ret;
 
 	/* First try to exhaust all avenues to not sync */
@@ -1897,15 +1899,7 @@ int file_update_time(struct file *file)
 	if (!timespec64_equal(&inode->i_ctime, &now))
 		sync_it |= S_CTIME;
 
-	/* iversion impacts on "write" performance. This code just filter inodes
-	 * by presence in integrity cache (S_IMA flag, security/integrity/iint.c).
-	 * Because only FIVE uses iversion in Samsung Kernel this patch shouldn't
-	 * affect other code.
-	 * NOTICE: iversion code has been optimized in v4.17-rc4. So this patch should be
-	 * removed since v4.17-rc4
-	 */
-	need_sync = IS_I_VERSION(inode);
-	if (need_sync)
+	if (IS_I_VERSION(inode))
 		sync_it |= S_VERSION;
 
 	if (!sync_it)
