@@ -1666,9 +1666,6 @@ struct dentry *__d_alloc(struct super_block *sb, const struct qstr *name)
 			if (dname_external(dentry))
 				kfree(external_name(dentry));
 			kmem_cache_free(dentry_cache, dentry);
-			if (!strncmp(dname, "sync_file", strlen("sync_file")))
-				pr_err("%s: dentry->d_op->d_init failed: %d\n",
-					__func__, err);
 			return NULL;
 		}
 	}
@@ -3669,13 +3666,11 @@ void __init vfs_caches_init_early(void)
 {
 	int i;
 
-	set_memsize_kernel_type(MEMSIZE_KERNEL_VFSHASH);
 	for (i = 0; i < ARRAY_SIZE(in_lookup_hashtable); i++)
 		INIT_HLIST_BL_HEAD(&in_lookup_hashtable[i]);
 
 	dcache_init_early();
 	inode_init_early();
-	set_memsize_kernel_type(MEMSIZE_KERNEL_OTHERS);
 }
 
 void __init vfs_caches_init(void)
