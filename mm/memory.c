@@ -71,6 +71,8 @@
 #include <linux/dax.h>
 #include <linux/oom.h>
 
+#include <trace/events/kmem.h>
+
 #include <asm/io.h>
 #include <asm/mmu_context.h>
 #include <asm/pgalloc.h>
@@ -151,6 +153,22 @@ static int __init init_zero_pfn(void)
 }
 early_initcall(init_zero_pfn);
 
+/*
+ * Only trace rss_stat when there is a 512kb cross over.
+ * Smaller changes may be lost unless every small change is
+ * crossing into or returning to a 512kb boundary.
+ */
+#define TRACE_MM_COUNTER_THRESHOLD 128
+
+void mm_trace_rss_stat(struct mm_struct *mm, int member, long count,
+		       long value)
+{
+	long thresh_mask = ~(TRACE_MM_COUNTER_THRESHOLD - 1);
+
+	/* Threshold roll-over, trace it */
+	if ((count & thresh_mask) != ((count - value) & thresh_mask))
+		trace_rss_stat(mm, member, count);
+}
 
 #if defined(SPLIT_RSS_COUNTING)
 
@@ -1574,15 +1592,10 @@ static int insert_pfn(struct vm_area_struct *vma, unsigned long addr,
 			 * in may not match the PFN we have mapped if the
 			 * mapped PFN is a writeable COW page.  In the mkwrite
 			 * case we are creating a writable PTE for a shared
-			 * mapping and we expect the PFNs to match. If they
-			 * don't match, we are likely racing with block
-			 * allocation and mapping invalidation so just skip the
-			 * update.
+			 * mapping and we expect the PFNs to match.
 			 */
-			if (pte_pfn(*pte) != pfn_t_to_pfn(pfn)) {
-				WARN_ON_ONCE(!is_zero_pfn(pte_pfn(*pte)));
+			if (WARN_ON_ONCE(pte_pfn(*pte) != pfn_t_to_pfn(pfn)))
 				goto out_unlock;
-			}
 			entry = pte_mkyoung(*pte);
 			entry = maybe_mkwrite(pte_mkdirty(entry), vma);
 			if (ptep_set_access_flags(vma, addr, pte, entry, 1))
@@ -2725,16 +2738,21 @@ int do_swap_page(struct vm_fault *vmf)
 	struct vm_area_struct *vma = vmf->vma;
 	struct page *page = NULL, *swapcache;
 	struct mem_cgroup *memcg;
+	struct vma_swap_readahead swap_ra;
 	swp_entry_t entry;
-	struct swap_info_struct *si;
-	bool skip_swapcache = false;
 	pte_t pte;
 	int locked;
 	int exclusive = 0;
 	int ret = 0;
+	bool vma_readahead = swap_use_vma_readahead();
 
-	if (!pte_unmap_same(vma->vm_mm, vmf->pmd, vmf->pte, vmf->orig_pte))
+	if (vma_readahead)
+		page = swap_readahead_detect(vmf, &swap_ra);
+	if (!pte_unmap_same(vma->vm_mm, vmf->pmd, vmf->pte, vmf->orig_pte)) {
+		if (page)
+			put_page(page);
 		goto out;
+	}
 
 	entry = pte_to_swp_entry(vmf->orig_pte);
 	if (unlikely(non_swap_entry(entry))) {
@@ -2757,42 +2775,17 @@ int do_swap_page(struct vm_fault *vmf)
 		}
 		goto out;
 	}
-
-
 	delayacct_set_flag(DELAYACCT_PF_SWAPIN);
-
-	/*
-	 * lookup_swap_cache below can fail and before the SWP_SYNCHRONOUS_IO
-	 * check is made, another process can populate the swapcache, delete
-	 * the swap entry and decrement the swap count. So decide on taking
-	 * the SWP_SYNCHRONOUS_IO path before the lookup. In the event of the
-	 * race described, the victim process will find a swap_count > 1
-	 * and can then take the readahead path instead of SWP_SYNCHRONOUS_IO.
-	 */
-	si = swp_swap_info(entry);
-	if (si->flags & SWP_SYNCHRONOUS_IO && __swap_count(si, entry) == 1)
-		skip_swapcache = true;
-
-	page = lookup_swap_cache(entry, vma, vmf->address);
-	swapcache = page;
-
+	if (!page)
+		page = lookup_swap_cache(entry, vma_readahead ? vma : NULL,
+					 vmf->address);
 	if (!page) {
-		if (skip_swapcache) {
-			page = alloc_page_vma(GFP_HIGHUSER_MOVABLE, vma,
-							vmf->address);
-			if (page) {
-				__SetPageLocked(page);
-				__SetPageSwapBacked(page);
-				set_page_private(page, entry.val);
-				lru_cache_add_anon(page);
-				swap_readpage(page, true);
-			}
-		} else {
-			page = swapin_readahead(entry, GFP_HIGHUSER_MOVABLE,
-						vmf);
-			swapcache = page;
-		}
-
+		if (vma_readahead)
+			page = do_swap_page_readahead(entry,
+				GFP_HIGHUSER_MOVABLE, vmf, &swap_ra);
+		else
+			page = swapin_readahead(entry,
+				GFP_HIGHUSER_MOVABLE, vma, vmf->address);
 		if (!page) {
 			/*
 			 * Back out if somebody else faulted in this pte
@@ -2817,9 +2810,11 @@ int do_swap_page(struct vm_fault *vmf)
 		 */
 		ret = VM_FAULT_HWPOISON;
 		delayacct_clear_flag(DELAYACCT_PF_SWAPIN);
+		swapcache = page;
 		goto out_release;
 	}
 
+	swapcache = page;
 	locked = lock_page_or_retry(page, vma->vm_mm, vmf->flags);
 
 	delayacct_clear_flag(DELAYACCT_PF_SWAPIN);
@@ -2834,8 +2829,7 @@ int do_swap_page(struct vm_fault *vmf)
 	 * test below, are not enough to exclude that.  Even if it is still
 	 * swapcache, we need to check that the page's swap has not changed.
 	 */
-	if (unlikely((!PageSwapCache(page) ||
-			page_private(page) != entry.val)) && swapcache)
+	if (unlikely(!PageSwapCache(page) || page_private(page) != entry.val))
 		goto out_page;
 
 	page = ksm_might_need_to_copy(page, vma, vmf->address);
@@ -2888,16 +2882,14 @@ int do_swap_page(struct vm_fault *vmf)
 		pte = pte_mksoft_dirty(pte);
 	set_pte_at(vma->vm_mm, vmf->address, vmf->pte, pte);
 	vmf->orig_pte = pte;
-
-	/* ksm created a completely new copy */
-	if (unlikely(page != swapcache && swapcache)) {
-		page_add_new_anon_rmap(page, vma, vmf->address, false);
-		mem_cgroup_commit_charge(page, memcg, false, false);
-		lru_cache_add_active_or_unevictable(page, vma);
-	} else {
+	if (page == swapcache) {
 		do_page_add_anon_rmap(page, vma, vmf->address, exclusive);
 		mem_cgroup_commit_charge(page, memcg, true, false);
 		activate_page(page);
+	} else { /* ksm created a completely new copy */
+		page_add_new_anon_rmap(page, vma, vmf->address, false);
+		mem_cgroup_commit_charge(page, memcg, false, false);
+		lru_cache_add_active_or_unevictable(page, vma);
 	}
 
 	swap_free(entry);
@@ -2905,7 +2897,7 @@ int do_swap_page(struct vm_fault *vmf)
 	    (vma->vm_flags & VM_LOCKED) || PageMlocked(page))
 		try_to_free_swap(page);
 	unlock_page(page);
-	if (page != swapcache && swapcache) {
+	if (page != swapcache) {
 		/*
 		 * Hold the lock to avoid the swap entry to be reused
 		 * until we take the PT lock for the pte_same() check
@@ -2930,7 +2922,7 @@ int do_swap_page(struct vm_fault *vmf)
 unlock:
 	pte_unmap_unlock(vmf->pte, vmf->ptl);
 out:
-	return ret;
+	return ret | VM_FAULT_SWAP;
 out_nomap:
 	mem_cgroup_cancel_charge(page, memcg, false);
 	pte_unmap_unlock(vmf->pte, vmf->ptl);
@@ -2938,11 +2930,11 @@ out_page:
 	unlock_page(page);
 out_release:
 	put_page(page);
-	if (page != swapcache && swapcache) {
+	if (page != swapcache) {
 		unlock_page(swapcache);
 		put_page(swapcache);
 	}
-	return ret;
+	return ret | VM_FAULT_SWAP;
 }
 
 /*
@@ -4032,7 +4024,7 @@ int handle_mm_fault(struct vm_area_struct *vma, unsigned long address,
 	 * space.  Kernel faults are handled more gracefully.
 	 */
 	if (flags & FAULT_FLAG_USER)
-		mem_cgroup_enter_user_fault();
+		mem_cgroup_oom_enable();
 
 	if (unlikely(is_vm_hugetlb_page(vma)))
 		ret = hugetlb_fault(vma->vm_mm, vma, address, flags);
@@ -4040,7 +4032,7 @@ int handle_mm_fault(struct vm_area_struct *vma, unsigned long address,
 		ret = __handle_mm_fault(vma, address, flags);
 
 	if (flags & FAULT_FLAG_USER) {
-		mem_cgroup_exit_user_fault();
+		mem_cgroup_oom_disable();
 		/*
 		 * The task may have entered a memcg OOM situation but
 		 * if the allocation error was handled gracefully (no
