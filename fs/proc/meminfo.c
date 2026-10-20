@@ -52,7 +52,6 @@ static int meminfo_proc_show(struct seq_file *m, void *v)
 	unsigned long pages[NR_LRU_LISTS];
 	unsigned long sreclaimable, sunreclaim;
 	int lru;
-	long rbinfree;
 
 	si_meminfo(&i);
 	si_swapinfo(&i);
@@ -60,9 +59,6 @@ static int meminfo_proc_show(struct seq_file *m, void *v)
 
 	cached = global_node_page_state(NR_FILE_PAGES) -
 			total_swapcache_pages() - i.bufferram;
-#ifdef CONFIG_ION_RBIN_HEAP
-	cached += atomic_read(&rbin_cached_pages);
-#endif
 	if (cached < 0)
 		cached = 0;
 
@@ -72,11 +68,10 @@ static int meminfo_proc_show(struct seq_file *m, void *v)
 	available = si_mem_available();
 	sreclaimable = global_node_page_state(NR_SLAB_RECLAIMABLE);
 	sunreclaim = global_node_page_state(NR_SLAB_UNRECLAIMABLE);
-	rbinfree = global_zone_page_state(NR_FREE_RBIN_PAGES);
 
 	show_val_kb(m, "MemTotal:       ", i.totalram);
-	show_val_kb(m, "MemFree:        ", i.freeram + rbinfree);
-	show_val_kb(m, "MemAvailable:   ", available + rbinfree);
+	show_val_kb(m, "MemFree:        ", i.freeram);
+	show_val_kb(m, "MemAvailable:   ", available);
 	show_val_kb(m, "Buffers:        ", i.bufferram);
 	show_val_kb(m, "Cached:         ", cached);
 	show_val_kb(m, "SwapCached:     ", total_swapcache_pages());
@@ -103,19 +98,6 @@ static int meminfo_proc_show(struct seq_file *m, void *v)
 		    (unsigned long)atomic_long_read(&mmap_pages_allocated));
 #endif
 
-#ifdef CONFIG_ION_RBIN_HEAP
-	show_val_kb(m, "RbinTotal:       ", totalrbin_pages);
-	show_val_kb(m, "RbinAlloced:       ",
-		    atomic_read(&rbin_allocated_pages)
-		    + atomic_read(&rbin_pool_pages));
-	show_val_kb(m, "RbinPool:       ", atomic_read(&rbin_pool_pages));
-	show_val_kb(m, "RbinFree:        ", rbinfree);
-	show_val_kb(m, "RbinCached:       ",
-		    atomic_read(&rbin_cached_pages));
-#endif
-#ifdef CONFIG_KZEROD
-	show_val_kb(m, "ZeroedFree:     ", kzerod_get_zeroed_size());
-#endif
 	show_val_kb(m, "SwapTotal:      ", i.totalswap);
 	show_val_kb(m, "SwapFree:       ", i.freeswap);
 	show_val_kb(m, "Dirty:          ",
@@ -148,6 +130,10 @@ static int meminfo_proc_show(struct seq_file *m, void *v)
 		    global_node_page_state(NR_UNSTABLE_NFS));
 	show_val_kb(m, "Bounce:         ",
 		    global_zone_page_state(NR_BOUNCE));
+	show_val_kb(m, "ION_heap:       ",
+		    global_node_page_state(NR_ION_HEAP));
+	show_val_kb(m, "ION_heap_pool:  ",
+		    global_node_page_state(NR_ION_HEAP_POOL));
 	show_val_kb(m, "WritebackTmp:   ",
 		    global_node_page_state(NR_WRITEBACK_TEMP));
 	show_val_kb(m, "CommitLimit:    ", vm_commit_limit());
