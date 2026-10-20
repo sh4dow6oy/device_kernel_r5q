@@ -32,7 +32,6 @@ obj-$(CONFIG_SECURITY_SAFESETID)       += safesetid/
 obj-$(CONFIG_SECURITY_LOCKDOWN_LSM)	+= lockdown/
 obj-$(CONFIG_CGROUP_DEVICE)		+= device_cgroup.o
 obj-$(CONFIG_BPF_LSM)			+= bpf/
-obj-$(CONFIG_ARCH_QCOM)			+= pfe/
 
 # Object integrity file lists
 subdir-$(CONFIG_INTEGRITY)		+= integrity
