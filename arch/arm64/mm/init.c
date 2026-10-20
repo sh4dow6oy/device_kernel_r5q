@@ -332,16 +332,7 @@ static void __init update_memory_limit(void)
 	phys_addr_t min_ddr_sz = 0, offline_sz = 0;
 	int t_len = (2 * dt_root_size_cells) * sizeof(__be32);
 
-	if (memory_limit == (phys_addr_t)ULLONG_MAX)
-		ram_sz = memblock_phys_mem_size();
-	else if (IS_ALIGNED(memory_limit, MIN_MEMORY_BLOCK_SIZE))
-		ram_sz = memory_limit;
-	else {
-		WARN(1, "mem-offline is not supported for DDR size %lld\n",
-				memory_limit);
-		return;
-	}
-
+	ram_sz = memblock_phys_mem_size();
 	node = of_get_flat_dt_subnode_by_name(dt_root, "mem-offline");
 	if (node == -FDT_ERR_NOTFOUND) {
 		pr_err("mem-offine node not found in FDT\n");
@@ -461,8 +452,6 @@ void __init arm64_memblock_init(void)
 {
 	const s64 linear_region_size = -(s64)PAGE_OFFSET;
 
-	set_memsize_kernel_type(MEMSIZE_KERNEL_STOP);
-
 	/* Handle linux,usable-memory-range property */
 	fdt_enforce_memory_region();
 
@@ -493,15 +482,12 @@ void __init arm64_memblock_init(void)
 		memblock_remove(0, memstart_addr);
 	}
 
+	update_memory_limit();
 	/*
 	 * Save bootloader imposed memory limit before we overwirte
 	 * memblock.
 	 */
-	bootloader_memory_limit = memblock_max_addr(memory_limit);
-	if (bootloader_memory_limit > memblock_end_of_DRAM())
-		bootloader_memory_limit = memblock_end_of_DRAM();
-
-	update_memory_limit();
+	bootloader_memory_limit = memblock_end_of_DRAM();
 
 	/*
 	 * Apply the memory limit if it was set. Since the kernel may be loaded
@@ -563,17 +549,10 @@ void __init arm64_memblock_init(void)
 	 * Register the kernel text, kernel data, initrd, and initial
 	 * pagetables with memblock.
 	 */
-	set_memsize_kernel_type(MEMSIZE_KERNEL_KERNEL);
 	memblock_reserve(__pa_symbol(_text), _end - _text);
-	set_memsize_kernel_type(MEMSIZE_KERNEL_STOP);
-	record_memsize_reserved("initmem", __pa(__init_begin),
-				__init_end - __init_begin, false, false);
 #ifdef CONFIG_BLK_DEV_INITRD
 	if (initrd_start) {
 		memblock_reserve(initrd_start, initrd_end - initrd_start);
-		record_memsize_reserved("initrd", initrd_start,
-					initrd_end - initrd_start, false,
-					false);
 
 		/* the generic initrd code expects virtual addresses */
 		initrd_start = __phys_to_virt(initrd_start);
@@ -596,7 +575,6 @@ void __init arm64_memblock_init(void)
 	high_memory = __va(memblock_end_of_DRAM() - 1) + 1;
 
 	dma_contiguous_reserve(arm64_dma_phys_limit);
-	set_memsize_kernel_type(MEMSIZE_KERNEL_OTHERS);
 
 	memblock_allow_resize();
 }
@@ -605,7 +583,6 @@ void __init bootmem_init(void)
 {
 	unsigned long min, max;
 
-	set_memsize_kernel_type(MEMSIZE_KERNEL_PAGING);
 	min = PFN_UP(memblock_start_of_DRAM());
 	max = PFN_DOWN(memblock_end_of_DRAM());
 
@@ -624,7 +601,6 @@ void __init bootmem_init(void)
 	zone_sizes_init(min, max);
 
 	memblock_dump_all();
-	set_memsize_kernel_type(MEMSIZE_KERNEL_OTHERS);
 }
 
 #ifndef CONFIG_SPARSEMEM_VMEMMAP
