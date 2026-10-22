@@ -13,12 +13,12 @@
  * Buffermem limits added 12.3.98, Rik van Riel.
  */
 
+#include <linux/pagemap.h>
 #include <linux/mm.h>
 #include <linux/sched.h>
 #include <linux/kernel_stat.h>
 #include <linux/swap.h>
 #include <linux/mman.h>
-#include <linux/pagemap.h>
 #include <linux/pagevec.h>
 #include <linux/init.h>
 #include <linux/export.h>
