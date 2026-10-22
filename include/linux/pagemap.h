@@ -5,7 +5,6 @@
 /*
  * Copyright 1995 Linus Torvalds
  */
-#include <linux/sched.h>
 #include <linux/mm.h>
 #include <linux/fs.h>
 #include <linux/list.h>
@@ -118,23 +117,6 @@ static inline gfp_t mapping_gfp_constraint(struct address_space *mapping,
 static inline void mapping_set_gfp_mask(struct address_space *m, gfp_t mask)
 {
 	m->gfp_mask = mask;
-}
-
-static inline void mapping_set_sensitive(struct address_space *mapping)
-{
-    set_bit(AS_SENSITIVE, &mapping->flags);
-}
-
-static inline void mapping_clear_sensitive(struct address_space *mapping)
-{
-    clear_bit(AS_SENSITIVE, &mapping->flags);
-}
-
-static inline int mapping_sensitive(struct address_space *mapping)
-{
-    if (mapping)
-        return test_bit(AS_SENSITIVE, &mapping->flags);
-    return !!mapping;
 }
 
 void release_pages(struct page **pages, int nr, bool cold);
