@@ -5,6 +5,7 @@
 /*
  * Copyright 1995 Linus Torvalds
  */
+#include <linux/sched.h>
 #include <linux/mm.h>
 #include <linux/fs.h>
 #include <linux/list.h>
@@ -27,8 +28,10 @@ enum mapping_flags {
 	AS_EXITING	= 4, 	/* final truncate in progress */
 	/* writeback related tags are not used */
 	AS_NO_WRITEBACK_TAGS = 5,
+#if defined(CONFIG_SDP)
+	AS_SENSITIVE = __GFP_BITS_SHIFT + 5, /* Group of sensitive pages to be cleaned up */
+#endif
 };
-
 /**
  * mapping_set_error - record a writeback error in the address_space
  * @mapping - the mapping in which an error should be set
@@ -119,7 +122,26 @@ static inline void mapping_set_gfp_mask(struct address_space *m, gfp_t mask)
 	m->gfp_mask = mask;
 }
 
-void release_pages(struct page **pages, int nr, bool cold);
+#if defined(CONFIG_SDP)
+static inline void mapping_set_sensitive(struct address_space *mapping)
+{
+	set_bit(AS_SENSITIVE, &mapping->flags);
+}
+
+static inline void mapping_clear_sensitive(struct address_space *mapping)
+{
+	clear_bit(AS_SENSITIVE, &mapping->flags);
+}
+
+static inline int mapping_sensitive(struct address_space *mapping)
+{
+	if (mapping)
+		return test_bit(AS_SENSITIVE, &mapping->flags);
+	return !!mapping;
+}
+#endif
+
+void release_pages(struct page **pages, int nr);
 
 /*
  * speculatively take a reference to a page.
