@@ -120,7 +120,6 @@ static inline void mapping_set_gfp_mask(struct address_space *m, gfp_t mask)
 	m->gfp_mask = mask;
 }
 
-#if defined(CONFIG_SDP)
 static inline void mapping_set_sensitive(struct address_space *mapping)
 {
     set_bit(AS_SENSITIVE, &mapping->flags);
