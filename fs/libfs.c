@@ -1248,7 +1248,7 @@ bool is_empty_dir_inode(struct inode *inode)
 #ifdef CONFIG_FSCRYPT_SDP
 static int fscrypt_sdp_d_delete(const struct dentry *dentry)
 {
-	return fscrypt_sdp_d_delete_wrapper(dentry);
+	return fscrypt_sdp_d_delete(dentry);
 }
 
 static const struct dentry_operations sdp_dentry_ops = {
