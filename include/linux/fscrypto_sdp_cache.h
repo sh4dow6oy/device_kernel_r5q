@@ -18,8 +18,6 @@
 #ifndef _FSCRYPTO_SDP_CACHE_H
 #define _FSCRYPTO_SDP_CACHE_H
 
-#ifdef CONFIG_FSCRYPT_SDP
-
 #include <linux/fs.h>
 
 int fscrypt_sdp_cache_init(void);
@@ -34,6 +32,5 @@ bool fscrypt_sdp_is_cache_releasable(struct inode *inode);
 bool fscrypt_sdp_is_locked_sensitive_inode(struct inode *inode);
 int fscrypt_sdp_d_delete_wrapper(const struct dentry *dentry);
 void fscrypt_sdp_drop_inode(struct inode *inode);
-#endif
 
 #endif	/* _FSCRYPTO_SDP_CACHE_H */
