@@ -2884,12 +2884,14 @@ extern struct sched_cluster *rq_cluster(struct rq *rq);
 extern void reset_task_stats(struct task_struct *p);
 extern void clear_top_tasks_bitmap(unsigned long *bitmap);
 
+#if defined(CONFIG_SCHED_TUNE)
 extern bool task_sched_boost(struct task_struct *p);
 extern int sync_cgroup_colocation(struct task_struct *p, bool insert);
 extern bool schedtune_task_colocated(struct task_struct *p);
 extern void update_cgroup_boost_settings(void);
 extern void restore_cgroup_boost_settings(void);
 
+#else
 static inline bool schedtune_task_colocated(struct task_struct *p)
 {
 	return false;
@@ -2902,6 +2904,7 @@ static inline bool task_sched_boost(struct task_struct *p)
 
 static inline void update_cgroup_boost_settings(void) { }
 static inline void restore_cgroup_boost_settings(void) { }
+#endif
 
 extern int alloc_related_thread_groups(void);
 
