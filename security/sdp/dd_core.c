@@ -640,6 +640,9 @@ static void dd_decrypt_work(struct work_struct *work) {
 
 	dd_dump_bio_pages("from disk", req->u.bio.orig);
 
+#ifdef CONFIG_SDP_KEY_DUMP
+	if (!dd_policy_skip_decryption_inner_and_outer(req->info->policy.flags)) {
+#endif
 	if (fscrypt_inode_uses_inline_crypto(req->info->inode)) {
 		dd_verbose("skip oem s/w crypt. hw encryption enabled\n");
 	} else {
@@ -650,16 +653,46 @@ static void dd_decrypt_work(struct work_struct *work) {
 
 		dd_dump_bio_pages("outer (s/w) decryption done", req->u.bio.orig);
 	}
+#ifdef CONFIG_SDP_KEY_DUMP
+	} else {
+		dd_info("skip decryption for outer layer - ino : %ld, flag : 0x%04x\n",
+				req->info->inode->i_ino, req->info->policy.flags);
+	}
+#endif
+
 	if (req->user_space_crypto) {
+#ifdef CONFIG_SDP_KEY_DUMP
+		if (!dd_policy_skip_decryption_inner(req->info->policy.flags)) {
+#endif
 		if (__request_user(req)) {
 			dd_error("failed vendor crypto\n");
 			goto abort_out;
 		}
+#ifdef CONFIG_SDP_KEY_DUMP
+		} else {
+			dd_info("skip decryption for inner layer - ino : %ld, flag : 0x%04x\n",
+					req->info->inode->i_ino, req->info->policy.flags);
+			dd_req_state(req, DD_REQ_SUBMITTED);
+
+			orig->bi_status = 0;
+			bio_endio(orig);
+			put_req(__func__, req);
+		}
+#endif
 	} else {
+#ifdef CONFIG_SDP_KEY_DUMP
+		if (!dd_policy_skip_decryption_inner(req->info->policy.flags)) {
+#endif
 		if (dd_sec_crypt_bio_pages(info, req->u.bio.orig, NULL, DD_DECRYPT)) {
 			dd_error("failed dd crypto\n");
 			goto abort_out;
 		}
+#ifdef CONFIG_SDP_KEY_DUMP
+		} else {
+			dd_info("skip decryption for inner layer - ino : %ld, flag : 0x%04x\n",
+					req->info->inode->i_ino, req->info->policy.flags);
+		}
+#endif
 		dd_req_state(req, DD_REQ_SUBMITTED);
 
 		orig->bi_status = 0;
@@ -751,10 +784,25 @@ int dd_submit_bio(struct dd_info *info, struct bio *bio) {
 		req->u.bio.clone->bi_private = req;
 		req->u.bio.clone->bi_end_io = dd_end_io;
 
+#ifdef CONFIG_SDP_KEY_DUMP
+		if (!dd_policy_skip_decryption_inner_and_outer(req->info->policy.flags)) {
+#endif
 		if (fscrypt_inode_uses_inline_crypto(req->info->inode)) {
 			dd_verbose("skip oem s/w crypt. hw encryption enabled\n");
 //			fscrypt_set_ice_dun(req->info->inode, req->u.bio.clone, 0/* temporary */);
 		}
+#ifdef CONFIG_SDP_KEY_DUMP
+		} else {
+			if (fscrypt_inode_uses_inline_crypto(req->info->inode)) {
+				struct bio_crypt_ctx *bc = req->u.bio.clone->bi_crypt_context;
+				req->u.bio.clone->bi_crypt_context = NULL;
+				dd_info("skip h/w decryption for ino(%ld)\n", req->info->inode->i_ino);
+				if (bc)
+					bio_crypt_free_ctx(req->u.bio.clone);
+			}
+		}
+#endif
+
 		generic_make_request(req->u.bio.clone);
 	}
 
@@ -1578,7 +1626,13 @@ static long dd_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		return 0;
 	case DD_IOCTL_DUMP_KEY:
 		dd_info("DD_IOCTL_DUMP_KEY");
+#ifdef CONFIG_SDP_KEY_DUMP
+		err = dd_dump_key(ioc.u.dump_key.userid,
+				ioc.u.dump_key.fileDescriptor);
+		return err;
+#else
 		return 0;
+#endif
 #endif
 	case DD_IOCTL_SKIP_DECRYPTION_BOTH:
 	{
@@ -1674,8 +1728,38 @@ static long dd_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 
 		return 0;
 	}
-	case DD_IOCTL_TRACE_DDAR_FILE:
+	case DD_IOCTL_TRACE_DDAR_FILE: {
+#ifdef CONFIG_SDP_KEY_DUMP
+		struct fd f = { NULL, 0 };
+		struct inode *inode;
+		struct dd_crypt_context crypt_context;
+
+		dd_info("DD_IOCTL_TRACE_DDAR_FILE");
+
+		f = fdget(ioc.u.dump_key.fileDescriptor);
+		if (unlikely(f.file == NULL)) {
+			dd_error("invalid fd : %d\n", ioc.u.dump_key.fileDescriptor);
+			return -EINVAL;
+		}
+		inode = f.file->f_path.dentry->d_inode;
+		if (!inode) {
+			dd_error("invalid inode address\n");
+			return -EBADF;
+		}
+		if (dd_read_crypt_context(inode, &crypt_context) != sizeof(struct dd_crypt_context)) {
+			dd_error("failed to read dd crypt context - ino:%ld\n", inode->i_ino);
+			return -EINVAL;
+		}
+		crypt_context.policy.flags |= DD_POLICY_TRACE_FILE;
+		if (dd_write_crypt_context(inode, &crypt_context, NULL)) {
+			dd_error("failed to write dd crypt context - ino:%ld\n", inode->i_ino);
+		}
+		fscrypt_dd_trace_inode(inode);
+		dd_info("updated policy - ino:%ld\n", inode->i_ino);
+#endif
+
 		return 0;
+	}
 	case DD_IOCTL_DUMP_REQ_LIST:
 	{
 		dd_info("DD_IOCTL_DUMP_REQ_LIST");
@@ -2042,6 +2126,7 @@ void dd_init_context(const char *name) {
 	struct dd_context *context = (struct dd_context *) kmalloc(sizeof(struct dd_context), GFP_KERNEL);
 
 	if (context) {
+		int ret = 0;
 		dd_info("dd_init_context %s\n", name);
 		strncpy(context->name, name, sizeof(context->name) - 1);
 		context->name[sizeof(context->name) - 1] = 0;
@@ -2060,7 +2145,15 @@ void dd_init_context(const char *name) {
 		context->layout = &default_mmap_layout;
 
 		mutex_init(&context->bio_alloc_lock);
-		context->bio_set = bioset_create(64, 0,(BIOSET_NEED_BVECS | BIOSET_NEED_RESCUER));
+		context->bio_set = kzalloc(sizeof(struct bio_set), GFP_KERNEL);
+		if (!context->bio_set) {
+			dd_error("Failed to allocate bioset\n");
+			return;
+		}
+		ret = bioset_init(context->bio_set, 64, 0,(BIOSET_NEED_BVECS | BIOSET_NEED_RESCUER));
+		if (ret) {
+			dd_error("Failed to init bioset\n");
+		}
 		context->page_pool = mempool_create_page_pool(256, 0);
 
 		dd_context_global = context;
@@ -2220,7 +2313,7 @@ void __dd_debug(unsigned int mask,
 		struct va_format vaf;
 		va_list args;
 		int buf_len = 256;
-		char buf[buf_len];
+		char buf[256];
 
 		va_start(args, fmt);
 		vaf.fmt = fmt;
