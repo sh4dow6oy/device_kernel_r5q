@@ -58,9 +58,9 @@ struct dsi_display_boot_param boot_displays[MAX_DSI_ACTIVE_DISPLAY] = {
 	{.boot_param = dsi_display_secondary},
 };
 #else
-static char dsi_display_primary[MAX_CMDLINE_PARAM_LEN];
-static char dsi_display_secondary[MAX_CMDLINE_PARAM_LEN];
-static struct dsi_display_boot_param boot_displays[MAX_DSI_ACTIVE_DISPLAY] = {
+char dsi_display_primary[MAX_CMDLINE_PARAM_LEN];
+char dsi_display_secondary[MAX_CMDLINE_PARAM_LEN];
+struct dsi_display_boot_param boot_displays[MAX_DSI_ACTIVE_DISPLAY] = {
 	{.boot_param = dsi_display_primary},
 	{.boot_param = dsi_display_secondary},
 };
