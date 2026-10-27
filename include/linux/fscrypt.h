@@ -45,7 +45,11 @@ struct fscrypt_name {
 #define fname_len(p)		((p)->disk_name.len)
 
 /* Maximum value for the third parameter of fscrypt_operations.set_context(). */
+#if defined(CONFIG_FSCRYPT_SDP) || defined(CONFIG_DDAR)
+#define FSCRYPT_SET_CONTEXT_MAX_SIZE	44
+#else
 #define FSCRYPT_SET_CONTEXT_MAX_SIZE	40
+#endif
 
 #ifdef CONFIG_FS_ENCRYPTION
 /*
@@ -59,6 +63,10 @@ struct fscrypt_name {
 struct fscrypt_operations {
 	unsigned int flags;
 	const char *key_prefix;
+#if defined(CONFIG_DDAR) || defined(CONFIG_FSCRYPT_SDP)
+	int (*get_knox_context)(struct inode *, const char *, void *, size_t);
+	int (*set_knox_context)(struct inode *, const char *, const void *, size_t, void *);
+#endif
 	int (*get_context)(struct inode *inode, void *ctx, size_t len);
 	int (*set_context)(struct inode *inode, const void *ctx, size_t len,
 			   void *fs_data);
@@ -69,6 +77,10 @@ struct fscrypt_operations {
 	bool (*has_stable_inodes)(struct super_block *sb);
 	void (*get_ino_and_lblk_bits)(struct super_block *sb,
 				      int *ino_bits_ret, int *lblk_bits_ret);
+	bool (*inline_crypt_enabled)(struct super_block *sb);
+	int (*get_num_devices)(struct super_block *sb);
+	void (*get_devices)(struct super_block *sb,
+			    struct request_queue **devs);
 };
 
 static inline bool fscrypt_has_encryption_key(const struct inode *inode)
@@ -113,6 +125,35 @@ static inline void fscrypt_handle_d_move(struct dentry *dentry)
 	dentry->d_flags &= ~DCACHE_NOKEY_NAME;
 }
 
+/**
+ * fscrypt_is_nokey_name() - test whether a dentry is a no-key name
+ * @dentry: the dentry to check
+ *
+ * This returns true if the dentry is a no-key dentry.  A no-key dentry is a
+ * dentry that was created in an encrypted directory that hasn't had its
+ * encryption key added yet.  Such dentries may be either positive or negative.
+ *
+ * When a filesystem is asked to create a new filename in an encrypted directory
+ * and the new filename's dentry is a no-key dentry, it must fail the operation
+ * with ENOKEY.  This includes ->create(), ->mkdir(), ->mknod(), ->symlink(),
+ * ->rename(), and ->link().  (However, ->rename() and ->link() are already
+ * handled by fscrypt_prepare_rename() and fscrypt_prepare_link().)
+ *
+ * This is necessary because creating a filename requires the directory's
+ * encryption key, but just checking for the key on the directory inode during
+ * the final filesystem operation doesn't guarantee that the key was available
+ * during the preceding dentry lookup.  And the key must have already been
+ * available during the dentry lookup in order for it to have been checked
+ * whether the filename already exists in the directory and for the new file's
+ * dentry not to be invalidated due to it incorrectly having the no-key flag.
+ *
+ * Return: %true if the dentry is a no-key name
+ */
+static inline bool fscrypt_is_nokey_name(const struct dentry *dentry)
+{
+	return dentry->d_flags & DCACHE_NOKEY_NAME;
+}
+
 /* crypto.c */
 void fscrypt_enqueue_decrypt_work(struct work_struct *);
 
@@ -141,6 +182,7 @@ static inline struct page *fscrypt_pagecache_page(struct page *bounce_page)
 }
 
 void fscrypt_free_bounce_page(struct page *bounce_page);
+int fscrypt_d_revalidate(struct dentry *dentry, unsigned int flags);
 
 /* policy.c */
 int fscrypt_ioctl_set_policy(struct file *filp, const void __user *arg);
@@ -181,6 +223,17 @@ int fscrypt_get_encryption_info(struct inode *inode);
 void fscrypt_put_encryption_info(struct inode *inode);
 void fscrypt_free_inode(struct inode *inode);
 int fscrypt_drop_inode(struct inode *inode);
+#ifdef CONFIG_FSCRYPT_SDP
+extern int fscrypt_get_encryption_key(
+						struct fscrypt_info *crypt_info,
+						struct fscrypt_key *key);
+extern int fscrypt_get_encryption_key_classified(
+						struct fscrypt_info *crypt_info,
+						struct fscrypt_key *key);
+extern int fscrypt_get_encryption_kek(
+						struct fscrypt_info *crypt_info,
+						struct fscrypt_key *kek);
+#endif
 
 /* fname.c */
 int fscrypt_setup_filename(struct inode *inode, const struct qstr *iname,
@@ -227,6 +280,22 @@ int __fscrypt_encrypt_symlink(struct inode *inode, const char *target,
 const char *fscrypt_get_symlink(struct inode *inode, const void *caddr,
 				unsigned int max_size,
 				struct delayed_call *done);
+int fscrypt_symlink_getattr(const struct path *path, struct kstat *stat);
+
+#ifdef CONFIG_DDAR
+extern int fscrypt_dd_decrypt_page(struct inode *inode, struct page *page);
+extern int fscrypt_dd_encrypted(struct bio *bio);
+extern int fscrypt_dd_encrypted_inode(const struct inode *inode);
+extern int fscrypt_dd_is_traced_inode(const struct inode *inode);
+extern void fscrypt_dd_trace_inode(const struct inode *inode);
+extern long fscrypt_dd_get_ino(struct bio *bio);
+extern long fscrypt_dd_ioctl(unsigned int cmd, unsigned long *arg, struct inode *inode);
+extern int fscrypt_dd_submit_bio(struct inode *inode, struct bio *bio);
+extern int fscrypt_dd_may_submit_bio(struct bio *bio);
+extern struct inode *fscrypt_bio_get_inode(const struct bio *bio);
+extern bool fscrypt_dd_can_merge_bio(struct bio *bio, struct address_space *mapping);
+#endif
+
 #else  /* !CONFIG_FS_ENCRYPTION */
 
 static inline bool fscrypt_has_encryption_key(const struct inode *inode)
@@ -247,6 +316,11 @@ fscrypt_get_dummy_context(struct super_block *sb)
 
 static inline void fscrypt_handle_d_move(struct dentry *dentry)
 {
+}
+
+static inline bool fscrypt_is_nokey_name(const struct dentry *dentry)
+{
+	return false;
 }
 
 /* crypto.c */
@@ -545,7 +619,101 @@ static inline const char *fscrypt_get_symlink(struct inode *inode,
 {
 	return ERR_PTR(-EOPNOTSUPP);
 }
+
+static inline int fscrypt_symlink_getattr(const struct path *path,
+					  struct kstat *stat)
+{
+	return -EOPNOTSUPP;
+}
+
 #endif	/* !CONFIG_FS_ENCRYPTION */
+
+/* inline_crypt.c */
+#ifdef CONFIG_FS_ENCRYPTION_INLINE_CRYPT
+extern bool fscrypt_inode_uses_inline_crypto(const struct inode *inode);
+
+extern bool fscrypt_inode_uses_fs_layer_crypto(const struct inode *inode);
+
+extern void fscrypt_set_bio_crypt_ctx(struct bio *bio,
+				      const struct inode *inode,
+				      u64 first_lblk, gfp_t gfp_mask);
+
+extern void fscrypt_set_bio_crypt_ctx_bh(struct bio *bio,
+					 const struct buffer_head *first_bh,
+					 gfp_t gfp_mask);
+
+extern bool fscrypt_mergeable_bio(struct bio *bio, const struct inode *inode,
+				  u64 next_lblk);
+
+extern bool fscrypt_mergeable_bio_bh(struct bio *bio,
+				     const struct buffer_head *next_bh);
+
+bool fscrypt_dio_supported(struct kiocb *iocb, struct iov_iter *iter);
+
+int fscrypt_limit_dio_pages(const struct inode *inode, loff_t pos,
+			    int nr_pages);
+
+#else /* CONFIG_FS_ENCRYPTION_INLINE_CRYPT */
+static inline bool fscrypt_inode_uses_inline_crypto(const struct inode *inode)
+{
+	return false;
+}
+
+static inline bool fscrypt_inode_uses_fs_layer_crypto(const struct inode *inode)
+{
+	return IS_ENCRYPTED(inode) && S_ISREG(inode->i_mode);
+}
+
+static inline void fscrypt_set_bio_crypt_ctx(struct bio *bio,
+					     const struct inode *inode,
+					     u64 first_lblk, gfp_t gfp_mask) { }
+
+static inline void fscrypt_set_bio_crypt_ctx_bh(
+					 struct bio *bio,
+					 const struct buffer_head *first_bh,
+					 gfp_t gfp_mask) { }
+
+static inline bool fscrypt_mergeable_bio(struct bio *bio,
+					 const struct inode *inode,
+					 u64 next_lblk)
+{
+	return true;
+}
+
+static inline bool fscrypt_mergeable_bio_bh(struct bio *bio,
+					    const struct buffer_head *next_bh)
+{
+	return true;
+}
+
+static inline bool fscrypt_dio_supported(struct kiocb *iocb,
+					 struct iov_iter *iter)
+{
+	const struct inode *inode = file_inode(iocb->ki_filp);
+
+	return !fscrypt_needs_contents_encryption(inode);
+}
+
+static inline int fscrypt_limit_dio_pages(const struct inode *inode, loff_t pos,
+					  int nr_pages)
+{
+	return nr_pages;
+}
+#endif /* !CONFIG_FS_ENCRYPTION_INLINE_CRYPT */
+
+#if IS_ENABLED(CONFIG_FS_ENCRYPTION) && IS_ENABLED(CONFIG_DM_DEFAULT_KEY)
+static inline bool
+fscrypt_inode_should_skip_dm_default_key(const struct inode *inode)
+{
+	return IS_ENCRYPTED(inode) && S_ISREG(inode->i_mode);
+}
+#else
+static inline bool
+fscrypt_inode_should_skip_dm_default_key(const struct inode *inode)
+{
+	return false;
+}
+#endif
 
 /**
  * fscrypt_require_key() - require an inode's encryption key
@@ -761,33 +929,6 @@ static inline int fscrypt_encrypt_symlink(struct inode *inode,
 	return 0;
 }
 
-/* fscrypt_ice.c */
-#ifdef CONFIG_PFK
-extern int fscrypt_using_hardware_encryption(const struct inode *inode);
-extern void fscrypt_set_ice_dun(const struct inode *inode,
-		struct bio *bio, u64 dun);
-extern void fscrypt_set_ice_skip(struct bio *bio, int bi_crypt_skip);
-extern bool fscrypt_mergeable_bio(struct bio *bio, u64 dun, bool bio_encrypted,
-		int bi_crypt_skip);
-#else
-static inline int fscrypt_using_hardware_encryption(const struct inode *inode)
-{
-	return 0;
-}
-
-static inline void fscrypt_set_ice_dun(const struct inode *inode,
-		struct bio *bio, u64 dun){}
-
-static inline void fscrypt_set_ice_skip(struct bio *bio, int bi_crypt_skip)
-{}
-
-static inline bool fscrypt_mergeable_bio(struct bio *bio,
-		u64 dun, bool bio_encrypted, int bi_crypt_skip)
-{
-	return true;
-}
-#endif
-
 /* If *pagep is a bounce page, free it and set *pagep to the pagecache page */
 static inline void fscrypt_finalize_bounce_page(struct page **pagep)
 {
@@ -798,5 +939,4 @@ static inline void fscrypt_finalize_bounce_page(struct page **pagep)
 		fscrypt_free_bounce_page(page);
 	}
 }
-
 #endif	/* _LINUX_FSCRYPT_H */
