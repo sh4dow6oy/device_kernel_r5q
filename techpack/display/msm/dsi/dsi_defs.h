@@ -1099,7 +1099,6 @@ struct dsi_panel_cmd_set {
 	void *cmd_set_rev[SUPPORT_PANEL_REVISION];
 
 	void *self_disp_cmd_set_rev;
-#endif
 };
 
 /**
