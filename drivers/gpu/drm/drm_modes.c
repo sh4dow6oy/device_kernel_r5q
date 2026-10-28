@@ -1564,9 +1564,8 @@ void drm_mode_convert_to_umode(struct drm_mode_modeinfo *out,
  * Returns:
  * Zero on success, negative errno on failure.
  */
-int drm_mode_convert_umode(struct drm_device *dev,
-			   struct drm_display_mode *out,
-			   const struct drm_mode_modeinfo *in)
+int drm_mode_convert_umode(struct drm_display_mode *out,
+			     const struct drm_mode_modeinfo *in)
 {
 	int ret = -EINVAL;
 
