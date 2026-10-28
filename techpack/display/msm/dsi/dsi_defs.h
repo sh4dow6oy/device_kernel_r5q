@@ -1016,6 +1016,7 @@ struct dsi_host_config {
  * @panel_prefill_lines:  Panel prefill lines for RSC
  * @mdp_transfer_time_us:   Specifies the mdp transfer time for command mode
  *                          panels in microseconds.
+ * @overlap_pixels:   overlap pixels for certain panels.
  * @dsi_transfer_time_us: Specifies the dsi transfer time for cmd panels.
  * @clk_rate_hz:          DSI bit clock per lane in hz.
  * @min_dsi_clk_hz:       Min dsi clk per lane to transfer frame in vsync time.
@@ -1041,6 +1042,7 @@ struct dsi_display_mode_priv_info {
 	u32 dsi_transfer_time_us;
 	u64 clk_rate_hz;
 	u64 min_dsi_clk_hz;
+	u32 overlap_pixels;
 
 	struct msm_display_topology topology;
 	struct msm_display_dsc_info dsc;
@@ -1061,6 +1063,7 @@ struct dsi_display_mode {
 	struct dsi_mode_info timing;
 	u32 pixel_clk_khz;
 	u32 dsi_mode_flags;
+	u32 overlap_pixels;
 	enum dsi_op_mode panel_mode;
 	bool is_preferred;
 	struct dsi_display_mode_priv_info *priv_info;
