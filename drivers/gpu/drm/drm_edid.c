@@ -4689,8 +4689,7 @@ drm_hdmi_extract_vsdbs_info(struct drm_connector *connector, struct edid *edid)
 	}
 }
 
-static void drm_add_display_info(struct drm_connector *connector,
-				 struct edid *edid)
+u32 drm_add_display_info(struct drm_connector *connector, const struct edid *edid)
 {
 	struct drm_display_info *info = &connector->display_info;
 
