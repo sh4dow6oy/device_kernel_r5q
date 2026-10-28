@@ -1,14 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * Copyright (c) 2015-2020, The Linux Foundation. All rights reserved.
  */
 
 #ifndef _DSI_CTRL_HW_H_
@@ -21,6 +13,13 @@
 
 #include "dsi_defs.h"
 
+#define DSI_CTRL_HW_DBG(c, fmt, ...)	DRM_DEV_DEBUG(NULL, "[msm-dsi-debug]: DSI_%d: "\
+		fmt, c ? c->index : -1,	##__VA_ARGS__)
+#define DSI_CTRL_HW_ERR(c, fmt, ...)	DRM_DEV_ERROR(NULL, "[msm-dsi-error]: DSI_%d: "\
+		fmt, c ? c->index : -1,	##__VA_ARGS__)
+#define DSI_CTRL_HW_INFO(c, fmt, ...)	DRM_DEV_INFO(NULL, "[msm-dsi-info]: DSI_%d: "\
+		fmt, c ? c->index : -1,	##__VA_ARGS__)
+
 /**
  * Modifier flag for command transmission. If this flag is set, command
  * information is programmed to hardware and transmission is not triggered.
@@ -32,6 +31,7 @@
 /**
  * enum dsi_ctrl_version - version of the dsi host controller
  * @DSI_CTRL_VERSION_UNKNOWN: Unknown controller version
+ * @DSI_CTRL_VERSION_1_3:     DSI host v1.3 controller
  * @DSI_CTRL_VERSION_1_4:     DSI host v1.4 controller
  * @DSI_CTRL_VERSION_2_0:     DSI host v2.0 controller
  * @DSI_CTRL_VERSION_2_2:     DSI host v2.2 controller
@@ -41,6 +41,7 @@
  */
 enum dsi_ctrl_version {
 	DSI_CTRL_VERSION_UNKNOWN,
+	DSI_CTRL_VERSION_1_3,
 	DSI_CTRL_VERSION_1_4,
 	DSI_CTRL_VERSION_2_0,
 	DSI_CTRL_VERSION_2_2,
@@ -581,12 +582,6 @@ struct dsi_ctrl_hw_ops {
 				 u32 *hw_read_cnt);
 
 	/**
-	 * get_cont_splash_status() - get continuous splash status
-	 * @ctrl:           Pointer to the controller host hardware.
-	 */
-	bool (*get_cont_splash_status)(struct dsi_ctrl_hw *ctrl);
-
-	/**
 	 * wait_for_lane_idle() - wait for DSI lanes to go to idle state
 	 * @ctrl:          Pointer to the controller host hardware.
 	 * @lanes:         ORed list of lanes (enum dsi_data_lanes) which need
@@ -674,6 +669,8 @@ struct dsi_ctrl_hw_ops {
 	 * Return: List of active error interrupts.
 	 */
 	u64 (*get_error_status)(struct dsi_ctrl_hw *ctrl);
+	void (*dma_read_before_trigger)(struct dsi_ctrl_hw *ctrl);
+	u32 (*read_mdp_line_count)(struct dsi_ctrl_hw *ctrl);
 
 	/**
 	 * clear_error_status() - clears the specified errors
@@ -837,13 +834,28 @@ struct dsi_ctrl_hw_ops {
 	 * @ctrl:         Pointer to the controller host hardware.
 	 */
 	int (*wait4dynamic_refresh_done)(struct dsi_ctrl_hw *ctrl);
-
 	/**
 	 * hw.ops.hs_req_sel() - enable continuous clk support through phy
 	 * @ctrl:	Pointer to the controller host hardware.
 	 * @sel_phy:	Bool to control whether to select phy or controller
 	 */
 	void (*hs_req_sel)(struct dsi_ctrl_hw *ctrl, bool sel_phy);
+
+	/**
+	 * hw.ops.map_mdp_regs() - maps MDP interface line count registers.
+	 * @pdev:»       Pointer to platform device.
+	 * @ctrl:»       Pointer to the controller host hardware.
+	 */
+	int (*map_mdp_regs)(struct platform_device *pdev,
+			struct dsi_ctrl_hw *ctrl);
+
+	/**
+	 * hw.ops.log_line_count() - reads the MDP interface line count
+	 *							registers.
+	 * @ctrl:»       Pointer to the controller host hardware.
+	 * @cmd_mode:»       Boolean to indicate command mode operation.
+	 */
+	u32 (*log_line_count)(struct dsi_ctrl_hw *ctrl, bool cmd_mode);
 };
 
 /*
@@ -854,6 +866,13 @@ struct dsi_ctrl_hw_ops {
  * @mmss_misc_length:       Length of mmss_misc register map.
  * @disp_cc_base:           Base address of disp_cc register map.
  * @disp_cc_length:         Length of disp_cc register map.
+ * @te_rd_ptr_reg:          Address of MDP_TEAR_INTF_TEAR_LINE_COUNT. This
+ *                          register is used for testing and validating the RD
+ *                          ptr value when a CMD is triggered and it succeeds.
+ * @line_count_reg:         Address of MDP_TEAR_INTF_LINE_COUNT. This
+ *                          register is used for testing and validating the
+ *                          line count value when a CMD is triggered and it
+ *                          succeeds.
  * @index:                  Instance ID of the controller.
  * @feature_map:            Features supported by the DSI controller.
  * @ops:                    Function pointers to the operations supported by the
@@ -871,6 +890,8 @@ struct dsi_ctrl_hw {
 	void __iomem *mmss_misc_base;
 	u32 mmss_misc_length;
 	void __iomem *disp_cc_base;
+	void __iomem *te_rd_ptr_reg;
+	void __iomem *line_count_reg;
 	u32 disp_cc_length;
 	u32 index;
 
