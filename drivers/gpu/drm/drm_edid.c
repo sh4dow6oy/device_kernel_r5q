@@ -4735,8 +4735,6 @@ u32 drm_add_display_info(struct drm_connector *connector, const struct edid *edi
 	if (edid->revision < 4)
 		return 0;
 
-	return 0;
-}
 	switch (edid->input & DRM_EDID_DIGITAL_DEPTH_MASK) {
 	case DRM_EDID_DIGITAL_DEPTH_6:
 		info->bpc = 6;
@@ -4756,21 +4754,24 @@ u32 drm_add_display_info(struct drm_connector *connector, const struct edid *edi
 	case DRM_EDID_DIGITAL_DEPTH_16:
 		info->bpc = 16;
 		break;
-	case DRM_EDID_DIGITAL_DEPTH_UNDEF:
+	case DRM_EDID_DIGITAL_DEPTH_undef:
 	default:
 		info->bpc = 0;
 		break;
 	}
 
-	DRM_DEBUG("%s: Assigning EDID-1.4 digital sink color depth as %d bpc.\n",
+	if (info->bpc) {
+		DRM_DEBUG("%s: Assigning EDID-1.4 digital sink color depth as %d bpc.\n",
 			  connector->name, info->bpc);
+	}
 
 	if (edid->features & DRM_EDID_FEATURE_RGB_YCRCB444)
 		info->color_formats |= DRM_COLOR_FORMAT_YCRCB444;
 	if (edid->features & DRM_EDID_FEATURE_RGB_YCRCB422)
 		info->color_formats |= DRM_COLOR_FORMAT_YCRCB422;
-}
 
+	return 0;
+}
 static int validate_displayid(u8 *displayid, int length, int idx)
 {
 	int i;
