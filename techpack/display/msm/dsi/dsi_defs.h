@@ -309,7 +309,6 @@ enum dsi_cmd_set_type {
 	DSI_CMD_SET_QSYNC_OFF,
 	DSI_CMD_SET_MAX,
 
-#if defined(CONFIG_DISPLAY_SAMSUNG)
 	/* set type for samsung display driver
 	 * Please add type in proper boundary (TX, RX)
 	 */
@@ -695,7 +694,6 @@ enum dsi_cmd_set_type {
 	RX_CMD_END,
 
 	SS_DSI_CMD_SET_MAX,
-#endif
 };
 
 /**
@@ -785,7 +783,6 @@ struct dsi_panel_cmd_set {
 	u32 ctrl_idx;
 	struct dsi_cmd_desc *cmds;
 
-#if defined(CONFIG_DISPLAY_SAMSUNG)
 #define SUPPORT_PANEL_REVISION	20
 	int read_startoffset;
 	char *name;
@@ -799,7 +796,6 @@ struct dsi_panel_cmd_set {
 	void *cmd_set_rev[SUPPORT_PANEL_REVISION];
 
 	void *self_disp_cmd_set_rev;
-#endif
 };
 
 /**
@@ -1026,7 +1022,7 @@ struct dsi_host_config {
  * @roi_caps:		  Panel ROI capabilities
  */
 struct dsi_display_mode_priv_info {
-#if !defined(CONFIG_DISPLAY_SAMSUNG)
+#if !defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
 	struct dsi_panel_cmd_set cmd_sets[DSI_CMD_SET_MAX];
 #else
 	struct dsi_panel_cmd_set cmd_sets[SS_DSI_CMD_SET_MAX];
