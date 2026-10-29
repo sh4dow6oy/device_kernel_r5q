@@ -370,6 +370,8 @@ struct ctrl_ulps_config_ops {
  */
 struct dsi_ctrl_hw_ops {
 
+	bool (*get_cont_splash_status)(struct dsi_ctrl_hw *ctrl);
+
 	/**
 	 * host_setup() - Setup DSI host configuration
 	 * @ctrl:          Pointer to controller host hardware.
