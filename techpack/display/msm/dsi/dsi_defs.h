@@ -1048,20 +1048,12 @@ struct dsi_display_mode_priv_info {
 	struct msm_roi_caps roi_caps;
 };
 
-struct dsi_display_mode {
-	struct dsi_mode_info timing;
-	u32 pixel_clk_khz;
-	enum dsi_op_mode panel_mode;
-	u32 dsi_mode_flags;
-	struct dsi_display_mode_priv_info *priv_info;
-};
-
 /**
  * struct dsi_display_mode - specifies mode for dsi display
  * @timing:         Timing parameters for the panel.
  * @pixel_clk_khz:  Pixel clock in Khz.
  * @dsi_mode_flags: Flags to signal other drm components via private flags
- * @panel_mode:      Panel mode
+ * @panel_mode:     Panel mode
  * @is_preferred:   Is mode preferred
  * @priv_info:      Mode private info
  */
@@ -1085,7 +1077,6 @@ struct dsi_rect {
 	u16 w;
 	u16 h;
 };
-
 /**
  * dsi_rect_intersect - intersect two rectangles
  * @r1: first rectangle
