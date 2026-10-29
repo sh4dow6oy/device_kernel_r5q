@@ -1026,11 +1026,7 @@ struct dsi_host_config {
  * @roi_caps:		  Panel ROI capabilities
  */
 struct dsi_display_mode_priv_info {
-#if !defined(CONFIG_DISPLAY_SAMSUNG)
-	struct dsi_panel_cmd_set cmd_sets[DSI_CMD_SET_MAX];
-#else
 	struct dsi_panel_cmd_set cmd_sets[SS_DSI_CMD_SET_MAX];
-#endif
 
 	u32 *phy_timing_val;
 	u32 phy_timing_len;
@@ -1039,15 +1035,21 @@ struct dsi_display_mode_priv_info {
 	u32 panel_jitter_denom;
 	u32 panel_prefill_lines;
 	u32 mdp_transfer_time_us;
-	u32 dsi_transfer_time_us;
 	u64 clk_rate_hz;
-	u64 min_dsi_clk_hz;
 	u32 overlap_pixels;
 
 	struct msm_display_topology topology;
 	struct msm_display_dsc_info dsc;
 	bool dsc_enabled;
 	struct msm_roi_caps roi_caps;
+};
+
+struct dsi_display_mode {
+	struct dsi_mode_info timing;
+	u32 pixel_clk_khz;
+	enum dsi_op_mode panel_mode;
+	u32 dsi_mode_flags;
+	struct dsi_display_mode_priv_info *priv_info;
 };
 
 /**
