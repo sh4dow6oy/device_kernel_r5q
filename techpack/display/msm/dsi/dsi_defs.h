@@ -1026,7 +1026,11 @@ struct dsi_host_config {
  * @roi_caps:		  Panel ROI capabilities
  */
 struct dsi_display_mode_priv_info {
+#if !defined(CONFIG_DISPLAY_SAMSUNG)
+	struct dsi_panel_cmd_set cmd_sets[DSI_CMD_SET_MAX];
+#else
 	struct dsi_panel_cmd_set cmd_sets[SS_DSI_CMD_SET_MAX];
+#endif
 
 	u32 *phy_timing_val;
 	u32 phy_timing_len;
