@@ -4704,13 +4704,13 @@ u32 drm_add_display_info(struct drm_connector *connector, const struct edid *edi
 	info->dvi_dual = false;
 
 	if (edid->revision < 3)
-		return;
+		return 0;
 
 	if (!(edid->input & DRM_EDID_INPUT_DIGITAL))
-		return;
+		return 0;
 
 	info->color_formats |= DRM_COLOR_FORMAT_RGB444;
-	drm_parse_cea_ext(connector, edid);
+	drm_parse_cea_ext(connector, (struct edid *)edid);
 
 	/*
 	 * Digital sink with "DFP 1.x compliant TMDS" according to EDID 1.3?
@@ -4727,14 +4727,16 @@ u32 drm_add_display_info(struct drm_connector *connector, const struct edid *edi
 	}
 
 	/* Extract audio and video latency fields for the sink */
-	drm_hdmi_extract_vsdbs_info(connector, edid);
+	drm_hdmi_extract_vsdbs_info(connector, (struct edid *)edid);
 	/* Extract info from extended tag blocks */
-	drm_hdmi_extract_extended_blk_info(connector, edid);
+	drm_hdmi_extract_extended_blk_info(connector, (struct edid *)edid);
 
 	/* Only defined for 1.4 with digital displays */
 	if (edid->revision < 4)
-		return;
+		return 0;
 
+	return 0;
+}
 	switch (edid->input & DRM_EDID_DIGITAL_DEPTH_MASK) {
 	case DRM_EDID_DIGITAL_DEPTH_6:
 		info->bpc = 6;
