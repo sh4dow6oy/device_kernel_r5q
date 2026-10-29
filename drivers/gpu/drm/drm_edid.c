@@ -4735,7 +4735,7 @@ u32 drm_add_display_info(struct drm_connector *connector, const struct edid *edi
 	if (edid->revision < 4)
 		return 0;
 
-	switch (edid->input & DRM_EDID_DIGITAL_DEPTH_MASK) {
+switch (edid->input & DRM_EDID_DIGITAL_DEPTH_MASK) {
 	case DRM_EDID_DIGITAL_DEPTH_6:
 		info->bpc = 6;
 		break;
@@ -4754,7 +4754,6 @@ u32 drm_add_display_info(struct drm_connector *connector, const struct edid *edi
 	case DRM_EDID_DIGITAL_DEPTH_16:
 		info->bpc = 16;
 		break;
-	case DRM_EDID_DIGITAL_DEPTH_undef:
 	default:
 		info->bpc = 0;
 		break;
