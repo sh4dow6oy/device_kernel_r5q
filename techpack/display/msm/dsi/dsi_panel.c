@@ -450,7 +450,6 @@ static int dsi_panel_power_on(struct dsi_panel *panel)
 {
 	int rc = 0;
 
-#if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
 	struct samsung_display_driver_data *vdd = panel->panel_private;
 
 	/* Make not to turn on the panel power when ub_con_det.gpio is high (ub is not connected) */
@@ -476,7 +475,6 @@ static int dsi_panel_power_on(struct dsi_panel *panel)
 		pr_info("recover panel, set vdd(%d)->panel_dead to false \n", vdd->ndx);
 		vdd->panel_dead = false;
 	}
-#endif
 
 	rc = dsi_pwr_enable_regulator(&panel->power_info, true);
 	if (rc) {
