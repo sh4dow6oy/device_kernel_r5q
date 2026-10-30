@@ -175,6 +175,8 @@ struct drm_panel_esd_config {
 };
 
 struct dsi_panel {
+	void *panel_private;
+
 	const char *name;
 	const char *type;
 	struct device_node *panel_of_node;
@@ -223,7 +225,6 @@ struct dsi_panel {
 
 	char dsc_pps_cmd[DSI_CMD_PPS_SIZE];
 
-	void *panel_private;
 	struct device_node *self_display_of_node;
 	struct dsi_parser_utils self_display_utils;
 
