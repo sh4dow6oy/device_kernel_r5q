@@ -915,8 +915,8 @@ int drm_mode_create_tv_properties(struct drm_device *dev,
 		goto nomem;
 
 	for (i = 0; i < num_modes; i++)
-		drm_property_add_enum(property, drm_scaling_mode_enum_list[i].type, 
-                      		  drm_scaling_mode_enum_list[i].name);
+		drm_property_add_enum(connector->scaling_mode_property, drm_scaling_mode_enum_list[i].type, 
+                      drm_scaling_mode_enum_list[i].name);
 
 	dev->mode_config.tv_brightness_property =
 		drm_property_create_range(dev, 0, "brightness", 0, 100);
@@ -1023,9 +1023,9 @@ int drm_connector_attach_scaling_mode_property(struct drm_connector *connector,
 		if (!(BIT(i) & scaling_mode_mask))
 			continue;
 
-		ret = drm_property_add_enum(scaling_mode_property, j++,
-					    drm_scaling_mode_enum_list[i].type,
-					    drm_scaling_mode_enum_list[i].name);
+		drm_property_add_enum(scaling_mode_property, 
+                      drm_scaling_mode_enum_list[i].type, 
+                      drm_scaling_mode_enum_list[i].name);
 
 		if (ret) {
 			drm_property_destroy(dev, scaling_mode_property);
