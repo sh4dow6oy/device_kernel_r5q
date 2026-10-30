@@ -222,15 +222,14 @@ struct dsi_panel {
 	u32 qsync_min_fps;
 
 	char dsc_pps_cmd[DSI_CMD_PPS_SIZE];
-#if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
+
 	void *panel_private;
 	struct device_node *self_display_of_node;
 	struct dsi_parser_utils self_display_utils;
-#if defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
+
 	struct device_node *mafpc_of_node;
 	struct dsi_parser_utils mafpc_utils;
-#endif
-#endif
+
 	enum dsi_dms_mode dms_mode;
 
 	bool sync_broadcast_en;
