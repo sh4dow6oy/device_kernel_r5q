@@ -35,20 +35,20 @@
  * als fixed panels or anything else that can display pixels in some form. As
  * opposed to all other KMS objects representing hardware (like CRTC, encoder or
  * plane abstractions) connectors can be hotplugged and unplugged at runtime.
- * Hence they are reference-counted using drm_mode_connector_get() and
- * drm_mode_connector_put().
+ * Hence they are reference-counted using drm_connector_get() and
+ * drm_connector_put().
  *
  * KMS driver must create, initialize, register and attach at a &struct
- * drm_mode_connector for each such sink. The instance is created as other KMS
+ * drm_connector for each such sink. The instance is created as other KMS
  * objects and initialized by setting the following fields. The connector is
- * initialized with a call to drm_mode_connector_init() with a pointer to the
- * &struct drm_mode_connector_funcs and a connector type, and then exposed to
- * userspace with a call to drm_mode_connector_register().
+ * initialized with a call to drm_connector_init() with a pointer to the
+ * &struct drm_connector_funcs and a connector type, and then exposed to
+ * userspace with a call to drm_connector_register().
  *
  * Connectors must be attached to an encoder to be used. For devices that map
  * connectors to encoders 1:1, the connector should be attached at
  * initialization time with a call to drm_mode_connector_attach_encoder(). The
- * driver must also set the &drm_mode_connector.encoder field to point to the
+ * driver must also set the &drm_connector.encoder field to point to the
  * attached encoder.
  *
  * For connectors which are not fixed (like built-in panels) the driver needs to
@@ -67,7 +67,7 @@ struct drm_conn_prop_enum_list {
 /*
  * Connector and encoder types.
  */
-static struct drm_conn_prop_enum_list drm_mode_connector_enum_list[] = {
+static struct drm_conn_prop_enum_list drm_connector_enum_list[] = {
 	{ DRM_MODE_CONNECTOR_Unknown, "Unknown" },
 	{ DRM_MODE_CONNECTOR_VGA, "VGA" },
 	{ DRM_MODE_CONNECTOR_DVII, "DVI-I" },
@@ -88,24 +88,24 @@ static struct drm_conn_prop_enum_list drm_mode_connector_enum_list[] = {
 	{ DRM_MODE_CONNECTOR_DPI, "DPI" },
 };
 
-void drm_mode_connector_ida_init(void)
+void drm_connector_ida_init(void)
 {
 	int i;
 
-	for (i = 0; i < ARRAY_SIZE(drm_mode_connector_enum_list); i++)
-		ida_init(&drm_mode_connector_enum_list[i].ida);
+	for (i = 0; i < ARRAY_SIZE(drm_connector_enum_list); i++)
+		ida_init(&drm_connector_enum_list[i].ida);
 }
 
-void drm_mode_connector_ida_destroy(void)
+void drm_connector_ida_destroy(void)
 {
 	int i;
 
-	for (i = 0; i < ARRAY_SIZE(drm_mode_connector_enum_list); i++)
-		ida_destroy(&drm_mode_connector_enum_list[i].ida);
+	for (i = 0; i < ARRAY_SIZE(drm_connector_enum_list); i++)
+		ida_destroy(&drm_connector_enum_list[i].ida);
 }
 
 /**
- * drm_mode_connector_get_cmdline_mode - reads the user's cmdline mode
+ * drm_connector_get_cmdline_mode - reads the user's cmdline mode
  * @connector: connector to quwery
  *
  * The kernel supports per-connector configuration of its consoles through
@@ -114,7 +114,7 @@ void drm_mode_connector_ida_destroy(void)
  * particular connector. This is typically only used during the early fbdev
  * setup.
  */
-static void drm_mode_connector_get_cmdline_mode(struct drm_mode_connector *connector)
+static void drm_connector_get_cmdline_mode(struct drm_connector *connector)
 {
 	struct drm_cmdline_mode *mode = &connector->cmdline_mode;
 	char *option = NULL;
@@ -142,10 +142,10 @@ static void drm_mode_connector_get_cmdline_mode(struct drm_mode_connector *conne
 		      mode->interlace ?  " interlaced" : "");
 }
 
-static void drm_mode_connector_free(struct kref *kref)
+static void drm_connector_free(struct kref *kref)
 {
-	struct drm_mode_connector *connector =
-		container_of(kref, struct drm_mode_connector, base.refcount);
+	struct drm_connector *connector =
+		container_of(kref, struct drm_connector, base.refcount);
 	struct drm_device *dev = connector->dev;
 
 	drm_mode_object_unregister(dev, &connector->base);
@@ -153,7 +153,7 @@ static void drm_mode_connector_free(struct kref *kref)
 }
 
 /**
- * drm_mode_connector_init - Init a preallocated connector
+ * drm_connector_init - Init a preallocated connector
  * @dev: DRM device
  * @connector: the connector to init
  * @funcs: callbacks for this connector
@@ -165,19 +165,19 @@ static void drm_mode_connector_free(struct kref *kref)
  * Returns:
  * Zero on success, error code on failure.
  */
-int drm_mode_connector_init(struct drm_device *dev,
-		       struct drm_mode_connector *connector,
-		       const struct drm_mode_connector_funcs *funcs,
+int drm_connector_init(struct drm_device *dev,
+		       struct drm_connector *connector,
+		       const struct drm_connector_funcs *funcs,
 		       int connector_type)
 {
 	struct drm_mode_config *config = &dev->mode_config;
 	int ret;
 	struct ida *connector_ida =
-		&drm_mode_connector_enum_list[connector_type].ida;
+		&drm_connector_enum_list[connector_type].ida;
 
 	ret = __drm_mode_object_add(dev, &connector->base,
 				    DRM_MODE_OBJECT_CONNECTOR,
-				    false, drm_mode_connector_free);
+				    false, drm_connector_free);
 	if (ret)
 		return ret;
 
@@ -200,7 +200,7 @@ int drm_mode_connector_init(struct drm_device *dev,
 	}
 	connector->name =
 		kasprintf(GFP_KERNEL, "%s-%d",
-			  drm_mode_connector_enum_list[connector_type].name,
+			  drm_connector_enum_list[connector_type].name,
 			  connector->connector_type_id);
 	if (!connector->name) {
 		ret = -ENOMEM;
@@ -213,7 +213,7 @@ int drm_mode_connector_init(struct drm_device *dev,
 	connector->edid_blob_ptr = NULL;
 	connector->status = connector_status_unknown;
 
-	drm_mode_connector_get_cmdline_mode(connector);
+	drm_connector_get_cmdline_mode(connector);
 
 	/* We should add connectors at the end to avoid upsetting the connector
 	 * index too much. */
@@ -223,7 +223,7 @@ int drm_mode_connector_init(struct drm_device *dev,
 	spin_unlock_irq(&config->connector_list_lock);
 
 	if (connector_type != DRM_MODE_CONNECTOR_VIRTUAL)
-		drm_mode_connector_attach_edid_property(connector);
+		drm_connector_attach_edid_property(connector);
 
 	drm_object_attach_property(&connector->base,
 				      config->dpms_property, 0);
@@ -249,17 +249,17 @@ out_put:
 
 	return ret;
 }
-EXPORT_SYMBOL(drm_mode_connector_init);
+EXPORT_SYMBOL(drm_connector_init);
 
 /**
- * drm_mode_connector_attach_edid_property - attach edid property.
+ * drm_connector_attach_edid_property - attach edid property.
  * @connector: the connector
  *
  * Some connector types like DRM_MODE_CONNECTOR_VIRTUAL do not get a
  * edid property attached by default.  This function can be used to
  * explicitly enable the edid property in these cases.
  */
-void drm_mode_connector_attach_edid_property(struct drm_mode_connector *connector)
+void drm_connector_attach_edid_property(struct drm_connector *connector)
 {
 	struct drm_mode_config *config = &connector->dev->mode_config;
 
@@ -267,7 +267,7 @@ void drm_mode_connector_attach_edid_property(struct drm_mode_connector *connecto
 				   config->edid_property,
 				   0);
 }
-EXPORT_SYMBOL(drm_mode_connector_attach_edid_property);
+EXPORT_SYMBOL(drm_connector_attach_edid_property);
 
 /**
  * drm_mode_connector_attach_encoder - attach a connector to an encoder
@@ -281,7 +281,7 @@ EXPORT_SYMBOL(drm_mode_connector_attach_edid_property);
  * Returns:
  * Zero on success, negative errno on failure.
  */
-int drm_mode_connector_attach_encoder(struct drm_mode_connector *connector,
+int drm_mode_connector_attach_encoder(struct drm_connector *connector,
 				      struct drm_encoder *encoder)
 {
 	int i;
@@ -310,7 +310,7 @@ int drm_mode_connector_attach_encoder(struct drm_mode_connector *connector,
 }
 EXPORT_SYMBOL(drm_mode_connector_attach_encoder);
 
-static void drm_mode_remove(struct drm_mode_connector *connector,
+static void drm_mode_remove(struct drm_connector *connector,
 			    struct drm_display_mode *mode)
 {
 	list_del(&mode->head);
@@ -318,12 +318,12 @@ static void drm_mode_remove(struct drm_mode_connector *connector,
 }
 
 /**
- * drm_mode_connector_cleanup - cleans up an initialised connector
+ * drm_connector_cleanup - cleans up an initialised connector
  * @connector: connector to cleanup
  *
  * Cleans up the connector but doesn't free the object.
  */
-void drm_mode_connector_cleanup(struct drm_mode_connector *connector)
+void drm_connector_cleanup(struct drm_connector *connector)
 {
 	struct drm_device *dev = connector->dev;
 	struct drm_display_mode *mode, *t;
@@ -332,7 +332,7 @@ void drm_mode_connector_cleanup(struct drm_mode_connector *connector)
 	 * it is finally destroyed.
 	 */
 	if (WARN_ON(connector->registered))
-		drm_mode_connector_unregister(connector);
+		drm_connector_unregister(connector);
 
 	if (connector->tile_group) {
 		drm_mode_put_tile_group(dev, connector->tile_group);
@@ -345,7 +345,7 @@ void drm_mode_connector_cleanup(struct drm_mode_connector *connector)
 	list_for_each_entry_safe(mode, t, &connector->modes, head)
 		drm_mode_remove(connector, mode);
 
-	ida_simple_remove(&drm_mode_connector_enum_list[connector->connector_type].ida,
+	ida_simple_remove(&drm_connector_enum_list[connector->connector_type].ida,
 			  connector->connector_type_id);
 
 	ida_simple_remove(&dev->mode_config.connector_ida,
@@ -372,10 +372,10 @@ void drm_mode_connector_cleanup(struct drm_mode_connector *connector)
 	if (dev->registered)
 		drm_sysfs_hotplug_event(dev);
 }
-EXPORT_SYMBOL(drm_mode_connector_cleanup);
+EXPORT_SYMBOL(drm_connector_cleanup);
 
 /**
- * drm_mode_connector_register - register a connector
+ * drm_connector_register - register a connector
  * @connector: the connector to register
  *
  * Register userspace interfaces for a connector
@@ -383,7 +383,7 @@ EXPORT_SYMBOL(drm_mode_connector_cleanup);
  * Returns:
  * Zero on success, error code on failure.
  */
-int drm_mode_connector_register(struct drm_mode_connector *connector)
+int drm_connector_register(struct drm_connector *connector)
 {
 	int ret = 0;
 
@@ -422,15 +422,15 @@ unlock:
 	mutex_unlock(&connector->mutex);
 	return ret;
 }
-EXPORT_SYMBOL(drm_mode_connector_register);
+EXPORT_SYMBOL(drm_connector_register);
 
 /**
- * drm_mode_connector_unregister - unregister a connector
+ * drm_connector_unregister - unregister a connector
  * @connector: the connector to unregister
  *
  * Unregister userspace interfaces for a connector
  */
-void drm_mode_connector_unregister(struct drm_mode_connector *connector)
+void drm_connector_unregister(struct drm_connector *connector)
 {
 	mutex_lock(&connector->mutex);
 	if (!connector->registered) {
@@ -447,35 +447,35 @@ void drm_mode_connector_unregister(struct drm_mode_connector *connector)
 	connector->registered = false;
 	mutex_unlock(&connector->mutex);
 }
-EXPORT_SYMBOL(drm_mode_connector_unregister);
+EXPORT_SYMBOL(drm_connector_unregister);
 
-void drm_mode_connector_unregister_all(struct drm_device *dev)
+void drm_connector_unregister_all(struct drm_device *dev)
 {
-	struct drm_mode_connector *connector;
-	struct drm_mode_connector_list_iter conn_iter;
+	struct drm_connector *connector;
+	struct drm_connector_list_iter conn_iter;
 
-	drm_mode_connector_list_iter_begin(dev, &conn_iter);
+	drm_connector_list_iter_begin(dev, &conn_iter);
 	drm_for_each_connector_iter(connector, &conn_iter)
-		drm_mode_connector_unregister(connector);
-	drm_mode_connector_list_iter_end(&conn_iter);
+		drm_connector_unregister(connector);
+	drm_connector_list_iter_end(&conn_iter);
 }
 
-int drm_mode_connector_register_all(struct drm_device *dev)
+int drm_connector_register_all(struct drm_device *dev)
 {
-	struct drm_mode_connector *connector;
-	struct drm_mode_connector_list_iter conn_iter;
+	struct drm_connector *connector;
+	struct drm_connector_list_iter conn_iter;
 	int ret = 0;
 
-	drm_mode_connector_list_iter_begin(dev, &conn_iter);
+	drm_connector_list_iter_begin(dev, &conn_iter);
 	drm_for_each_connector_iter(connector, &conn_iter) {
-		ret = drm_mode_connector_register(connector);
+		ret = drm_connector_register(connector);
 		if (ret)
 			break;
 	}
-	drm_mode_connector_list_iter_end(&conn_iter);
+	drm_connector_list_iter_end(&conn_iter);
 
 	if (ret)
-		drm_mode_connector_unregister_all(dev);
+		drm_connector_unregister_all(dev);
 	return ret;
 }
 
@@ -486,7 +486,7 @@ int drm_mode_connector_register_all(struct drm_device *dev)
  * In contrast to the other drm_get_*_name functions this one here returns a
  * const pointer and hence is threadsafe.
  */
-const char *drm_get_connector_status_name(enum drm_mode_connector_status status)
+const char *drm_get_connector_status_name(enum drm_connector_status status)
 {
 	if (status == connector_status_connected)
 		return "connected";
@@ -503,7 +503,7 @@ EXPORT_SYMBOL(drm_get_connector_status_name);
  *
  * Returns: const pointer to name.
  */
-const char *drm_get_connector_force_name(enum drm_mode_connector_force force)
+const char *drm_get_connector_force_name(enum drm_connector_force force)
 {
 	switch (force) {
 	case DRM_FORCE_UNSPECIFIED:
@@ -521,40 +521,40 @@ const char *drm_get_connector_force_name(enum drm_mode_connector_force force)
 
 #ifdef CONFIG_LOCKDEP
 static struct lockdep_map connector_list_iter_dep_map = {
-	.name = "drm_mode_connector_list_iter"
+	.name = "drm_connector_list_iter"
 };
 #endif
 
 /**
- * drm_mode_connector_list_iter_begin - initialize a connector_list iterator
+ * drm_connector_list_iter_begin - initialize a connector_list iterator
  * @dev: DRM device
  * @iter: connector_list iterator
  *
  * Sets @iter up to walk the &drm_mode_config.connector_list of @dev. @iter
- * must always be cleaned up again by calling drm_mode_connector_list_iter_end().
- * Iteration itself happens using drm_mode_connector_list_iter_next() or
+ * must always be cleaned up again by calling drm_connector_list_iter_end().
+ * Iteration itself happens using drm_connector_list_iter_next() or
  * drm_for_each_connector_iter().
  */
-void drm_mode_connector_list_iter_begin(struct drm_device *dev,
-				   struct drm_mode_connector_list_iter *iter)
+void drm_connector_list_iter_begin(struct drm_device *dev,
+				   struct drm_connector_list_iter *iter)
 {
 	iter->dev = dev;
 	iter->conn = NULL;
 	lock_acquire_shared_recursive(&connector_list_iter_dep_map, 0, 1, NULL, _RET_IP_);
 }
-EXPORT_SYMBOL(drm_mode_connector_list_iter_begin);
+EXPORT_SYMBOL(drm_connector_list_iter_begin);
 
 /**
- * drm_mode_connector_list_iter_next - return next connector
+ * drm_connector_list_iter_next - return next connector
  * @iter: connectr_list iterator
  *
  * Returns the next connector for @iter, or NULL when the list walk has
  * completed.
  */
-struct drm_mode_connector *
-drm_mode_connector_list_iter_next(struct drm_mode_connector_list_iter *iter)
+struct drm_connector *
+drm_connector_list_iter_next(struct drm_connector_list_iter *iter)
 {
-	struct drm_mode_connector *old_conn = iter->conn;
+	struct drm_connector *old_conn = iter->conn;
 	struct drm_mode_config *config = &iter->dev->mode_config;
 	struct list_head *lhead;
 	unsigned long flags;
@@ -569,36 +569,36 @@ drm_mode_connector_list_iter_next(struct drm_mode_connector_list_iter *iter)
 		}
 
 		lhead = lhead->next;
-		iter->conn = list_entry(lhead, struct drm_mode_connector, head);
+		iter->conn = list_entry(lhead, struct drm_connector, head);
 
 		/* loop until it's not a zombie connector */
 	} while (!kref_get_unless_zero(&iter->conn->base.refcount));
 	spin_unlock_irqrestore(&config->connector_list_lock, flags);
 
 	if (old_conn)
-		drm_mode_connector_put(old_conn);
+		drm_connector_put(old_conn);
 
 	return iter->conn;
 }
-EXPORT_SYMBOL(drm_mode_connector_list_iter_next);
+EXPORT_SYMBOL(drm_connector_list_iter_next);
 
 /**
- * drm_mode_connector_list_iter_end - tear down a connector_list iterator
+ * drm_connector_list_iter_end - tear down a connector_list iterator
  * @iter: connector_list iterator
  *
- * Tears down @iter and releases any resources (like &drm_mode_connector references)
+ * Tears down @iter and releases any resources (like &drm_connector references)
  * acquired while walking the list. This must always be called, both when the
  * iteration completes fully or when it was aborted without walking the entire
  * list.
  */
-void drm_mode_connector_list_iter_end(struct drm_mode_connector_list_iter *iter)
+void drm_connector_list_iter_end(struct drm_connector_list_iter *iter)
 {
 	iter->dev = NULL;
 	if (iter->conn)
-		drm_mode_connector_put(iter->conn);
+		drm_connector_put(iter->conn);
 	lock_release(&connector_list_iter_dep_map, 0, _RET_IP_);
 }
-EXPORT_SYMBOL(drm_mode_connector_list_iter_end);
+EXPORT_SYMBOL(drm_connector_list_iter_end);
 
 static const struct drm_prop_enum_list drm_subpixel_enum_list[] = {
 	{ SubPixelUnknown, "Unknown" },
@@ -735,7 +735,7 @@ DRM_ENUM_NAME_FN(drm_get_tv_subconnector_name,
  * 	drivers this is only provided for backwards compatibility with existing
  * 	drivers, it remaps to controlling the "ACTIVE" property on the CRTC the
  * 	connector is linked to. Drivers should never set this property directly,
- * 	it is handled by the DRM core by calling the &drm_mode_connector_funcs.dpms
+ * 	it is handled by the DRM core by calling the &drm_connector_funcs.dpms
  * 	callback. For atomic drivers the remapping to the "ACTIVE" property is
  * 	implemented in the DRM core.  This is the only standard connector
  * 	property that userspace can change.
@@ -767,7 +767,7 @@ DRM_ENUM_NAME_FN(drm_get_tv_subconnector_name,
  * 	Mode object ID of the &drm_crtc this connector should be connected to.
  */
 
-int drm_mode_connector_create_standard_properties(struct drm_device *dev)
+int drm_connector_create_standard_properties(struct drm_device *dev)
 {
 	struct drm_property *prop;
 
@@ -961,8 +961,8 @@ EXPORT_SYMBOL(drm_mode_create_tv_properties);
  * Called by a driver the first time it's needed, must be attached to desired
  * connectors.
  *
- * Atomic drivers should use drm_mode_connector_attach_scaling_mode_property()
- * instead to correctly assign &drm_mode_connector_state.picture_aspect_ratio
+ * Atomic drivers should use drm_connector_attach_scaling_mode_property()
+ * instead to correctly assign &drm_connector_state.picture_aspect_ratio
  * in the atomic state.
  */
 int drm_mode_create_scaling_mode_property(struct drm_device *dev)
@@ -984,20 +984,20 @@ int drm_mode_create_scaling_mode_property(struct drm_device *dev)
 EXPORT_SYMBOL(drm_mode_create_scaling_mode_property);
 
 /**
- * drm_mode_connector_attach_scaling_mode_property - attach atomic scaling mode property
+ * drm_connector_attach_scaling_mode_property - attach atomic scaling mode property
  * @connector: connector to attach scaling mode property on.
  * @scaling_mode_mask: or'ed mask of BIT(%DRM_MODE_SCALE_\*).
  *
  * This is used to add support for scaling mode to atomic drivers.
- * The scaling mode will be set to &drm_mode_connector_state.picture_aspect_ratio
- * and can be used from &drm_mode_connector_helper_funcs->atomic_check for validation.
+ * The scaling mode will be set to &drm_connector_state.picture_aspect_ratio
+ * and can be used from &drm_connector_helper_funcs->atomic_check for validation.
  *
  * This is the atomic version of drm_mode_create_scaling_mode_property().
  *
  * Returns:
  * Zero on success, negative errno on failure.
  */
-int drm_mode_connector_attach_scaling_mode_property(struct drm_mode_connector *connector,
+int drm_connector_attach_scaling_mode_property(struct drm_connector *connector,
 					       u32 scaling_mode_mask)
 {
 	struct drm_device *dev = connector->dev;
@@ -1041,7 +1041,7 @@ int drm_mode_connector_attach_scaling_mode_property(struct drm_mode_connector *c
 
 	return 0;
 }
-EXPORT_SYMBOL(drm_mode_connector_attach_scaling_mode_property);
+EXPORT_SYMBOL(drm_connector_attach_scaling_mode_property);
 
 /**
  * drm_mode_create_aspect_ratio_property - create aspect ratio property
@@ -1107,7 +1107,7 @@ EXPORT_SYMBOL(drm_mode_create_suggested_offset_properties);
  * Returns:
  * Zero on success, negative errno on failure.
  */
-int drm_mode_connector_set_path_property(struct drm_mode_connector *connector,
+int drm_mode_connector_set_path_property(struct drm_connector *connector,
 					 const char *path)
 {
 	struct drm_device *dev = connector->dev;
@@ -1134,7 +1134,7 @@ EXPORT_SYMBOL(drm_mode_connector_set_path_property);
  * Returns:
  * Zero on success, errno on failure.
  */
-int drm_mode_connector_set_tile_property(struct drm_mode_connector *connector)
+int drm_mode_connector_set_tile_property(struct drm_connector *connector)
 {
 	struct drm_device *dev = connector->dev;
 	char tile[256];
@@ -1177,7 +1177,7 @@ EXPORT_SYMBOL(drm_mode_connector_set_tile_property);
  * Returns:
  * Zero on success, negative errno on failure.
  */
-int drm_mode_connector_update_edid_property(struct drm_mode_connector *connector,
+int drm_mode_connector_update_edid_property(struct drm_connector *connector,
 					    const struct edid *edid)
 {
 	struct drm_device *dev = connector->dev;
@@ -1220,7 +1220,7 @@ EXPORT_SYMBOL(drm_mode_connector_update_edid_property);
  * it is not limited to DP or link training. For example, if we implement
  * asynchronous setcrtc, this property can be used to report any failures in that.
  */
-void drm_mode_connector_set_link_status_property(struct drm_mode_connector *connector,
+void drm_mode_connector_set_link_status_property(struct drm_connector *connector,
 						 uint64_t link_status)
 {
 	struct drm_device *dev = connector->dev;
@@ -1236,7 +1236,7 @@ int drm_mode_connector_set_obj_prop(struct drm_mode_object *obj,
 				    uint64_t value)
 {
 	int ret = -EINVAL;
-	struct drm_mode_connector *connector = obj_to_connector(obj);
+	struct drm_connector *connector = obj_to_connector(obj);
 
 	/* Do DPMS ourselves */
 	if (property == connector->dev->mode_config.dpms_property) {
@@ -1264,7 +1264,7 @@ int drm_mode_connector_property_set_ioctl(struct drm_device *dev,
 	return drm_mode_obj_set_property_ioctl(dev, &obj_set_prop, file_priv);
 }
 
-static struct drm_encoder *drm_mode_connector_get_encoder(struct drm_mode_connector *connector)
+static struct drm_encoder *drm_connector_get_encoder(struct drm_connector *connector)
 {
 	/* For atomic drivers only state objects are synchronously updated and
 	 * protected by modeset locks, so check those first. */
@@ -1290,7 +1290,7 @@ int drm_mode_getconnector(struct drm_device *dev, void *data,
 			  struct drm_file *file_priv)
 {
 	struct drm_mode_get_connector *out_resp = data;
-	struct drm_mode_connector *connector;
+	struct drm_connector *connector;
 	struct drm_encoder *encoder;
 	struct drm_display_mode *mode;
 	int mode_count = 0;
@@ -1307,18 +1307,18 @@ int drm_mode_getconnector(struct drm_device *dev, void *data,
 
 	memset(&u_mode, 0, sizeof(struct drm_mode_modeinfo));
 
-	connector = drm_mode_connector_lookup(dev, file_priv, out_resp->connector_id);
+	connector = drm_connector_lookup(dev, file_priv, out_resp->connector_id);
 	if (!connector)
 		return -ENOENT;
 
-	for (i = 0; i < drm_mode_connector_MAX_ENCODER; i++)
+	for (i = 0; i < DRM_CONNECTOR_MAX_ENCODER; i++)
 		if (connector->encoder_ids[i] != 0)
 			encoders_count++;
 
 	if ((out_resp->count_encoders >= encoders_count) && encoders_count) {
 		copied = 0;
 		encoder_ptr = (uint32_t __user *)(unsigned long)(out_resp->encoders_ptr);
-		for (i = 0; i < drm_mode_connector_MAX_ENCODER; i++) {
+		for (i = 0; i < DRM_CONNECTOR_MAX_ENCODER; i++) {
 			if (connector->encoder_ids[i] != 0) {
 				if (put_user(connector->encoder_ids[i],
 					     encoder_ptr + copied)) {
@@ -1378,7 +1378,7 @@ int drm_mode_getconnector(struct drm_device *dev, void *data,
 	mutex_unlock(&dev->mode_config.mutex);
 
 	drm_modeset_lock(&dev->mode_config.connection_mutex, NULL);
-	encoder = drm_mode_connector_get_encoder(connector);
+	encoder = drm_connector_get_encoder(connector);
 	if (encoder)
 		out_resp->encoder_id = encoder->base.id;
 	else
@@ -1393,7 +1393,7 @@ int drm_mode_getconnector(struct drm_device *dev, void *data,
 	drm_modeset_unlock(&dev->mode_config.connection_mutex);
 
 out:
-	drm_mode_connector_put(connector);
+	drm_connector_put(connector);
 
 	return ret;
 }
