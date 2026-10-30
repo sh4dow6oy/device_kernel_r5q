@@ -212,6 +212,8 @@ int drm_connector_init(struct drm_device *dev,
 	mutex_init(&connector->mutex);
 	connector->edid_blob_ptr = NULL;
 	connector->status = connector_status_unknown;
+	connector->display_info.panel_orientation =
+		DRM_MODE_PANEL_ORIENTATION_UNKNOWN;
 
 	drm_connector_get_cmdline_mode(connector);
 
