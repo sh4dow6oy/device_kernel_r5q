@@ -10,6 +10,9 @@
 #include <drm/drm_mipi_dsi.h>
 #include "msm_drv.h"
 
+#define MAX_EXT_BRIDGE_PORT_CONFIG             16
+#define MAX_DSI_CTRLS_PER_DISPLAY             2
+
 #define DSI_H_TOTAL(t) (((t)->h_active) + ((t)->h_back_porch) + \
 			((t)->h_sync_width) + ((t)->h_front_porch))
 
