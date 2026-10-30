@@ -596,7 +596,7 @@ void drm_connector_list_iter_end(struct drm_connector_list_iter *iter)
 	iter->dev = NULL;
 	if (iter->conn)
 		drm_connector_put(iter->conn);
-	lock_release(&connector_list_iter_dep_map, 0, _RET_IP_);
+	lock_release(&connector_list_iter_dep_map, 0);
 }
 EXPORT_SYMBOL(drm_connector_list_iter_end);
 
@@ -915,8 +915,8 @@ int drm_mode_create_tv_properties(struct drm_device *dev,
 		goto nomem;
 
 	for (i = 0; i < num_modes; i++)
-		drm_property_add_enum(dev->mode_config.tv_mode_property, i,
-				      i, modes[i]);
+		drm_property_add_enum(property, drm_scaling_mode_enum_list[i].type, 
+                      		  drm_scaling_mode_enum_list[i].name);
 
 	dev->mode_config.tv_brightness_property =
 		drm_property_create_range(dev, 0, "brightness", 0, 100);
