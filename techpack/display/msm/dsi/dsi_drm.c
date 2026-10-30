@@ -460,127 +460,119 @@ static bool dsi_bridge_mode_fixup(struct drm_bridge *bridge,
 			(!(dsi_mode.dsi_mode_flags & DSI_MODE_FLAG_DYN_CLK)) &&
 			(!crtc_state->active_changed ||
 			 display->is_cont_splash_enabled))
-#if defined(CONFIG_DISPLAY_SAMSUNG)
-			if (display->panel->panel_initialized || display->is_cont_splash_enabled) {
-				dsi_mode.dsi_mode_flags |= DSI_MODE_FLAG_DMS;
-				pr_info("DMS : switch mode %s -> %s\n", (&cur_mode)->name, adjusted_mode->name);
-			}
-#elif defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
-			{
-				if (display->panel->panel_initialized || display->is_cont_splash_enabled) {
-					struct samsung_display_driver_data *vdd = display->panel->panel_private;
-					struct vrr_info *vrr = &vdd->vrr;
-					bool adjusted_sot_hs;
-					bool cur_sot_hs;
+{
+	if (display->panel->panel_initialized || display->is_cont_splash_enabled) {
+		struct samsung_display_driver_data *vdd = display->panel->panel_private;
+		struct vrr_info *vrr = &vdd->vrr;
+		bool adjusted_sot_hs;
+		bool cur_sot_hs;
 
-					vrr->adjusted_refresh_rate = adjusted_mode->vrefresh;
+		vrr->adjusted_refresh_rate = adjusted_mode->vrefresh;
 
-					cur_sot_hs = ss_is_sot_hs_from_drm_mode(&cur_mode);
-					adjusted_sot_hs = ss_is_sot_hs_from_drm_mode(adjusted_mode);
-					vrr->adjusted_sot_hs_mode = adjusted_sot_hs;
+		cur_sot_hs = ss_is_sot_hs_from_drm_mode(&cur_mode);
+		adjusted_sot_hs = ss_is_sot_hs_from_drm_mode(adjusted_mode);
+		vrr->adjusted_sot_hs_mode = adjusted_sot_hs;
 
-					vrr->cur_h_active = cur_mode.hdisplay;
-					vrr->cur_v_active = cur_mode.vdisplay;
-					vrr->adjusted_h_active = adjusted_mode->hdisplay;
-					vrr->adjusted_v_active = adjusted_mode->vdisplay;
+		vrr->cur_h_active = cur_mode.hdisplay;
+		vrr->cur_v_active = cur_mode.vdisplay;
+		vrr->adjusted_h_active = adjusted_mode->hdisplay;
+		vrr->adjusted_v_active = adjusted_mode->vdisplay;
 
-					/* vrr->cur_refresh_rate valuse is changed in Bridge RR,
-					 * so use cur_mode info.
-					 */
-					if ((cur_mode.vrefresh != adjusted_mode->vrefresh) ||
-							(cur_sot_hs != adjusted_sot_hs)) {
-						LCD_INFO("DMS: VRR flag: %d -> 1\n", vrr->is_vrr_changing);
-						vrr->is_vrr_changing = true;
-						vdd->vrr.running_vrr_mdp = true;
-					}
+		/* vrr->cur_refresh_rate value is changed in Bridge RR,
+		 * so use cur_mode info.
+		 */
+		if ((cur_mode.vrefresh != adjusted_mode->vrefresh) ||
+				(cur_sot_hs != adjusted_sot_hs)) {
+			LCD_INFO("DMS: VRR flag: %d -> 1\n", vrr->is_vrr_changing);
+			vrr->is_vrr_changing = true;
+			vdd->vrr.running_vrr_mdp = true;
+		}
 
-					if ((cur_mode.hdisplay != adjusted_mode->hdisplay) ||
-							(cur_mode.vdisplay != adjusted_mode->vdisplay)) {
-						LCD_INFO("DMS: MULTI RES flag: %d -> 1\n",
-								vrr->is_multi_resolution_changing);
-						vrr->is_multi_resolution_changing = true;
-					}
+		if ((cur_mode.hdisplay != adjusted_mode->hdisplay) ||
+				(cur_mode.vdisplay != adjusted_mode->vdisplay)) {
+			LCD_INFO("DMS: MULTI RES flag: %d -> 1\n",
+					vrr->is_multi_resolution_changing);
+			vrr->is_multi_resolution_changing = true;
+		}
 
-					dsi_mode.dsi_mode_flags |= DSI_MODE_FLAG_DMS;
+		dsi_mode.dsi_mode_flags |= DSI_MODE_FLAG_DMS;
 
-					/* Set max sde core clock to prevent screen noise due to
-					 * unbalanced clock between MDP and panel
-					 * SDE core clock will be restored in ss_panel_vrr_switch()
-					 * after finish VRR change.
-					 */
-					rc = ss_set_max_sde_core_clk(display->drm_dev);
-					if (rc) {
-						LCD_ERR("fail to set max sde core clock..(%d)\n", rc);
-						SS_XLOG(rc, 0xebad);
-					}
+		/* Set max sde core clock to prevent screen noise due to
+		 * unbalanced clock between MDP and panel
+		 * SDE core clock will be restored in ss_panel_vrr_switch()
+		 * after finish VRR change.
+		 */
+		rc = ss_set_max_sde_core_clk(display->drm_dev);
+		if (rc) {
+			LCD_ERR("fail to set max sde core clock..(%d)\n", rc);
+			SS_XLOG(rc, 0xebad);
+		}
 
-					SS_XLOG(cur_mode.vrefresh, cur_sot_hs, adjusted_mode->vrefresh, adjusted_sot_hs);
-					LCD_INFO("DMS: switch mode %s(%dx%d@%d%s) -> %s(%dx%d@%d%s)\n",
-						cur_mode.name,
-						cur_mode.hdisplay,
-						cur_mode.vdisplay,
-						cur_mode.vrefresh,
-						cur_sot_hs ? "HS" : "NS",
-						adjusted_mode->name,
-						adjusted_mode->hdisplay,
-						adjusted_mode->vdisplay,
-						adjusted_mode->vrefresh,
-						adjusted_sot_hs ? "HS" : "NS");
-				}
-				else if (!drm_mode_equal(&cur_mode, adjusted_mode)) {
-					/* In case of that
-					 * - display power state is changing,
-					 * - splash is enabled yet, or
-					 * - VRR, POMS, or DYN_CLK is set,
-					 * it will apply display_mode in dsi_display_mode() function without set DMS flag.
-					 *
-					 * But, Samsung VRR should apply target VRR mode in vrr->cur_refresh_rate.
-					 * Brightness setting will apply current VRR mode, and apply it to UB.
-					 * So, in this corner case, just save target VRR mode in vrr->cur_refresh_rate.
-					 *
-					 * Even it is only multi resolution scenario, not VRR scenario,
-					 * it should save resolution for VRR, and it is harmless to save
-					 * current and target refresh rate to intended refresh rate.
-					 */
-					struct samsung_display_driver_data *vdd = display->panel->panel_private;
-					struct vrr_info *vrr = &vdd->vrr;
-					bool adjusted_sot_hs;
-					bool cur_sot_hs;
+		SS_XLOG(cur_mode.vrefresh, cur_sot_hs, adjusted_mode->vrefresh, adjusted_sot_hs);
+		LCD_INFO("DMS: switch mode %s(%dx%d@%d%s) -> %s(%dx%d@%d%s)\n",
+			cur_mode.name,
+			cur_mode.hdisplay,
+			cur_mode.vdisplay,
+			cur_mode.vrefresh,
+			cur_sot_hs ? "HS" : "NS",
+			adjusted_mode->name,
+			adjusted_mode->hdisplay,
+			adjusted_mode->vdisplay,
+			adjusted_mode->vrefresh,
+			adjusted_sot_hs ? "HS" : "NS");
+	}
+	else if (!drm_mode_equal(&cur_mode, adjusted_mode)) {
+		/* In case of that:
+		 * - display power state is changing,
+		 * - splash is enabled yet, or
+		 * - VRR, POMS, or DYN_CLK is set,
+		 * it will apply display_mode in dsi_display_mode() function without set DMS flag.
+		 *
+		 * But, Samsung VRR should apply target VRR mode in vrr->cur_refresh_rate.
+		 * Brightness setting will apply current VRR mode, and apply it to UB.
+		 * So, in this corner case, just save target VRR mode in vrr->cur_refresh_rate.
+		 *
+		 * Even it is only multi resolution scenario, not VRR scenario,
+		 * it should save resolution for VRR, and it is harmless to save
+		 * current and target refresh rate to intended refresh rate.
+		 */
+		struct samsung_display_driver_data *vdd = display->panel->panel_private;
+		struct vrr_info *vrr = &vdd->vrr;
+		bool adjusted_sot_hs;
+		bool cur_sot_hs;
 
-					cur_sot_hs = ss_is_sot_hs_from_drm_mode(&cur_mode);
-					adjusted_sot_hs = ss_is_sot_hs_from_drm_mode(adjusted_mode);
+		cur_sot_hs = ss_is_sot_hs_from_drm_mode(&cur_mode);
+		adjusted_sot_hs = ss_is_sot_hs_from_drm_mode(adjusted_mode);
 
-					vrr->cur_refresh_rate = vrr->adjusted_refresh_rate =
-						adjusted_mode->vrefresh;
-					vrr->cur_sot_hs_mode = vrr->adjusted_sot_hs_mode =
-						adjusted_sot_hs;
-					vrr->cur_h_active = vrr->adjusted_h_active =
-						adjusted_mode->hdisplay;
-					vrr->cur_v_active  = vrr->adjusted_v_active =
-						adjusted_mode->vdisplay;
+		vrr->cur_refresh_rate = vrr->adjusted_refresh_rate =
+			adjusted_mode->vrefresh;
+		vrr->cur_sot_hs_mode = vrr->adjusted_sot_hs_mode =
+			adjusted_sot_hs;
+		vrr->cur_h_active = vrr->adjusted_h_active =
+			adjusted_mode->hdisplay;
+		vrr->cur_v_active = vrr->adjusted_v_active =
+			adjusted_mode->vdisplay;
 
-					SS_XLOG(cur_mode.vrefresh, cur_sot_hs,
-						adjusted_mode->vrefresh, adjusted_sot_hs,
-						crtc_state->active_changed, display->is_cont_splash_enabled);
+		SS_XLOG(cur_mode.vrefresh, cur_sot_hs,
+			adjusted_mode->vrefresh, adjusted_sot_hs,
+			crtc_state->active_changed, display->is_cont_splash_enabled);
 
-					LCD_INFO("DMS: switch mode %s(%dx%d@%d%s) -> %s(%dx%d@%d%s) "\
-							"during active_changed(%d) or splash(%d)\n",
-					cur_mode.name,
-					cur_mode.hdisplay,
-					cur_mode.vdisplay,
-					cur_mode.vrefresh,
-					cur_sot_hs ? "HS" : "NM",
-					adjusted_mode->name,
-					adjusted_mode->hdisplay,
-					adjusted_mode->vdisplay,
-					adjusted_mode->vrefresh,
-					adjusted_sot_hs ? "HS" : "NM",
-					crtc_state->active_changed,
-					display->is_cont_splash_enabled);
-				}
-			}
-#endif
-
+		LCD_INFO("DMS: switch mode %s(%dx%d@%d%s) -> %s(%dx%d@%d%s) "
+				"during active_changed(%d) or splash(%d)\n",
+		cur_mode.name,
+		cur_mode.hdisplay,
+		cur_mode.vdisplay,
+		cur_mode.vrefresh,
+		cur_sot_hs ? "HS" : "NM",
+		adjusted_mode->name,
+		adjusted_mode->hdisplay,
+		adjusted_mode->vdisplay,
+		adjusted_mode->vrefresh,
+		adjusted_sot_hs ? "HS" : "NM",
+		crtc_state->active_changed,
+		display->is_cont_splash_enabled);
+	}
+}
 		/* Reject seemless transition when active/connectors changed.*/
 		if ((crtc_state->active_changed ||
 			(crtc_state->connectors_changed && clone_mode)) &&
