@@ -442,11 +442,9 @@ static int dsi_panel_set_pinctrl_state(struct dsi_panel *panel, bool enable)
 	return rc;
 }
 
-#if defined(CONFIG_DISPLAY_SAMSUNG)  || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
 int dsi_panel_power_on(struct dsi_panel *panel)
 #else
 static int dsi_panel_power_on(struct dsi_panel *panel)
-#endif
 {
 	int rc = 0;
 
