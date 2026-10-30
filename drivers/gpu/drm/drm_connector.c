@@ -915,8 +915,8 @@ int drm_mode_create_tv_properties(struct drm_device *dev,
 		goto nomem;
 
 	for (i = 0; i < num_modes; i++)
-		drm_property_add_enum(property, drm_scaling_mode_enum_list[i].type, 
-                      drm_scaling_mode_enum_list[i].name);
+		drm_property_add_enum(dev->mode_config.tv_mode_property,
+				      i, modes[i]);
 
 	dev->mode_config.tv_brightness_property =
 		drm_property_create_range(dev, 0, "brightness", 0, 100);
