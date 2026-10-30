@@ -204,14 +204,16 @@ int dsi_display_set_backlight(struct drm_connector *connector,
 	u32 bl_scale, bl_scale_ad;
 	u64 bl_temp;
 	int rc = 0;
-
+#if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
 	struct samsung_display_driver_data *vdd;
+#endif
 
 	if (dsi_display == NULL || dsi_display->panel == NULL)
 		return -EINVAL;
 
 	panel = dsi_display->panel;
 
+#if defined(CONFIG_DISPLAY_SAMSUNG)
 	vdd = panel->panel_private;
 
 	if (vdd->dtsi_data.flash_gamma_support &&
@@ -233,6 +235,7 @@ int dsi_display_set_backlight(struct drm_connector *connector,
 	}
 
 	ss_set_exclusive_tx_lock_from_qct(panel->panel_private, true);
+#endif
 
 	mutex_lock(&panel->panel_lock);
 	if (!dsi_panel_initialized(panel)) {
