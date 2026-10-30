@@ -23,8 +23,9 @@
 #include "dsi_panel.h"
 #include "dsi_ctrl_hw.h"
 #include "dsi_parser.h"
-
+#if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
 #include "ss_dsi_panel_common.h"
+#endif
 
 /**
  * topology is currently defined by a set of following 3 values:
@@ -1922,6 +1923,7 @@ error:
 	return rc;
 }
 
+#if defined(CONFIG_DISPLAY_SAMSUNG)
 char *cmd_set_prop_map[SS_DSI_CMD_SET_MAX] = {
 	"qcom,mdss-dsi-pre-on-command",
 	"qcom,mdss-fd-on-factory-command",
@@ -2263,8 +2265,8 @@ char *cmd_set_prop_map[SS_DSI_CMD_SET_MAX] = {
 	"samsung,self_mask_check_rx_cmds",
 	"RX_CMD_END not parsed from DTSI",
 };
-
-	char *cmd_set_prop_map[SS_DSI_CMD_SET_MAX] = {
+#elif defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
+char *cmd_set_prop_map[SS_DSI_CMD_SET_MAX] = {
 	"qcom,mdss-dsi-pre-on-command",
 	"qcom,mdss-dsi-on-command",
 	"qcom,mdss-dsi-post-panel-on-command",
@@ -2941,6 +2943,7 @@ error:
 
 }
 
+#if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
 /* ss_dsi_panel_parse_cmd_sets_sub:
  * parse and save samsung mipi commands for each panel revision.
  * If the panel revision has no dtsi data,
@@ -4834,7 +4837,9 @@ int dsi_panel_get_mode(struct dsi_panel *panel,
 	int rc = 0, num_timings;
 	void *utils_data = NULL;
 
+#if defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
 	struct samsung_display_driver_data *vdd;
+#endif
 
 	if (!panel || !mode) {
 		pr_err("invalid params\n");
@@ -4989,9 +4994,11 @@ int dsi_panel_get_mode(struct dsi_panel *panel,
 			mode->priv_info->mdp_transfer_time_us = 0;
 	}
 
+#if defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
 	vdd = panel->panel_private;
 	vdd->num_of_intf = mode->priv_info->topology.num_intf;
 	LCD_INFO_ONCE("[DISPLAY_%d] vdd->num_of_intf = %d\n", vdd->ndx, vdd->num_of_intf);
+#endif
 
 	goto done;
 
@@ -5049,9 +5056,11 @@ int dsi_panel_get_host_cfg_for_mode(struct dsi_panel *panel,
 
 	config->esc_clk_rate_hz = 19200000;
 
+#if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
 	vdd = panel->panel_private;
 	if (vdd->dtsi_data.samsung_esc_clk_128M)
 		config->esc_clk_rate_hz = 12800000;
+#endif
 
 	mutex_unlock(&panel->panel_lock);
 	return rc;
@@ -5246,6 +5255,7 @@ exit:
 	return rc;
 }
 
+#if defined(CONFIG_DISPLAY_SAMSUNG)
 int wait_tcon_ready(struct dsi_panel *panel)
 {
 	struct samsung_display_driver_data *vdd = panel->panel_private;
@@ -5268,7 +5278,9 @@ int wait_tcon_ready(struct dsi_panel *panel)
 	else
 		return true;
 }
+#endif
 
+#if defined(CONFIG_DISPLAY_SAMSUNG)
 void tcon_prepare(void)
 {
 	struct samsung_display_driver_data *vdd = ss_get_vdd(PRIMARY_DISPLAY_NDX);
@@ -5301,6 +5313,7 @@ void tcon_prepare(void)
 
 	vdd->reset_time_64 = ktime_to_ms(ktime_get());
 }
+#endif
 
 int dsi_panel_prepare(struct dsi_panel *panel)
 {
