@@ -214,7 +214,7 @@ int dsi_display_set_backlight(struct drm_connector *connector,
 	panel = dsi_display->panel;
 
 #if defined(CONFIG_DISPLAY_SAMSUNG)
-	vdd = panel->samsung_set_panel_private;
+	vdd = panel->panel_private;
 
 	if (vdd->dtsi_data.flash_gamma_support &&
 			!vdd->panel_br_info.flash_data.init_done) {
@@ -223,9 +223,9 @@ int dsi_display_set_backlight(struct drm_connector *connector,
 		return rc;
 	}
 
-	ss_set_exclusive_tx_lock_from_qct(panel->samsung_set_panel_private, true);
+	ss_set_exclusive_tx_lock_from_qct(panel->panel_private, true);
 #elif defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
-	vdd = panel->samsung_set_panel_private;
+	vdd = panel->panel_private;
 
 	if (vdd->br_info.flash_gamma_support &&
 			!vdd->br_info.flash_gamma_init_done) {
