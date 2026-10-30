@@ -219,7 +219,7 @@ struct dsi_display {
 	/* panel info */
 	struct dsi_panel *panel;
 	struct device_node *disp_node;
-	struct device_node *panel_node;
+	struct device_node *panel_of;
 	struct device_node *parser_node;
 
 	/* external bridge */
