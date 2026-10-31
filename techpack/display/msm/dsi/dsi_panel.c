@@ -18,10 +18,9 @@
 #include "sde_dsc_helper.h"
 #include "sde_vdc_helper.h"
 
-#if defined(CONFIG_DISPLAY_SAMSUNG)
+#if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
 #include "ss_dsi_panel_common.h"
 #endif
-
 /**
  * topology is currently defined by a set of following 3 values:
  * 1. num of layer mixers
