@@ -13,6 +13,7 @@
  */
 
 #define pr_fmt(fmt)	"msm-dsi-panel:[%s:%d] " fmt, __func__, __LINE__
+#include <linux/dsi_ctrl.h>
 #include <linux/delay.h>
 #include <linux/slab.h>
 #include <linux/gpio.h>
@@ -21,7 +22,6 @@
 #include <video/mipi_display.h>
 
 #include "dsi_panel.h"
-#include "dsi_ctrl.h"
 #include "dsi_parser.h"
 #if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
 #include "ss_dsi_panel_common.h"
