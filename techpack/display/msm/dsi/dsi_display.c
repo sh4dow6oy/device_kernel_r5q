@@ -14,6 +14,7 @@
 
 #define pr_fmt(fmt)	"msm-dsi-display:[%s] " fmt, __func__
 
+#include <linux/dsi_panel.h>
 #include <linux/list.h>
 #include <linux/of.h>
 #include <linux/of_gpio.h>
@@ -23,7 +24,6 @@
 #include "sde_connector.h"
 #include "msm_mmu.h"
 #include "dsi_display.h"
-#include "dsi_panel.h"
 #include "dsi_ctrl.h"
 #include "dsi_ctrl_hw.h"
 #include "dsi_drm.h"
