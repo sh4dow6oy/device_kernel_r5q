@@ -26,127 +26,6 @@
 #include "ss_dsi_panel_common.h"
 
 bool enable_pr_debug;
-
-#if 1 // case 04436106
-DEFINE_SPINLOCK(ss_xlock_vsync);
-
-static struct ss_dbg_xlog_vsync {
-	struct ss_tlog logs[SS_XLOG_ENTRY];
-	u32 first;
-	u32 last;
-	u32 curr;
-	struct dentry *ss_xlog;
-	u32 xlog_enable;
-	u32 panic_on_err;
-} ss_dbg_xlog_vsync;
-
-
-/************************************************************
- *
- *		Samsung XLOG & DUMP Function
- *
- **************************************************************/
-
-void ss_xlog_vsync(const char *name, int flag, ...)
-{
-	unsigned long flags;
-	int i, val = 0;
-	va_list args;
-	struct ss_tlog *log;
-
-	spin_lock_irqsave(&ss_xlock_vsync, flags);
-	log = &ss_dbg_xlog_vsync.logs[ss_dbg_xlog_vsync.curr];
-	log->time = ktime_to_us(ktime_get());
-	log->name = name;
-	log->pid = current->pid;
-
-	va_start(args, flag);
-	for (i = 0; i < SS_XLOG_MAX_DATA; i++) {
-		val = va_arg(args, int);
-		if (val == DATA_LIMITER)
-			break;
-
-		log->data[i] = val;
-	}
-	va_end(args);
-	log->data_cnt = i;
-	ss_dbg_xlog_vsync.curr = (ss_dbg_xlog_vsync.curr + 1) % SS_XLOG_ENTRY;
-	ss_dbg_xlog_vsync.last++;
-
-	spin_unlock_irqrestore(&ss_xlock_vsync, flags);
-}
-
-static bool __ss_dump_xlog_calc_range_vsync(void)
-{
-	static u32 next;
-	bool need_dump = true;
-	unsigned long flags;
-	struct ss_dbg_xlog_vsync *xlog = &ss_dbg_xlog_vsync;
-
-	spin_lock_irqsave(&ss_xlock_vsync, flags);
-
-	xlog->first = next;
-
-	if (xlog->last == xlog->first) {
-		need_dump = false;
-		goto dump_exit;
-	}
-
-	if (xlog->last < xlog->first) {
-		xlog->first %= SS_XLOG_ENTRY;
-		if (xlog->last < xlog->first)
-			xlog->last += SS_XLOG_ENTRY;
-	}
-
-	if ((xlog->last - xlog->first) > SS_XLOG_ENTRY) {
-		pr_warn("xlog buffer overflow before dump: %d\n",
-			xlog->last - xlog->first);
-		xlog->first = xlog->last - SS_XLOG_ENTRY;
-	}
-
-	next = xlog->first + 1;
-
-dump_exit:
-	spin_unlock_irqrestore(&ss_xlock_vsync, flags);
-
-	return need_dump;
-}
-
-static ssize_t ss_xlog_dump_entry_vsync(char *xlog_buf, ssize_t xlog_buf_size)
-{
-	int i;
-	ssize_t off = 0;
-	struct ss_tlog *log;
-	unsigned long flags;
-
-	spin_lock_irqsave(&ss_xlock_vsync, flags);
-
-	log = &ss_dbg_xlog_vsync.logs[ss_dbg_xlog_vsync.first %
-		SS_XLOG_ENTRY];
-
-	off = snprintf((xlog_buf + off), (xlog_buf_size - off),
-		"[%5llu.%6llu]:", log->time/1000000, log->time%1000000);
-
-	if (off < SS_XLOG_BUF_ALIGN_TIME) {
-		memset((xlog_buf + off), 0x20, (SS_XLOG_BUF_ALIGN_TIME - off));
-		off = SS_XLOG_BUF_ALIGN_TIME;
-	}
-
-	off += snprintf((xlog_buf + off), (xlog_buf_size - off), "%s => ",
-		log->name);
-
-	for (i = 0; i < log->data_cnt; i++)
-		off += snprintf((xlog_buf + off), (xlog_buf_size - off),
-			"%x ", log->data[i]);
-
-	off += snprintf((xlog_buf + off), (xlog_buf_size - off), "\n");
-
-	spin_unlock_irqrestore(&ss_xlock_vsync, flags);
-
-	return off;
-}
-#endif
-
 DEFINE_SPINLOCK(ss_xlock);
 
 static struct ss_dbg_xlog {
@@ -297,22 +176,6 @@ static ssize_t ss_xlog_dump_read(struct file *file, char __user *buff,
 			return -EFAULT;
 		*ppos += len;
 	}
-#if 1 // case 04436106
-	else if (__ss_dump_xlog_calc_range_vsync()) {
-		len = ss_xlog_dump_entry_vsync(xlog_buf, SS_XLOG_BUF_MAX);
-
-		if (len < 0 || len > count) {
-			pr_err("len is more than user buffer size");
-			return 0;
-		}
-
-		if (copy_to_user(buff, xlog_buf, len))
-			return -EFAULT;
-		*ppos += len;
-	}
-#endif
-
-	/* temp: print vsync log.. case 04436106 */
 
 	return len;
 }
@@ -342,8 +205,7 @@ void ss_store_xlog_panic_dbg(void)
 	char err_buf[SS_XLOG_PANIC_DBG_LENGTH] = {0,};
 	struct ss_tlog *log;
 	struct ss_dbg_xlog *xlog = &ss_dbg_xlog;
-	struct samsung_display_driver_data *vdd_primary = ss_get_vdd(PRIMARY_DISPLAY_NDX);
-	struct samsung_display_driver_data *vdd_secondary = ss_get_vdd(SECONDARY_DISPLAY_NDX);
+	struct samsung_display_driver_data *vdd = ss_get_vdd(PRIMARY_DISPLAY_NDX);
 
 	last = xlog->last;
 	if (last)
@@ -367,10 +229,9 @@ void ss_store_xlog_panic_dbg(void)
 end:
 	pr_info("%s:%s\n", __func__, err_buf);
 
-	if (vdd_primary && gpio_is_valid(vdd_primary->ub_con_det.gpio))
-		LCD_ERR("ub con gpio for primary = %d\n", gpio_get_value(vdd_primary->ub_con_det.gpio));
-	if (vdd_secondary && gpio_is_valid(vdd_secondary->ub_con_det.gpio))
-		LCD_ERR("ub con gpio for secondary = %d\n", gpio_get_value(vdd_secondary->ub_con_det.gpio));
+	if (gpio_is_valid(vdd->ub_con_det.gpio))
+		LCD_ERR("ub con gpio = %d\n", gpio_get_value(vdd->ub_con_det.gpio));
+
 /*
  * #ifdef CONFIG_SEC_DEBUG
  *	sec_debug_store_additional_dbg(DBG_2_DISPLAY_ERR, 0, "%s", err_buf);
@@ -384,6 +245,125 @@ static const struct file_operations xlog_dump_ops = {
 	.read = ss_xlog_dump_read,
 	.release = single_release,
 };
+
+#define SS_ONCE_LOG_BUF_MAX	(1024)
+static int debug_display_read_once(struct samsung_display_driver_data *vdd,
+				char __user *buff, loff_t *ppos)
+{
+	struct dsi_panel *panel = GET_DSI_PANEL(vdd);
+	char buf[SS_ONCE_LOG_BUF_MAX];
+	ssize_t len = 0;
+
+	if (panel && panel->cur_mode) {
+		len += snprintf(buf + len, SS_ONCE_LOG_BUF_MAX - len, "VRR: cur_mode:  %dx%d@%d\n",
+			panel->cur_mode->timing.h_active,
+			panel->cur_mode->timing.v_active,
+			panel->cur_mode->timing.refresh_rate);
+	}
+
+	/* Limit maximum copy_to_user size to one PAGE_SIZE, to avoid error */
+	if (len > PAGE_SIZE) {
+		LCD_ERR("len(%zd) is bigger than one PAGE_SIZE\n", len);
+		return -EFAULT;
+	}
+
+	if (copy_to_user(buff, buf, len))
+		return -EFAULT;
+
+	*ppos += len;
+	return len;
+}
+
+static ssize_t debug_display_read(struct file *file, char __user *buff,
+		size_t count, loff_t *ppos)
+{
+	struct miscdevice *c = file->private_data;
+	struct dsi_display *display = dev_get_drvdata(c->parent);
+	struct dsi_panel *panel = display->panel;
+	struct samsung_display_driver_data *vdd = panel->panel_private;
+	ssize_t len;
+
+	if (IS_ERR_OR_NULL(vdd)) {
+		LCD_ERR("vdd is null or error\n");
+		return -ENODEV;
+	}
+
+	if (vdd->debug_data->report_once) {
+		LCD_INFO("report once\n");
+		vdd->debug_data->report_once = false;
+		len = debug_display_read_once(vdd, buff, ppos);
+		return len;
+	}
+
+	len = ss_xlog_dump_read(file, buff, count, ppos);
+	if (len)
+		return len;
+
+	len = ss_sde_evtlog_dump_read(file, buff, count, ppos);
+	if (len)
+		return len;
+
+	LCD_INFO("done");
+	return len;
+}
+
+static int debug_display_open(struct inode *inode, struct file *file)
+{
+	struct miscdevice *c = file->private_data;
+	struct dsi_display *display = dev_get_drvdata(c->parent);
+	struct dsi_panel *panel = display->panel;
+	struct samsung_display_driver_data *vdd = panel->panel_private;
+
+	if (IS_ERR_OR_NULL(vdd)) {
+		LCD_ERR("vdd is null or error\n");
+		return -ENODEV;
+	}
+
+	vdd->debug_data->report_once = true;
+	LCD_INFO("done");
+
+	/* MDP XLOG */
+	ss_sde_dbg_debugfs_open();
+
+	return 0;
+}
+
+static int debug_display_release(struct inode *inode, struct file *file)
+{
+	LCD_INFO("done");
+
+	return 0;
+}
+
+static const struct file_operations debug_display_fops = {
+	.owner = THIS_MODULE,
+	.open = debug_display_open,
+	.read = debug_display_read,
+	.release = debug_display_release,
+};
+
+#define DEV_NAME_SIZE 24
+int ss_disp_dbg_info_misc_register(void)
+{
+	struct samsung_display_driver_data *vdd = ss_get_vdd(0);
+	struct dsi_display *display = GET_DSI_DISPLAY(vdd);
+	static char devname[DEV_NAME_SIZE] = {'\0', };
+	struct miscdevice *dev = &vdd->debug_data->dev;
+	int ret;
+
+	dev->minor = MISC_DYNAMIC_MINOR;
+	snprintf(devname, DEV_NAME_SIZE, "sec_display_debug");
+	dev->name = devname;
+	dev->fops = &debug_display_fops;
+	dev->parent = &display->pdev->dev;
+	ret = misc_register(dev);
+	if (ret) {
+		LCD_ERR("failed to register driver : %d\n", ret);
+		return -ENODEV;
+	}
+
+	return 0;
+}
 
 int ss_read_rddpm(struct samsung_display_driver_data *vdd)
 {
@@ -512,68 +492,6 @@ int ss_read_self_diag(struct samsung_display_driver_data *vdd)
 	return 0;
 }
 
-int ss_read_mipi_protocol_err(struct samsung_display_driver_data *vdd)
-{
-	u16 err_status = 0;
-	u8 rbuf[2];
-	int ret;
-
-	ret = ss_panel_data_read(vdd, RX_LDI_DEBUG6, rbuf, LEVEL_KEY_NONE);
-	if (ret) {
-		LCD_ERR("fail to read protocol_err(ret=%d)\n", ret);
-		return ret;
-	}
-
-	err_status = (rbuf[0] << 8) | rbuf[1];
-
-	/* E9h mipi protocol error status register
-	 * ERR[15] : DSI Protocol violation
-	 * ERR[14] : DATA P lane contention detection
-	 * ERR[13] : Invalid Transmission Length
-	 * ERR[12] : DSI VC ID Invalid
-	 * ERR[11] : DSI Data Type Not Recognized
-	 * ERR[10] : Checksum Error
-	 * ERR[9] : ECC Error, multi_bit (detected, not corrected)
-	 * ERR[8] : ECC Error, single−bit (detected and corrected)
-	 * ERR[7] : Data Lane contention detection
-	 * ERR[6] : False Control Error
-	 * ERR[5] : HS RX Timeout
-	 * ERR[4] : Low−Power Transmit Sync Error
-	 * ERR[3] : Escape Mode Entry Command Error
-	 * ERR[2] : EoT Sync Error
-	 * ERR[1] : SoT Sync Error
-	 * ERR[0] : SoT Error
-         */
-	if (err_status) {
-		LCD_ERR("MIPI protocol error: 0x%x\n", err_status);
-	}
-
-	LCD_DEBUG("========== SHOW PANEL [E9h: MIPI PROTOCOL ERROR] INFO ==========\n");
-	LCD_DEBUG("* Reg Value : 0x%02x, Result : %s\n",
-			err_status, (err_status & 0x00) ? "GOOD" : "NG");
-
-	LCD_DEBUG("* DSI Protocol violation : %s\n", (err_status & BIT(15)) ? "ERROR" : "OK");
-	LCD_DEBUG("* DATA P lane contention detection : %s\n", (err_status & BIT(14)) ? "ERROR" : "OK");
-	LCD_DEBUG("* Invalid Transmission Length : %s\n", (err_status & BIT(13)) ? "ERROR" : "OK");
-	LCD_DEBUG("* DSI VC ID Invalid : %s\n", (err_status & BIT(12)) ? "ERROR" : "OK");
-	LCD_DEBUG("* DSI Data Type Not Recognized : %s\n", (err_status & BIT(11)) ? "ERROR" : "OK");
-	LCD_DEBUG("* Checksum Error : %s\n", (err_status & BIT(10)) ? "ERROR" : "OK");
-	LCD_DEBUG("* ECC Error, multi_bit : %s\n", (err_status & BIT(9)) ? "ERROR" : "OK");
-	LCD_DEBUG("* ECC Error, single−bit : %s\n", (err_status & BIT(8)) ? "ERROR" : "OK");
-	LCD_DEBUG("* Data Lane contention detection : %s\n", (err_status & BIT(7)) ? "ERROR" : "OK");
-	LCD_DEBUG("* False Control Error : %s\n", (err_status & BIT(6)) ? "ERROR" : "OK");
-	LCD_DEBUG("* HS RX Timeout : %s\n", (err_status & BIT(5)) ? "ERROR" : "OK");
-	LCD_DEBUG("* Low−Power Transmit Sync Error : %s\n", (err_status & BIT(4)) ? "ERROR" : "OK");
-	LCD_DEBUG("* Escape Mode Entry Command Error : %s\n", (err_status & BIT(3)) ? "ERROR" : "OK");
-	LCD_DEBUG("* EoT Sync Error : %s\n", (err_status & BIT(2)) ? "ERROR" : "OK");
-	LCD_DEBUG("* SoT Sync Error : %s\n", (err_status & BIT(1)) ? "ERROR" : "OK");
-	LCD_DEBUG("* SoT Error : %s\n", (err_status & BIT(0)) ? "ERROR" : "OK");
-	LCD_DEBUG("=====================================================\n");
-
-	return err_status;
-}
-
-
 /* DDI CMD log buffer max size is 512 bytes.
  * But, qct display driver limit max read size to 255 bytes (0xFF)
  * due to panel dtsi. panel dtsi determines length with one byte.
@@ -607,11 +525,7 @@ char bootloader_pps2_data[SZ_64]; /* 0xA2 : PPS data (0x2d ~ 0x58)*/
 int ss_read_pps_data(struct samsung_display_driver_data *vdd)
 {
 	int ret;
-#if defined(CONFIG_SEC_F2Q_PROJECT)
-	LCD_ERR("temp block ss_read_pps_data\n");
-	//Temporally blocked because of null pointer error.
-	return 0;
-#endif
+
 	ret = ss_panel_data_read(vdd, RX_LDI_DEBUG_PPS1, bootloader_pps1_data, LEVEL1_KEY);
 	if (ret) {
 		LCD_ERR("fail to read pps_data(ret=%d)\n", ret);
@@ -771,16 +685,73 @@ static const struct file_operations dyn_mipi_clk_ops = {
 	.read = ss_read_dyn_mipi_clk_index_table,
 };
 
-static void ss_panel_debug_create(struct samsung_display_driver_data *vdd)
+#ifdef CONFIG_DEBUG_FS
+static int ss_panel_debugfs_init(struct samsung_display_driver_data *vdd)
 {
 	struct samsung_display_debug_data *debug_data;
 	struct samsung_display_driver_data *vdd_secondary =
 					ss_get_vdd(SECONDARY_DISPLAY_NDX);
+	int ret = 0;
+
+	if (IS_ERR_OR_NULL(vdd)) {
+		LCD_ERR("vdd NULL error\n");
+		return -ENODEV;
+	}
+
+	LCD_INFO("init display debugfs\n");
 
 	debug_data = vdd->debug_data;
 
-	/* Create file on debugfs of display_driver */
+	/* Root directory for display driver */
+	debug_data->root = debugfs_create_dir("display_driver", NULL);
+	if (IS_ERR_OR_NULL(debug_data->root)) {
+		LCD_ERR("debugfs_create_dir failed, error %ld(line:%d)\n",
+		       PTR_ERR(debug_data->root), __LINE__);
+		ret = -ENODEV;
+		goto fail_alloc;
+	}
 
+	/* Directory for dump */
+	debug_data->dump = debugfs_create_dir("dump", debug_data->root);
+	if (IS_ERR_OR_NULL(debug_data->dump)) {
+		LCD_ERR("debugfs_create_dir failed, error %ld(line:%d)\n",
+		       PTR_ERR(debug_data->dump), __LINE__);
+		ret = -ENODEV;
+		goto fail;
+	}
+
+	/* Directory for hw_info */
+	debug_data->hw_info = debugfs_create_dir("hw_info", debug_data->root);
+	if (IS_ERR_OR_NULL(debug_data->root)) {
+		LCD_ERR("debugfs_create_dir failed, error %ld(line:%d)\n",
+		       PTR_ERR(debug_data->root), __LINE__);
+		ret = -ENODEV;
+		goto fail;
+	}
+
+	/* Directory for display_status */
+	debug_data->display_status = debugfs_create_dir("display_status",
+					debug_data->root);
+	if (IS_ERR_OR_NULL(debug_data->display_status)) {
+		LCD_ERR("debugfs_create_dir failed, error %ld(line:%d)\n",
+		       PTR_ERR(debug_data->root), __LINE__);
+		ret = -ENODEV;
+		goto fail;
+	}
+
+	/* Directory for display LTP */
+	debug_data->display_ltp = debugfs_create_dir("display_ltp",
+					debug_data->root);
+	if (IS_ERR_OR_NULL(debug_data->display_status)) {
+		LCD_ERR("debugfs_create_dir failed, error %ld(line:%d)\n",
+		       PTR_ERR(debug_data->root), __LINE__);
+		ret = -ENODEV;
+		goto fail;
+	}
+
+	/*
+	 * Create file on debugfs of display_driver
+	 */
 
 	/* Create file on debugfs on dump */
 	debugfs_create_file("xlog_dump", 0644, debug_data->dump,
@@ -810,7 +781,19 @@ static void ss_panel_debug_create(struct samsung_display_driver_data *vdd)
 
 	/* Create file on debugfs on hw_info */
 	/* TBD */
+
+	return 0;
+
+fail:
+	debugfs_remove_recursive(vdd->debug_data->root);
+
+fail_alloc:
+	kfree(vdd->debug_data);
+	LCD_ERR("Fail to create files for debugfs(ret=%d)\n", ret);
+
+	return ret;
 }
+#endif
 
 static bool ss_read_debug_partition(struct lcd_debug_t *value)
 {
@@ -875,16 +858,20 @@ static int ss_register_dpci(struct samsung_display_driver_data *vdd)
 
 int ss_panel_debug_init(struct samsung_display_driver_data *vdd)
 {
-	int ret = 0;
 
-	if (IS_ERR_OR_NULL(vdd))
+	if (IS_ERR_OR_NULL(vdd)) {
+		LCD_ERR("vdd NULL error\n");
 		return -ENODEV;
+	}
 
-	if (vdd->ndx != COMMON_DISPLAY_NDX) {
-		struct samsung_display_driver_data *vdd_common = ss_get_vdd(COMMON_DISPLAY_NDX);
-		vdd->debug_data = vdd_common->debug_data;
-		LCD_INFO("vdd->ndx = %d Skip.. creat debugfs for only primary vdd & copy those from common\n",
-			vdd->ndx);
+	if (vdd->ndx != PRIMARY_DISPLAY_NDX) {
+		struct samsung_display_driver_data *vdd_primary =
+					ss_get_vdd(PRIMARY_DISPLAY_NDX);
+
+		vdd->debug_data = vdd_primary->debug_data;
+
+		LCD_INFO("skip.. create debugfs for only primary vdd(ndx=%d)\n",
+				vdd->ndx);
 		return 0;
 	}
 
@@ -916,67 +903,15 @@ int ss_panel_debug_init(struct samsung_display_driver_data *vdd)
 	 */
 	vdd->debug_data->panic_on_pptimeout = false;
 
-	/* Root directory for display driver */
-	vdd->debug_data->root = debugfs_create_dir("display_driver", NULL);
-	if (IS_ERR_OR_NULL(vdd->debug_data->root)) {
-		LCD_ERR("debugfs_create_dir failed, error %ld(line:%d)\n",
-		       PTR_ERR(vdd->debug_data->root), __LINE__);
-		ret = -ENODEV;
-		goto fail_alloc;
-	}
-
-	/* Directory for dump */
-	vdd->debug_data->dump = debugfs_create_dir("dump", vdd->debug_data->root);
-	if (IS_ERR_OR_NULL(vdd->debug_data->dump)) {
-		LCD_ERR("debugfs_create_dir failed, error %ld(line:%d)\n",
-		       PTR_ERR(vdd->debug_data->dump), __LINE__);
-		ret = -ENODEV;
-		goto fail;
-	}
-
-	/* Directory for hw_info */
-	vdd->debug_data->hw_info = debugfs_create_dir("hw_info", vdd->debug_data->root);
-	if (IS_ERR_OR_NULL(vdd->debug_data->root)) {
-		LCD_ERR("debugfs_create_dir failed, error %ld(line:%d)\n",
-		       PTR_ERR(vdd->debug_data->root), __LINE__);
-		ret = -ENODEV;
-		goto fail;
-	}
-
-	/* Directory for display_status */
-	vdd->debug_data->display_status = debugfs_create_dir("display_status",
-					vdd->debug_data->root);
-	if (IS_ERR_OR_NULL(vdd->debug_data->display_status)) {
-		LCD_ERR("debugfs_create_dir failed, error %ld(line:%d)\n",
-		       PTR_ERR(vdd->debug_data->root), __LINE__);
-		ret = -ENODEV;
-		goto fail;
-	}
-
-	/* Directory for display LTP */
-	vdd->debug_data->display_ltp = debugfs_create_dir("display_ltp",
-					vdd->debug_data->root);
-	if (IS_ERR_OR_NULL(vdd->debug_data->display_status)) {
-		LCD_ERR("debugfs_create_dir failed, error %ld(line:%d)\n",
-		       PTR_ERR(vdd->debug_data->root), __LINE__);
-		ret = -ENODEV;
-		goto fail;
-	}
-
-	ss_panel_debug_create(vdd);
+#ifdef CONFIG_DEBUG_FS
+	ss_panel_debugfs_init(vdd);
+#endif
 
 	ss_register_dpci(vdd);
 
+	ss_disp_dbg_info_misc_register();
+
 	return 0;
-
-fail:
-	debugfs_remove_recursive(vdd->debug_data->root);
-
-fail_alloc:
-	kfree(vdd->debug_data);
-	LCD_ERR("Fail to create files for debugfs(ret=%d)\n", ret);
-
-	return ret;
 }
 
 
@@ -1025,7 +960,7 @@ init_fail:
 
 void ss_smmu_debug_map(enum ss_smmu_type type, struct sg_table *table)
 {
-	struct samsung_display_driver_data *vdd = ss_get_vdd(COMMON_DISPLAY_NDX);
+	struct samsung_display_driver_data *vdd = ss_get_vdd(PRIMARY_DISPLAY_NDX);
 
 	spinlock_t *smmu_lock = NULL;
 	struct list_head *smmu_list = NULL;
@@ -1059,7 +994,7 @@ void ss_smmu_debug_map(enum ss_smmu_type type, struct sg_table *table)
 		INIT_LIST_HEAD(&smmu_debug->list);
 		list_add(&smmu_debug->list, smmu_list);
 
-		LCD_DEBUG("addr : 0x%llx size : 0x%x \n", table->sgl->dma_address, table->sgl->dma_length);
+		LCD_DEBUG("addr : 0x%x size : 0x%x \n", table->sgl->dma_address, table->sgl->dma_length);
 	}
 
 	spin_unlock(smmu_lock);
@@ -1067,7 +1002,7 @@ void ss_smmu_debug_map(enum ss_smmu_type type, struct sg_table *table)
 
 void ss_smmu_debug_unmap(enum ss_smmu_type type, struct sg_table *table)
 {
-	struct samsung_display_driver_data *vdd = ss_get_vdd(COMMON_DISPLAY_NDX);
+	struct samsung_display_driver_data *vdd = ss_get_vdd(PRIMARY_DISPLAY_NDX);
 
 	spinlock_t *smmu_lock = NULL;
 	struct list_head *smmu_list = NULL;
@@ -1091,7 +1026,7 @@ void ss_smmu_debug_unmap(enum ss_smmu_type type, struct sg_table *table)
 
 	list_for_each_entry(smmu_debug, smmu_list, list) {
 		if (smmu_debug->table == table) {
-			LCD_DEBUG("addr : 0x%llx size : 0x%x \n", table->sgl->dma_address, table->sgl->dma_length);
+			LCD_DEBUG("addr : 0x%x size : 0x%x \n", table->sgl->dma_address, table->sgl->dma_length);
 			list_del(&smmu_debug->list);
 			kmem_cache_free(vdd->ss_debug_smmu_cache, smmu_debug);
 			break;
@@ -1109,7 +1044,7 @@ void ss_smmu_debug_log(void)
 #else
 void ss_smmu_debug_log(void)
 {
-	struct samsung_display_driver_data *vdd = ss_get_vdd(COMMON_DISPLAY_NDX);
+	struct samsung_display_driver_data *vdd = ss_get_vdd(PRIMARY_DISPLAY_NDX);
 
 	enum ss_smmu_type type = SMMU_MAX_DEBUG;
 	spinlock_t *smmu_lock = NULL;
@@ -1131,13 +1066,13 @@ void ss_smmu_debug_log(void)
 
 		list_for_each_entry(smmu_debug, smmu_list, list) {
 #if defined(CONFIG_NEED_SG_DMA_LENGTH)
-			LCD_INFO("type : %s time : %lld.%6lld dma_address : 0x%llx dma_length : %d\n",
+			LCD_INFO("type : %s time : %d.%6d dma_address : 0x%x dma_length : %d\n",
 				type == SMMU_RT_DISPLAY_DEBUG ? "SMMU_RT_DISPLAY_DEBUG" : "SMMU_NRT_ROTATOR_DEBUG",
 				smmu_debug->time / NSEC_PER_SEC, smmu_debug->time - ((smmu_debug->time / NSEC_PER_SEC) * NSEC_PER_SEC),
 				smmu_debug->table->sgl->dma_address,
 				smmu_debug->table->sgl->dma_length);
 #else
-			LCD_INFO("type : %s time : %d.%6d dma_address : 0x%llx\n",
+			LCD_INFO("type : %s time : %d.%6d dma_address : 0x%x\n",
 				type == SMMU_RT_DISPLAY_DEBUG ? "SMMU_RT_DISPLAY_DEBUG" : "SMMU_NRT_ROTATOR_DEBUG",
 				smmu_debug->time / NSEC_PER_SEC, smmu_debug->time - ((smmu_debug->time / NSEC_PER_SEC) * NSEC_PER_SEC),
 				smmu_debug->table->sgl->dma_address);
@@ -1171,22 +1106,4 @@ void ss_image_logging_update(uint32_t plane_addr, int width, int height, int src
 	image_logging_index %= MAX_IMAGE_LOGGING;
 
 	spin_unlock(&image_logging_lock);
-}
-
-void ss_xlog_vrr_change_in_drm_ioctl(int vrefresh, int sot_hs_mode)
-{
-	struct samsung_display_driver_data *vdd = ss_get_vdd(PRIMARY_DISPLAY_NDX);
-
-	if (vdd->vrr.adjusted_refresh_rate != 0 &&
-			(vdd->vrr.adjusted_refresh_rate != vrefresh ||
-			 vdd->vrr.adjusted_sot_hs_mode != sot_hs_mode)) {
-		LCD_INFO("switch mode: drm_ioctl: %d%s -> %d%s\n",
-				vdd->vrr.adjusted_refresh_rate,
-				vdd->vrr.adjusted_sot_hs_mode ? "HS" : "NM",
-				vrefresh,
-				sot_hs_mode ? "HS" : "NM");
-		SS_XLOG(vdd->vrr.adjusted_refresh_rate,
-				vdd->vrr.adjusted_sot_hs_mode,
-				vrefresh, sot_hs_mode);
-	}
 }
