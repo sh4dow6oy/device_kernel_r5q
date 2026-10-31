@@ -21,7 +21,7 @@
 #include <video/mipi_display.h>
 
 #include "dsi_panel.h"
-#include "dsi_ctrl_hw.h"
+#include "dsi_ctrl.h"
 #include "dsi_parser.h"
 #if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
 #include "ss_dsi_panel_common.h"
