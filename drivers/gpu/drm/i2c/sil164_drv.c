@@ -326,7 +326,8 @@ sil164_encoder_destroy(struct drm_encoder *encoder)
 {
 	struct sil164_priv *priv = to_sil164_priv(encoder);
 
-	i2c_unregister_device(priv->duallink_slave);
+	if (priv->duallink_slave)
+		i2c_unregister_device(priv->duallink_slave);
 
 	kfree(priv);
 	drm_i2c_encoder_destroy(encoder);
@@ -369,6 +370,12 @@ sil164_probe(struct i2c_client *client, const struct i2c_device_id *id)
 	return 0;
 }
 
+static int
+sil164_remove(struct i2c_client *client)
+{
+	return 0;
+}
+
 static struct i2c_client *
 sil164_detect_slave(struct i2c_client *client)
 {
@@ -408,7 +415,7 @@ sil164_encoder_init(struct i2c_client *client,
 	return 0;
 }
 
-static const struct i2c_device_id sil164_ids[] = {
+static struct i2c_device_id sil164_ids[] = {
 	{ "sil164", 0 },
 	{ }
 };
@@ -417,6 +424,7 @@ MODULE_DEVICE_TABLE(i2c, sil164_ids);
 static struct drm_i2c_encoder_driver sil164_driver = {
 	.i2c_driver = {
 		.probe = sil164_probe,
+		.remove = sil164_remove,
 		.driver = {
 			.name = "sil164",
 		},
