@@ -201,4 +201,3 @@ out:
 	return ret;
 }
 device_initcall(battery_notifier_init);
-
