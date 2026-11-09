@@ -1,7 +1,7 @@
 #ifndef __LINUX_CPUTIME_H
 #define __LINUX_CPUTIME_H
 
-#include <asm/cputime.h>
+#include <asm-generic/cputime.h>
 
 #ifndef cputime_to_nsecs
 # define cputime_to_nsecs(__ct)	\
