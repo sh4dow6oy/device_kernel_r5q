@@ -55,6 +55,7 @@ struct vm_area_struct;
 #define __GFP_HIGHMEM	((__force gfp_t)___GFP_HIGHMEM)
 #define __GFP_DMA32	((__force gfp_t)___GFP_DMA32)
 #define __GFP_MOVABLE	((__force gfp_t)___GFP_MOVABLE)  /* ZONE_MOVABLE allowed */
+#define __GFP_CMA	((__force gfp_t)___GFP_CMA)
 #define __GFP_RBIN	((__force gfp_t)___GFP_RBIN)      /* Allocate from RBIN */
 #define GFP_ZONEMASK	(__GFP_DMA|__GFP_HIGHMEM|__GFP_DMA32|__GFP_MOVABLE)
 
@@ -402,7 +403,14 @@ static inline bool gfpflags_normal_context(const gfp_t gfp_flags)
 static inline enum zone_type gfp_zone(gfp_t flags)
 {
 	enum zone_type z;
-	int bit = (__force int) (flags & GFP_ZONEMASK);
+	int bit;
+
+	if (!IS_ENABLED(CONFIG_HIGHMEM)) {
+		if ((flags & __GFP_MOVABLE) && !(flags & __GFP_CMA))
+			flags &= ~__GFP_HIGHMEM;
+	}
+
+	bit = (__force int) (flags & GFP_ZONEMASK);
 
 	z = (GFP_ZONE_TABLE >> (bit * GFP_ZONES_SHIFT)) &
 					 ((1 << GFP_ZONES_SHIFT) - 1);
