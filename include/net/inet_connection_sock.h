@@ -65,6 +65,8 @@ struct inet_connection_sock_af_ops {
 				char __user *optval, int __user *optlen);
 #endif
 	void	    (*addr2sockaddr)(struct sock *sk, struct sockaddr *);
+	int	    (*bind_conflict)(const struct sock *sk,
+				     const struct inet_bind_bucket *tb, bool relax);
 	void	    (*mtu_reduced)(struct sock *sk);
 };
 
@@ -80,7 +82,6 @@ struct inet_connection_sock_af_ops {
  * @icsk_af_ops		   Operations which are AF_INET{4,6} specific
  * @icsk_ulp_ops	   Pluggable ULP control hook
  * @icsk_ulp_data	   ULP private data
- * @icsk_listen_portaddr_node	hash to the portaddr listener hashtable
  * @icsk_ca_state:	   Congestion control state
  * @icsk_retransmits:	   Number of unrecovered [RTO] timeouts
  * @icsk_pending:	   Scheduled timer event
@@ -105,7 +106,6 @@ struct inet_connection_sock {
 	const struct inet_connection_sock_af_ops *icsk_af_ops;
 	const struct tcp_ulp_ops  *icsk_ulp_ops;
 	void			  *icsk_ulp_data;
-	struct hlist_node         icsk_listen_portaddr_node;
 	unsigned int		  (*icsk_sync_mss)(struct sock *sk, u32 pmtu);
 	__u8			  icsk_ca_state:6,
 				  icsk_ca_setsockopt:1,
@@ -178,7 +178,6 @@ void inet_csk_init_xmit_timers(struct sock *sk,
 			       void (*delack_handler)(unsigned long),
 			       void (*keepalive_handler)(unsigned long));
 void inet_csk_clear_xmit_timers(struct sock *sk);
-void inet_csk_clear_xmit_timers_sync(struct sock *sk);
 
 static inline void inet_csk_schedule_ack(struct sock *sk)
 {
@@ -268,8 +267,10 @@ inet_csk_rto_backoff(const struct inet_connection_sock *icsk,
         return (unsigned long)min_t(u64, when, max_when);
 }
 
-struct sock *inet_csk_accept(struct sock *sk, int flags, int *err, bool kern);
+struct sock *inet_csk_accept(struct sock *sk, int flags, int *err);
 
+int inet_csk_bind_conflict(const struct sock *sk,
+			   const struct inet_bind_bucket *tb, bool relax);
 int inet_csk_get_port(struct sock *sk, unsigned short snum);
 
 struct dst_entry *inet_csk_route_req(const struct sock *sk, struct flowi4 *fl4,

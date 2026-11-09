@@ -55,6 +55,10 @@ struct bpf_reg_state {
 		 */
 		struct bpf_map *map_ptr;
 
+		u32 btf_id; /* for PTR_TO_BTF_ID */
+
+		u32 mem_size; /* for PTR_TO_MEM | PTR_TO_MEM_OR_NULL */
+
 		/* Max size from any of the above. */
 		unsigned long raw;
 	};
@@ -64,6 +68,8 @@ struct bpf_reg_state {
 	 * offset, so they can share range knowledge.
 	 * For PTR_TO_MAP_VALUE_OR_NULL this is used to share which map value we
 	 * came from, when one is tested for != NULL.
+	 * For PTR_TO_MEM_OR_NULL this is used to identify memory allocation
+	 * for the purpose of tracking that it's freed.
 	 * For PTR_TO_SOCKET this is used to share which pointers retain the
 	 * same reference to the socket, to determine proper reference freeing.
 	 */
@@ -124,6 +130,10 @@ struct bpf_reg_state {
 	s64 smax_value; /* maximum possible (s64)value */
 	u64 umin_value; /* minimum possible (u64)value */
 	u64 umax_value; /* maximum possible (u64)value */
+	s32 s32_min_value; /* minimum possible (s32)value */
+	s32 s32_max_value; /* maximum possible (s32)value */
+	u32 u32_min_value; /* minimum possible (u32)value */
+	u32 u32_max_value; /* maximum possible (u32)value */
 	/* parentage chain for liveness checking */
 	struct bpf_reg_state *parent;
 	/* Inside the callee two registers can be both PTR_TO_STACK like
@@ -291,11 +301,10 @@ struct bpf_verifier_state_list {
 };
 
 /* Possible states for alu_state member. */
-#define BPF_ALU_SANITIZE_SRC		(1U << 0)
-#define BPF_ALU_SANITIZE_DST		(1U << 1)
+#define BPF_ALU_SANITIZE_SRC		1U
+#define BPF_ALU_SANITIZE_DST		2U
 #define BPF_ALU_NEG_VALUE		(1U << 2)
 #define BPF_ALU_NON_POINTER		(1U << 3)
-#define BPF_ALU_IMMEDIATE		(1U << 4)
 #define BPF_ALU_SANITIZE		(BPF_ALU_SANITIZE_SRC | \
 					 BPF_ALU_SANITIZE_DST)
 
@@ -311,8 +320,9 @@ struct bpf_insn_aux_data {
 		};
 	};
 	int ctx_field_size; /* the ctx field size for load insn, maybe 0 */
+	int converted_op_size; /* the valid value width after perceived conversion */
+	int sanitize_stack_off; /* stack slot to be cleared */
 	bool seen; /* this insn was processed by the verifier */
-	bool sanitize_stack_spill; /* subject to Spectre v4 sanitation */
 	bool zext_dst; /* this insn zero extends dst reg */
 	u8 alu_state; /* used in combination with alu_limit */
 	bool prune_point;
@@ -341,10 +351,12 @@ static inline bool bpf_verifier_log_full(const struct bpf_verifier_log *log)
 #define BPF_LOG_STATS	4
 #define BPF_LOG_LEVEL	(BPF_LOG_LEVEL1 | BPF_LOG_LEVEL2)
 #define BPF_LOG_MASK	(BPF_LOG_LEVEL | BPF_LOG_STATS)
+#define BPF_LOG_KERNEL	(BPF_LOG_MASK + 1) /* kernel internal flag */
 
 static inline bool bpf_verifier_log_needed(const struct bpf_verifier_log *log)
 {
-	return log->level && log->ubuf && !bpf_verifier_log_full(log);
+	return (log->level && log->ubuf && !bpf_verifier_log_full(log)) ||
+		log->level == BPF_LOG_KERNEL;
 }
 
 #define BPF_MAX_SUBPROGS 256
@@ -374,7 +386,6 @@ struct bpf_verifier_env {
 	struct bpf_map *used_maps[MAX_USED_MAPS]; /* array of map's used by eBPF program */
 	u32 used_map_cnt;		/* number of used maps */
 	u32 id_gen;			/* used to generate unique reg IDs */
-	bool explore_alu_limits;
 	bool allow_ptr_leaks;
 	bool seen_direct_write;
 	struct bpf_insn_aux_data *insn_aux_data; /* array of per-insn state */
@@ -407,10 +418,12 @@ struct bpf_verifier_env {
 	u32 longest_mark_read_walk;
 };
 
-__printf(2, 0) void bpf_verifier_vlog(struct bpf_verifier_log *log,
-				      const char *fmt, va_list args);
+void bpf_verifier_vlog(struct bpf_verifier_log *log, const char *fmt,
+		       va_list args);
 __printf(2, 3) void bpf_verifier_log_write(struct bpf_verifier_env *env,
 					   const char *fmt, ...);
+__printf(2, 3) void bpf_log(struct bpf_verifier_log *log,
+			    const char *fmt, ...);
 
 static inline struct bpf_func_state *cur_func(struct bpf_verifier_env *env)
 {

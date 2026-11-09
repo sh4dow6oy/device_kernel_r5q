@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 
 #ifndef _LINUX_TRACE_EVENT_H
 #define _LINUX_TRACE_EVENT_H
@@ -9,7 +8,6 @@
 #include <linux/hardirq.h>
 #include <linux/perf_event.h>
 #include <linux/tracepoint.h>
-#include <linux/coresight-stm.h>
 
 struct trace_array;
 struct trace_buffer;
@@ -25,10 +23,6 @@ const char *trace_print_symbols_seq(struct trace_seq *p, unsigned long val,
 				    const struct trace_print_flags *symbol_array);
 
 #if BITS_PER_LONG == 32
-const char *trace_print_flags_seq_u64(struct trace_seq *p, const char *delim,
-		      unsigned long long flags,
-		      const struct trace_print_flags_u64 *flag_array);
-
 const char *trace_print_symbols_seq_u64(struct trace_seq *p,
 					unsigned long long val,
 					const struct trace_print_flags_u64
@@ -40,7 +34,7 @@ const char *trace_print_bitmask_seq(struct trace_seq *p, void *bitmask_ptr,
 
 const char *trace_print_hex_seq(struct trace_seq *p,
 				const unsigned char *buf, int len,
-				bool concatenate);
+				bool spacing);
 
 const char *trace_print_array_seq(struct trace_seq *p,
 				   const void *buf, int count,
@@ -140,7 +134,16 @@ enum print_line_t {
 	TRACE_TYPE_NO_CONSUME	= 3	/* Handled but ask to not consume */
 };
 
-enum print_line_t trace_handle_return(struct trace_seq *s);
+/*
+ * Several functions return TRACE_TYPE_PARTIAL_LINE if the trace_seq
+ * overflowed, and TRACE_TYPE_HANDLED otherwise. This helper function
+ * simplifies those functions and keeps them in sync.
+ */
+static inline enum print_line_t trace_handle_return(struct trace_seq *s)
+{
+	return trace_seq_has_overflowed(s) ?
+		TRACE_TYPE_PARTIAL_LINE : TRACE_TYPE_HANDLED;
+}
 
 void tracing_generic_entry_update(struct trace_entry *entry,
 				  unsigned long flags,
@@ -153,15 +156,7 @@ trace_event_buffer_lock_reserve(struct ring_buffer **current_buffer,
 				int type, unsigned long len,
 				unsigned long flags, int pc);
 
-#define TRACE_RECORD_CMDLINE	BIT(0)
-#define TRACE_RECORD_TGID	BIT(1)
-
-void tracing_record_taskinfo(struct task_struct *task, int flags);
-void tracing_record_taskinfo_sched_switch(struct task_struct *prev,
-					  struct task_struct *next, int flags);
-
-void tracing_record_cmdline(struct task_struct *task);
-void tracing_record_tgid(struct task_struct *task);
+void tracing_record_cmdline(struct task_struct *tsk);
 
 int trace_output_call(struct trace_iterator *iter, char *name, char *fmt, ...);
 
@@ -212,14 +207,14 @@ void *trace_event_buffer_reserve(struct trace_event_buffer *fbuffer,
 				  struct trace_event_file *trace_file,
 				  unsigned long len);
 
-void trace_event_buffer_commit(struct trace_event_buffer *fbuffer,
-			       unsigned long len);
+void trace_event_buffer_commit(struct trace_event_buffer *fbuffer);
 
 enum {
 	TRACE_EVENT_FL_FILTERED_BIT,
 	TRACE_EVENT_FL_CAP_ANY_BIT,
 	TRACE_EVENT_FL_NO_SET_FILTER_BIT,
 	TRACE_EVENT_FL_IGNORE_ENABLE_BIT,
+	TRACE_EVENT_FL_WAS_ENABLED_BIT,
 	TRACE_EVENT_FL_TRACEPOINT_BIT,
 	TRACE_EVENT_FL_KPROBE_BIT,
 	TRACE_EVENT_FL_UPROBE_BIT,
@@ -231,6 +226,9 @@ enum {
  *  CAP_ANY	  - Any user can enable for perf
  *  NO_SET_FILTER - Set when filter has error and is to be ignored
  *  IGNORE_ENABLE - For trace internal events, do not enable with debugfs file
+ *  WAS_ENABLED   - Set and stays set when an event was ever enabled
+ *                    (used for module unloading, if a module event is enabled,
+ *                     it is best to clear the buffers that used it).
  *  TRACEPOINT    - Event is a tracepoint
  *  KPROBE        - Event is a kprobe
  *  UPROBE        - Event is a uprobe
@@ -240,6 +238,7 @@ enum {
 	TRACE_EVENT_FL_CAP_ANY		= (1 << TRACE_EVENT_FL_CAP_ANY_BIT),
 	TRACE_EVENT_FL_NO_SET_FILTER	= (1 << TRACE_EVENT_FL_NO_SET_FILTER_BIT),
 	TRACE_EVENT_FL_IGNORE_ENABLE	= (1 << TRACE_EVENT_FL_IGNORE_ENABLE_BIT),
+	TRACE_EVENT_FL_WAS_ENABLED	= (1 << TRACE_EVENT_FL_WAS_ENABLED_BIT),
 	TRACE_EVENT_FL_TRACEPOINT	= (1 << TRACE_EVENT_FL_TRACEPOINT_BIT),
 	TRACE_EVENT_FL_KPROBE		= (1 << TRACE_EVENT_FL_KPROBE_BIT),
 	TRACE_EVENT_FL_UPROBE		= (1 << TRACE_EVENT_FL_UPROBE_BIT),
@@ -320,7 +319,6 @@ struct trace_subsystem_dir;
 enum {
 	EVENT_FILE_FL_ENABLED_BIT,
 	EVENT_FILE_FL_RECORDED_CMD_BIT,
-	EVENT_FILE_FL_RECORDED_TGID_BIT,
 	EVENT_FILE_FL_FILTERED_BIT,
 	EVENT_FILE_FL_NO_SET_FILTER_BIT,
 	EVENT_FILE_FL_SOFT_MODE_BIT,
@@ -328,14 +326,12 @@ enum {
 	EVENT_FILE_FL_TRIGGER_MODE_BIT,
 	EVENT_FILE_FL_TRIGGER_COND_BIT,
 	EVENT_FILE_FL_PID_FILTER_BIT,
-	EVENT_FILE_FL_WAS_ENABLED_BIT,
 };
 
 /*
  * Event file flags:
  *  ENABLED	  - The event is enabled
  *  RECORDED_CMD  - The comms should be recorded at sched_switch
- *  RECORDED_TGID - The tgids should be recorded at sched_switch
  *  FILTERED	  - The event has a filter attached
  *  NO_SET_FILTER - Set when filter has error and is to be ignored
  *  SOFT_MODE     - The event is enabled/disabled by SOFT_DISABLED
@@ -344,12 +340,10 @@ enum {
  *  TRIGGER_MODE  - When set, invoke the triggers associated with the event
  *  TRIGGER_COND  - When set, one or more triggers has an associated filter
  *  PID_FILTER    - When set, the event is filtered based on pid
- *  WAS_ENABLED   - Set when enabled to know to clear trace on module removal
  */
 enum {
 	EVENT_FILE_FL_ENABLED		= (1 << EVENT_FILE_FL_ENABLED_BIT),
 	EVENT_FILE_FL_RECORDED_CMD	= (1 << EVENT_FILE_FL_RECORDED_CMD_BIT),
-	EVENT_FILE_FL_RECORDED_TGID	= (1 << EVENT_FILE_FL_RECORDED_TGID_BIT),
 	EVENT_FILE_FL_FILTERED		= (1 << EVENT_FILE_FL_FILTERED_BIT),
 	EVENT_FILE_FL_NO_SET_FILTER	= (1 << EVENT_FILE_FL_NO_SET_FILTER_BIT),
 	EVENT_FILE_FL_SOFT_MODE		= (1 << EVENT_FILE_FL_SOFT_MODE_BIT),
@@ -357,13 +351,12 @@ enum {
 	EVENT_FILE_FL_TRIGGER_MODE	= (1 << EVENT_FILE_FL_TRIGGER_MODE_BIT),
 	EVENT_FILE_FL_TRIGGER_COND	= (1 << EVENT_FILE_FL_TRIGGER_COND_BIT),
 	EVENT_FILE_FL_PID_FILTER	= (1 << EVENT_FILE_FL_PID_FILTER_BIT),
-	EVENT_FILE_FL_WAS_ENABLED	= (1 << EVENT_FILE_FL_WAS_ENABLED_BIT),
 };
 
 struct trace_event_file {
 	struct list_head		list;
 	struct trace_event_call		*event_call;
-	struct event_filter __rcu	*filter;
+	struct event_filter		*filter;
 	struct dentry			*dir;
 	struct trace_array		*tr;
 	struct trace_subsystem_dir	*system;
@@ -411,7 +404,7 @@ struct trace_event_file {
 	}								\
 	early_initcall(trace_init_perf_perm_##name);
 
-#define PERF_MAX_TRACE_SIZE	8192
+#define PERF_MAX_TRACE_SIZE	2048
 
 #define MAX_FILTER_STR_VAL	256	/* Should handle KSYM_SYMBOL_LEN */
 
@@ -469,9 +462,6 @@ int bpf_probe_register(struct bpf_raw_event_map *btp, struct bpf_prog *prog);
 int bpf_probe_unregister(struct bpf_raw_event_map *btp, struct bpf_prog *prog);
 struct bpf_raw_event_map *bpf_get_raw_tracepoint(const char *name);
 void bpf_put_raw_tracepoint(struct bpf_raw_event_map *btp);
-int bpf_get_perf_event_info(const struct perf_event *event, u32 *prog_id,
-			    u32 *fd_type, const char **buf,
-			    u64 *probe_offset, u64 *probe_addr);
 #else
 static inline unsigned int trace_call_bpf(struct trace_event_call *call, void *ctx)
 {
@@ -489,29 +479,22 @@ static inline void perf_event_detach_bpf_prog(struct perf_event *event) { }
 static inline int
 perf_event_query_prog_array(struct perf_event *event, void __user *info)
 {
-	return -EOPNOTSUPP;
+ 	return -EOPNOTSUPP;
 }
 static inline int bpf_probe_register(struct bpf_raw_event_map *btp, struct bpf_prog *p)
 {
-	return -EOPNOTSUPP;
+ 	return -EOPNOTSUPP;
 }
 static inline int bpf_probe_unregister(struct bpf_raw_event_map *btp, struct bpf_prog *p)
 {
-	return -EOPNOTSUPP;
+ 	return -EOPNOTSUPP;
 }
 static inline struct bpf_raw_event_map *bpf_get_raw_tracepoint(const char *name)
 {
-	return NULL;
+ 	return NULL;
 }
 static inline void bpf_put_raw_tracepoint(struct bpf_raw_event_map *btp)
 {
-}
-static inline int bpf_get_perf_event_info(const struct perf_event *event,
-					  u32 *prog_id, u32 *fd_type,
-					  const char **buf, u64 *probe_offset,
-					  u64 *probe_addr)
-{
-	return -EOPNOTSUPP;
 }
 #endif
 
@@ -560,27 +543,11 @@ do {									\
 struct perf_event;
 
 DECLARE_PER_CPU(struct pt_regs, perf_trace_regs);
-DECLARE_PER_CPU(int, bpf_kprobe_override);
 
 extern int  perf_trace_init(struct perf_event *event);
 extern void perf_trace_destroy(struct perf_event *event);
 extern int  perf_trace_add(struct perf_event *event, int flags);
 extern void perf_trace_del(struct perf_event *event, int flags);
-#ifdef CONFIG_KPROBE_EVENTS
-extern int  perf_kprobe_init(struct perf_event *event, bool is_retprobe);
-extern void perf_kprobe_destroy(struct perf_event *event);
-extern int bpf_get_kprobe_info(const struct perf_event *event,
-			       u32 *fd_type, const char **symbol,
-			       u64 *probe_offset, u64 *probe_addr,
-			       bool perf_type_tracepoint);
-#endif
-#ifdef CONFIG_UPROBE_EVENTS
-extern int  perf_uprobe_init(struct perf_event *event, bool is_retprobe);
-extern void perf_uprobe_destroy(struct perf_event *event);
-extern int bpf_get_uprobe_info(const struct perf_event *event,
-			       u32 *fd_type, const char **filename,
-			       u64 *probe_offset, bool perf_type_tracepoint);
-#endif
 extern int  ftrace_profile_set_filter(struct perf_event *event, int event_id,
 				     char *filter_str);
 extern void ftrace_profile_free_filter(struct perf_event *event);
@@ -590,30 +557,30 @@ void *perf_trace_buf_alloc(int size, struct pt_regs **regs, int *rctxp);
 void bpf_trace_run1(struct bpf_prog *prog, u64 arg1);
 void bpf_trace_run2(struct bpf_prog *prog, u64 arg1, u64 arg2);
 void bpf_trace_run3(struct bpf_prog *prog, u64 arg1, u64 arg2,
-		    u64 arg3);
+ 			u64 arg3);
 void bpf_trace_run4(struct bpf_prog *prog, u64 arg1, u64 arg2,
-		    u64 arg3, u64 arg4);
+ 			u64 arg3, u64 arg4);
 void bpf_trace_run5(struct bpf_prog *prog, u64 arg1, u64 arg2,
-		    u64 arg3, u64 arg4, u64 arg5);
+ 			u64 arg3, u64 arg4, u64 arg5);
 void bpf_trace_run6(struct bpf_prog *prog, u64 arg1, u64 arg2,
-		    u64 arg3, u64 arg4, u64 arg5, u64 arg6);
+ 			u64 arg3, u64 arg4, u64 arg5, u64 arg6);
 void bpf_trace_run7(struct bpf_prog *prog, u64 arg1, u64 arg2,
-		    u64 arg3, u64 arg4, u64 arg5, u64 arg6, u64 arg7);
+ 			u64 arg3, u64 arg4, u64 arg5, u64 arg6, u64 arg7);
 void bpf_trace_run8(struct bpf_prog *prog, u64 arg1, u64 arg2,
-		    u64 arg3, u64 arg4, u64 arg5, u64 arg6, u64 arg7,
-		    u64 arg8);
+ 			u64 arg3, u64 arg4, u64 arg5, u64 arg6, u64 arg7,
+ 			u64 arg8);
 void bpf_trace_run9(struct bpf_prog *prog, u64 arg1, u64 arg2,
-		    u64 arg3, u64 arg4, u64 arg5, u64 arg6, u64 arg7,
-		    u64 arg8, u64 arg9);
+ 			u64 arg3, u64 arg4, u64 arg5, u64 arg6, u64 arg7,
+ 			u64 arg8, u64 arg9);
 void bpf_trace_run10(struct bpf_prog *prog, u64 arg1, u64 arg2,
-		     u64 arg3, u64 arg4, u64 arg5, u64 arg6, u64 arg7,
-		     u64 arg8, u64 arg9, u64 arg10);
+ 			u64 arg3, u64 arg4, u64 arg5, u64 arg6, u64 arg7,
+ 			u64 arg8, u64 arg9, u64 arg10);
 void bpf_trace_run11(struct bpf_prog *prog, u64 arg1, u64 arg2,
-		     u64 arg3, u64 arg4, u64 arg5, u64 arg6, u64 arg7,
-		     u64 arg8, u64 arg9, u64 arg10, u64 arg11);
+ 			u64 arg3, u64 arg4, u64 arg5, u64 arg6, u64 arg7,
+ 			u64 arg8, u64 arg9, u64 arg10, u64 arg11);
 void bpf_trace_run12(struct bpf_prog *prog, u64 arg1, u64 arg2,
-		     u64 arg3, u64 arg4, u64 arg5, u64 arg6, u64 arg7,
-		     u64 arg8, u64 arg9, u64 arg10, u64 arg11, u64 arg12);
+ 			u64 arg3, u64 arg4, u64 arg5, u64 arg6, u64 arg7,
+ 			u64 arg8, u64 arg9, u64 arg10, u64 arg11, u64 arg12);
 void perf_trace_run_bpf_submit(void *raw_data, int size, int rctx,
 			       struct trace_event_call *call, u64 count,
 			       struct pt_regs *regs, struct hlist_head *head,
@@ -622,9 +589,9 @@ void perf_trace_run_bpf_submit(void *raw_data, int size, int rctx,
 static inline void
 perf_trace_buf_submit(void *raw_data, int size, int rctx, u16 type,
 		       u64 count, struct pt_regs *regs, void *head,
-		       struct task_struct *task, struct perf_event *event)
+		       struct task_struct *task)
 {
-	perf_tp_event(type, count, raw_data, size, regs, head, rctx, task, event);
+	perf_tp_event(type, count, raw_data, size, regs, head, rctx, task);
 }
 
 #endif
