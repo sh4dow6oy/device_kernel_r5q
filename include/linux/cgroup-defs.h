@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * linux/cgroup-defs.h - basic definitions for cgroup
  *
@@ -64,6 +63,12 @@ enum {
 	 * specified at mount time and thus is implemented here.
 	 */
 	CGRP_CPUSET_CLONE_CHILDREN,
+
+	/* Control group has to be frozen. */
+	CGRP_FREEZE,
+
+	/* Cgroup is frozen. */
+	CGRP_FROZEN,
 };
 
 /* cgroup_root->flags */
@@ -92,7 +97,6 @@ enum {
 
 	CFTYPE_NO_PREFIX	= (1 << 3),	/* (DON'T USE FOR NEW FILES) no subsys prefix */
 	CFTYPE_WORLD_WRITABLE	= (1 << 4),	/* (DON'T USE FOR NEW FILES) S_IWUGO */
-	CFTYPE_PRESSURE		= (1 << 6),	/* only if pressure feature is enabled */
 
 	/* internal flags, do not use outside cgroup core proper */
 	__CFTYPE_ONLY_ON_DFL	= (1 << 16),	/* only on default hierarchy */
@@ -260,6 +264,25 @@ struct css_set {
 	struct rcu_head rcu_head;
 };
 
+struct cgroup_freezer_state {
+	/* Should the cgroup and its descendants be frozen. */
+	bool freeze;
+
+	/* Should the cgroup actually be frozen? */
+	int e_freeze;
+
+	/* Fields below are protected by css_set_lock */
+
+	/* Number of frozen descendant cgroups */
+	int nr_frozen_descendants;
+
+	/*
+	 * Number of tasks, which are counted as frozen:
+	 * frozen, SIGSTOPped, and PTRACEd.
+	 */
+	int nr_frozen_tasks;
+};
+
 struct cgroup {
 	/* self css with NULL ->ss, points back to this cgroup */
 	struct cgroup_subsys_state self;
@@ -383,6 +406,9 @@ struct cgroup {
 
 	/* used to store eBPF programs */
 	struct cgroup_bpf bpf;
+
+	/* Used to store internal freezer state */
+	struct cgroup_freezer_state freezer;
 
 	/* ids of the ancestors at each level including self */
 	int ancestor_ids[];
@@ -512,7 +538,7 @@ struct cftype {
 			 char *buf, size_t nbytes, loff_t off);
 
 	unsigned int (*poll)(struct kernfs_open_file *of,
-			     struct poll_table_struct *pt);
+			 struct poll_table_struct *pt);
 
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
 	struct lock_class_key	lockdep_key;
@@ -626,8 +652,8 @@ extern struct percpu_rw_semaphore cgroup_threadgroup_rwsem;
  * cgroup_threadgroup_change_begin - threadgroup exclusion for cgroups
  * @tsk: target task
  *
- * Allows cgroup operations to synchronize against threadgroup changes
- * using a percpu_rw_semaphore.
+ * Called from threadgroup_change_begin() and allows cgroup operations to
+ * synchronize against threadgroup changes using a percpu_rw_semaphore.
  */
 static inline void cgroup_threadgroup_change_begin(struct task_struct *tsk)
 {
@@ -638,7 +664,8 @@ static inline void cgroup_threadgroup_change_begin(struct task_struct *tsk)
  * cgroup_threadgroup_change_end - threadgroup exclusion for cgroups
  * @tsk: target task
  *
- * Counterpart of cgroup_threadcgroup_change_begin().
+ * Called from threadgroup_change_end().  Counterpart of
+ * cgroup_threadcgroup_change_begin().
  */
 static inline void cgroup_threadgroup_change_end(struct task_struct *tsk)
 {
@@ -649,11 +676,7 @@ static inline void cgroup_threadgroup_change_end(struct task_struct *tsk)
 
 #define CGROUP_SUBSYS_COUNT 0
 
-static inline void cgroup_threadgroup_change_begin(struct task_struct *tsk)
-{
-	might_sleep();
-}
-
+static inline void cgroup_threadgroup_change_begin(struct task_struct *tsk) {}
 static inline void cgroup_threadgroup_change_end(struct task_struct *tsk) {}
 
 #endif	/* CONFIG_CGROUPS */
