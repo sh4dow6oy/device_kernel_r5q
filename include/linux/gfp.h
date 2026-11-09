@@ -42,6 +42,12 @@ struct vm_area_struct;
 #define ___GFP_WRITE		0x1000000u
 #define ___GFP_KSWAPD_RECLAIM	0x2000000u
 #define ___GFP_RBIN				0x4000000u
+#ifdef CONFIG_LOCKDEP
+#define ___GFP_NOLOCKDEP	0x2000000u
+#else
+#define ___GFP_NOLOCKDEP	0
+#endif
+#define ___GFP_CMA		0x4000000u
 /* If the above are modified, __GFP_BITS_SHIFT may need updating */
 
 /*
