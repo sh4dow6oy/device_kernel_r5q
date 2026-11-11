@@ -1,12 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Longest prefix match list implementation
  *
  * Copyright (c) 2016,2017 Daniel Mack
  * Copyright (c) 2016 David Herrmann
- *
- * This file is subject to the terms and conditions of version 2 of the GNU
- * General Public License.  See the file COPYING in the main directory of the
- * Linux distribution for more details.
  */
 
 #include <linux/bpf.h>
@@ -168,20 +165,59 @@ static size_t longest_prefix_match(const struct lpm_trie *trie,
 				   const struct lpm_trie_node *node,
 				   const struct bpf_lpm_trie_key *key)
 {
-	size_t prefixlen = 0;
-	size_t i;
+	u32 limit = min(node->prefixlen, key->prefixlen);
+	u32 prefixlen = 0, i = 0;
 
-	for (i = 0; i < trie->data_size; i++) {
-		size_t b;
+	BUILD_BUG_ON(offsetof(struct lpm_trie_node, data) % sizeof(u32));
+	BUILD_BUG_ON(offsetof(struct bpf_lpm_trie_key, data) % sizeof(u32));
 
-		b = 8 - fls(node->data[i] ^ key->data[i]);
-		prefixlen += b;
+#if defined(CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS) && defined(CONFIG_64BIT)
 
-		if (prefixlen >= node->prefixlen || prefixlen >= key->prefixlen)
-			return min(node->prefixlen, key->prefixlen);
+	/* data_size >= 16 has very small probability.
+	 * We do not use a loop for optimal code generation.
+	 */
+	if (trie->data_size >= 8) {
+		u64 diff = be64_to_cpu(*(__be64 *)node->data ^
+				       *(__be64 *)key->data);
 
-		if (b < 8)
-			break;
+		prefixlen = 64 - fls64(diff);
+		if (prefixlen >= limit)
+			return limit;
+		if (diff)
+			return prefixlen;
+		i = 8;
+	}
+#endif
+
+	while (trie->data_size >= i + 4) {
+		u32 diff = be32_to_cpu(*(__be32 *)&node->data[i] ^
+				       *(__be32 *)&key->data[i]);
+
+		prefixlen += 32 - fls(diff);
+		if (prefixlen >= limit)
+			return limit;
+		if (diff)
+			return prefixlen;
+		i += 4;
+	}
+
+	if (trie->data_size >= i + 2) {
+		u16 diff = be16_to_cpu(*(__be16 *)&node->data[i] ^
+				       *(__be16 *)&key->data[i]);
+
+		prefixlen += 16 - fls(diff);
+		if (prefixlen >= limit)
+			return limit;
+		if (diff)
+			return prefixlen;
+		i += 2;
+	}
+
+	if (trie->data_size >= i + 1) {
+		prefixlen += 8 - fls(node->data[i] ^ key->data[i]);
+
+		if (prefixlen >= limit)
+			return limit;
 	}
 
 	return prefixlen;
@@ -554,14 +590,8 @@ static struct bpf_map *trie_alloc(union bpf_attr *attr)
 	cost_per_node = sizeof(struct lpm_trie_node) +
 			attr->value_size + trie->data_size;
 	cost += (u64) attr->max_entries * cost_per_node;
-	if (cost >= U32_MAX - PAGE_SIZE) {
-		ret = -E2BIG;
-		goto out_err;
-	}
 
-	trie->map.pages = round_up(cost, PAGE_SIZE) >> PAGE_SHIFT;
-
-	ret = bpf_map_precharge_memlock(trie->map.pages);
+	ret = bpf_map_charge_init(&trie->map.memory, cost);
 	if (ret)
 		goto out_err;
 
@@ -593,8 +623,7 @@ static void trie_free(struct bpf_map *map)
 		slot = &trie->root;
 
 		for (;;) {
-			node = rcu_dereference_protected(*slot,
-					lockdep_is_held(&trie->lock));
+			node = rcu_dereference_protected(*slot, 1);
 			if (!node)
 				goto out;
 

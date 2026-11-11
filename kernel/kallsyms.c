@@ -12,7 +12,6 @@
  *      compression (see scripts/kallsyms.c for a more complete description)
  */
 #include <linux/kallsyms.h>
-#include <linux/module.h>
 #include <linux/init.h>
 #include <linux/seq_file.h>
 #include <linux/fs.h>
@@ -20,19 +19,12 @@
 #include <linux/err.h>
 #include <linux/proc_fs.h>
 #include <linux/sched.h>	/* for cond_resched */
-#include <linux/mm.h>
 #include <linux/ctype.h>
 #include <linux/slab.h>
 #include <linux/filter.h>
 #include <linux/compiler.h>
-#ifdef CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
-#include <linux/susfs_def.h>
-#endif // #ifdef CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
-#ifdef CONFIG_SEC_DUMP_SUMMARY
-#include <linux/sec_debug.h>
-#endif
 
-#include <asm/sections.h>
+#include <linux/sec_debug.h>
 
 #ifdef CONFIG_KALLSYMS_ALL
 #define all_var 1
@@ -63,68 +55,35 @@ extern const u16 kallsyms_token_index[] __weak;
 
 extern const unsigned long kallsyms_markers[] __weak;
 
-#ifdef CONFIG_SEC_DUMP_SUMMARY
-void sec_debug_set_kallsyms_info(struct sec_debug_ksyms *ksyms, int magic)
+#ifdef CONFIG_SEC_DEBUG_SUMMARY
+void sec_debug_summary_set_kallsyms_info(
+		struct sec_debug_summary_data_apss *apss)
 {
 	if (!IS_ENABLED(CONFIG_KALLSYMS_BASE_RELATIVE)) {
-		ksyms->addresses_pa = __pa(kallsyms_addresses);
-		ksyms->relative_base = 0x0;
-		ksyms->offsets_pa = 0x0;
+		apss->ksyms.addresses_pa = __pa(kallsyms_addresses);
+		apss->ksyms.relative_base = 0x0;
+		apss->ksyms.offsets_pa = 0x0;
 	} else {
-		ksyms->addresses_pa = 0x0;
-		ksyms->relative_base = (uint64_t)kallsyms_relative_base;
-		ksyms->offsets_pa = __pa(kallsyms_offsets);
+		apss->ksyms.addresses_pa = 0x0;
+		apss->ksyms.relative_base = (uint64_t)kallsyms_relative_base;
+		apss->ksyms.offsets_pa = __pa(kallsyms_offsets);
 	}
+	apss->ksyms.names_pa = __pa(kallsyms_names);
+	apss->ksyms.num_syms = kallsyms_num_syms;
+	apss->ksyms.token_table_pa = __pa(kallsyms_token_table);
+	apss->ksyms.token_index_pa = __pa(kallsyms_token_index);
+	apss->ksyms.markers_pa = __pa(kallsyms_markers);
 
-	ksyms->names_pa = __pa(kallsyms_names);
-	ksyms->num_syms = kallsyms_num_syms;
-	ksyms->token_table_pa = __pa(kallsyms_token_table);
-	ksyms->token_index_pa = __pa(kallsyms_token_index);
-	ksyms->markers_pa = __pa(kallsyms_markers);
+	apss->ksyms.sect.sinittext = (uintptr_t)_sinittext;
+	apss->ksyms.sect.einittext = (uintptr_t)_einittext;
+	apss->ksyms.sect.stext = (uintptr_t)_stext;
+	apss->ksyms.sect.etext = (uintptr_t)_etext;
+	apss->ksyms.sect.end = (uintptr_t)_end;
 
-	ksyms->sect.sinittext = (uint64_t)_sinittext;
-	ksyms->sect.einittext = (uint64_t)_einittext;
-	ksyms->sect.stext = (uint64_t)_stext;
-	ksyms->sect.etext = (uint64_t)_etext;
-	ksyms->sect.end = (uint64_t)_end;
-
-	ksyms->kallsyms_all = all_var;
-
-	ksyms->magic = magic;
-	ksyms->kimage_voffset = kimage_voffset;
+	apss->ksyms.kallsyms_all = all_var;
+	apss->ksyms.magic = SEC_DEBUG_SUMMARY_MAGIC1;
 }
 #endif
-
-static inline int is_kernel_inittext(unsigned long addr)
-{
-	if (addr >= (unsigned long)_sinittext
-	    && addr <= (unsigned long)_einittext)
-		return 1;
-	return 0;
-}
-
-static inline int is_kernel_text(unsigned long addr)
-{
-	if ((addr >= (unsigned long)_text && addr <= (unsigned long)_etext) ||
-	    arch_is_kernel_text(addr))
-		return 1;
-	return in_gate_area_no_mm(addr);
-}
-
-static inline int is_kernel(unsigned long addr)
-{
-	if (addr >= (unsigned long)_text && addr <= (unsigned long)_end)
-		return 1;
-	return in_gate_area_no_mm(addr);
-}
-
-static int is_ksym_addr(unsigned long addr)
-{
-	if (all_var)
-		return is_kernel(addr);
-
-	return is_kernel_text(addr) || is_kernel_inittext(addr);
-}
 
 /*
  * Expand a compressed symbol data into the resulting uncompressed string,
@@ -318,7 +277,7 @@ static unsigned long get_symbol_pos(unsigned long addr,
 	if (!symbol_end) {
 		if (is_kernel_inittext(addr))
 			symbol_end = (unsigned long)_einittext;
-		else if (all_var)
+		else if (IS_ENABLED(CONFIG_KALLSYMS_ALL))
 			symbol_end = (unsigned long)_end;
 		else
 			symbol_end = (unsigned long)_etext;
@@ -339,8 +298,11 @@ int kallsyms_lookup_size_offset(unsigned long addr, unsigned long *symbolsize,
 				unsigned long *offset)
 {
 	char namebuf[KSYM_NAME_LEN];
-	if (is_ksym_addr(addr))
-		return !!get_symbol_pos(addr, symbolsize, offset);
+
+	if (is_ksym_addr(addr)) {
+		get_symbol_pos(addr, symbolsize, offset);
+		return 1;
+	}
 	return !!module_address_lookup(addr, symbolsize, offset, NULL, namebuf) ||
 	       !!__bpf_address_lookup(addr, symbolsize, offset, namebuf);
 }
@@ -355,6 +317,12 @@ static inline void cleanup_symbol_name(char *s)
 {
 	char *res;
 
+#ifdef CONFIG_THINLTO
+	/* Filter out hashes from static functions */
+	res = strrchr(s, '$');
+	if (res)
+		*res = '\0';
+#endif
 	res = strrchr(s, '.');
 	if (res && !strcmp(res, ".cfi"))
 		*res = '\0';
@@ -389,6 +357,8 @@ const char *kallsyms_lookup(unsigned long addr,
 				       namebuf, KSYM_NAME_LEN);
 		if (modname)
 			*modname = NULL;
+
+		ret = namebuf;
 		goto found;
 	}
 
@@ -398,11 +368,10 @@ const char *kallsyms_lookup(unsigned long addr,
 	if (!ret)
 		ret = bpf_address_lookup(addr, symbolsize,
 					 offset, modname, namebuf);
-	return ret;
 
 found:
 	cleanup_symbol_name(namebuf);
-	return namebuf;
+	return ret;
 }
 
 int lookup_symbol_name(unsigned long addr, char *symname)
@@ -580,7 +549,7 @@ static int get_ksymbol_mod(struct kallsym_iter *iter)
 
 static int get_ksymbol_bpf(struct kallsym_iter *iter)
 {
-	strlcpy(iter->module_name, "bpf", MODULE_NAME_LEN);
+	iter->module_name[0] = '\0';
 	iter->exported = 0;
 	return bpf_get_kallsym(iter->pos - iter->pos_mod_end,
 			       &iter->value, &iter->type,
@@ -662,6 +631,11 @@ static void s_stop(struct seq_file *m, void *p)
 {
 }
 
+#ifdef CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
+extern bool susfs_starts_with(const char *str, const char *prefix);
+#endif
+
+
 static int s_show(struct seq_file *m, void *p)
 {
 	struct kallsym_iter *iter = m->private;
@@ -707,6 +681,7 @@ static int s_show(struct seq_file *m, void *p)
 			susfs_starts_with(iter->name, "setenforce") ||
 			susfs_starts_with(iter->name, "is_zygote"))
 		{
+
 			return 0;
 		}
 		seq_printf(m, "%pK %c %s\n", (void *)iter->value,
@@ -741,19 +716,20 @@ static inline int kallsyms_for_perf(void)
  * Otherwise, require CAP_SYSLOG (assuming kptr_restrict isn't set to
  * block even that).
  */
-int kallsyms_show_value(void)
+bool kallsyms_show_value(const struct cred *cred)
 {
 	switch (kptr_restrict) {
 	case 0:
 		if (kallsyms_for_perf())
-			return 1;
+			return true;
 	/* fallthrough */
 	case 1:
-		if (has_capability_noaudit(current, CAP_SYSLOG))
-			return 1;
+		if (security_capable(cred, &init_user_ns, CAP_SYSLOG,
+				     CAP_OPT_NOAUDIT) == 0)
+			return true;
 	/* fallthrough */
 	default:
-		return 0;
+		return false;
 	}
 }
 
@@ -770,7 +746,11 @@ static int kallsyms_open(struct inode *inode, struct file *file)
 		return -ENOMEM;
 	reset_iter(iter, 0);
 
-	iter->show_value = kallsyms_show_value();
+	/*
+	 * Instead of checking this on every s_show() call, cache
+	 * the result here at open time.
+	 */
+	iter->show_value = kallsyms_show_value(file->f_cred);
 	return 0;
 }
 

@@ -1,8 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /* Copyright (c) 2016 Facebook
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of version 2 of the GNU General Public
- * License as published by the Free Software Foundation.
  */
 #include <linux/bpf.h>
 #include <linux/jhash.h>
@@ -90,6 +87,7 @@ static struct bpf_map *stack_map_alloc(union bpf_attr *attr)
 {
 	u32 value_size = attr->value_size;
 	struct bpf_stack_map *smap;
+	struct bpf_map_memory mem;
 	u64 cost, n_buckets;
 	int err;
 
@@ -113,46 +111,46 @@ static struct bpf_map *stack_map_alloc(union bpf_attr *attr)
 	} else if (value_size / 8 > sysctl_perf_event_max_stack)
 		return ERR_PTR(-EINVAL);
 
-	/* hash table size must be power of 2 */
-	n_buckets = roundup_pow_of_two(attr->max_entries);
-	if (!n_buckets)
+	/* hash table size must be power of 2; roundup_pow_of_two() can overflow
+	 * into UB on 32-bit arches, so check that first
+	 */
+	if (attr->max_entries > 1UL << 31)
 		return ERR_PTR(-E2BIG);
+
+	n_buckets = roundup_pow_of_two(attr->max_entries);
 
 	cost = n_buckets * sizeof(struct stack_map_bucket *) + sizeof(*smap);
-	if (cost >= U32_MAX - PAGE_SIZE)
-		return ERR_PTR(-E2BIG);
+	err = bpf_map_charge_init(&mem, cost + attr->max_entries *
+			   (sizeof(struct stack_map_bucket) + (u64)value_size));
+	if (err)
+		return ERR_PTR(err);
 
 	smap = bpf_map_area_alloc(cost, bpf_map_attr_numa_node(attr));
-	if (!smap)
+	if (!smap) {
+		bpf_map_charge_finish(&mem);
 		return ERR_PTR(-ENOMEM);
-
-	err = -E2BIG;
-	cost += n_buckets * (value_size + sizeof(struct stack_map_bucket));
-	if (cost >= U32_MAX - PAGE_SIZE)
-		goto free_smap;
+	}
 
 	bpf_map_init_from_attr(&smap->map, attr);
 	smap->map.value_size = value_size;
 	smap->n_buckets = n_buckets;
-	smap->map.pages = round_up(cost, PAGE_SIZE) >> PAGE_SHIFT;
-
-	err = bpf_map_precharge_memlock(smap->map.pages);
-	if (err)
-		goto free_smap;
 
 	err = get_callchain_buffers(sysctl_perf_event_max_stack);
 	if (err)
-		goto free_smap;
+		goto free_charge;
 
 	err = prealloc_elems_and_freelist(smap);
 	if (err)
 		goto put_buffers;
 
+	bpf_map_charge_move(&smap->map.memory, &mem);
+
 	return &smap->map;
 
 put_buffers:
 	put_callchain_buffers();
-free_smap:
+free_charge:
+	bpf_map_charge_finish(&mem);
 	bpf_map_area_free(smap);
 	return ERR_PTR(err);
 }
@@ -449,6 +447,73 @@ const struct bpf_func_proto bpf_get_stackid_proto = {
 	.arg1_type	= ARG_PTR_TO_CTX,
 	.arg2_type	= ARG_CONST_MAP_PTR,
 	.arg3_type	= ARG_ANYTHING,
+};
+
+BPF_CALL_4(bpf_get_stack, struct pt_regs *, regs, void *, buf, u32, size,
+	   u64, flags)
+{
+	u32 init_nr, trace_nr, copy_len, elem_size, num_elem;
+	bool user_build_id = flags & BPF_F_USER_BUILD_ID;
+	u32 skip = flags & BPF_F_SKIP_FIELD_MASK;
+	bool user = flags & BPF_F_USER_STACK;
+	struct perf_callchain_entry *trace;
+	bool kernel = !user;
+	int err = -EINVAL;
+	u64 *ips;
+
+	if (unlikely(flags & ~(BPF_F_SKIP_FIELD_MASK | BPF_F_USER_STACK |
+			       BPF_F_USER_BUILD_ID)))
+		goto clear;
+	if (kernel && user_build_id)
+		goto clear;
+
+	elem_size = (user && user_build_id) ? sizeof(struct bpf_stack_build_id)
+					    : sizeof(u64);
+	if (unlikely(size % elem_size))
+		goto clear;
+
+	num_elem = size / elem_size;
+	if (sysctl_perf_event_max_stack < num_elem)
+		init_nr = 0;
+	else
+		init_nr = sysctl_perf_event_max_stack - num_elem;
+	trace = get_perf_callchain(regs, init_nr, kernel, user,
+				   sysctl_perf_event_max_stack, false, false);
+	if (unlikely(!trace))
+		goto err_fault;
+
+	trace_nr = trace->nr - init_nr;
+	if (trace_nr < skip)
+		goto err_fault;
+
+	trace_nr -= skip;
+	trace_nr = (trace_nr <= num_elem) ? trace_nr : num_elem;
+	copy_len = trace_nr * elem_size;
+	ips = trace->ip + skip + init_nr;
+	if (user && user_build_id)
+		stack_map_get_build_id_offset(buf, ips, trace_nr, user);
+	else
+		memcpy(buf, ips, copy_len);
+
+	if (size > copy_len)
+		memset(buf + copy_len, 0, size - copy_len);
+	return copy_len;
+
+err_fault:
+	err = -EFAULT;
+clear:
+	memset(buf, 0, size);
+	return err;
+}
+
+const struct bpf_func_proto bpf_get_stack_proto = {
+	.func		= bpf_get_stack,
+	.gpl_only	= true,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_CTX,
+	.arg2_type	= ARG_PTR_TO_UNINIT_MEM,
+	.arg3_type	= ARG_CONST_SIZE_OR_ZERO,
+	.arg4_type	= ARG_ANYTHING,
 };
 
 /* Called from eBPF program */

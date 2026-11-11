@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * Linux Socket Filter Data Structures
  */
@@ -7,6 +8,7 @@
 #include <stdarg.h>
 
 #include <linux/atomic.h>
+#include <linux/refcount.h>
 #include <linux/compat.h>
 #include <linux/skbuff.h>
 #include <linux/linkage.h>
@@ -15,14 +17,14 @@
 #include <linux/sched.h>
 #include <linux/capability.h>
 #include <linux/cryptohash.h>
+#include <linux/set_memory.h>
 #include <linux/kallsyms.h>
+#include <linux/if_vlan.h>
+#include <linux/vmalloc.h>
 
-#include <net/xdp.h>
 #include <net/sch_generic.h>
 
 #include <asm/byteorder.h>
-#include <asm/cacheflush.h>
-
 #include <uapi/linux/filter.h>
 #include <uapi/linux/bpf.h>
 
@@ -30,9 +32,11 @@ struct sk_buff;
 struct sock;
 struct seccomp_data;
 struct bpf_prog_aux;
+struct xdp_rxq_info;
+struct xdp_buff;
+struct sock_reuseport;
 struct ctl_table;
 struct ctl_table_header;
-struct sock_reuseport;
 
 /* ArgX, context and stack frame pointer register positions. Note,
  * Arg1, Arg2, Arg3, etc are used as argument mappings of function
@@ -49,7 +53,9 @@ struct sock_reuseport;
 /* Additional register mappings for converted user programs. */
 #define BPF_REG_A	BPF_REG_0
 #define BPF_REG_X	BPF_REG_7
-#define BPF_REG_TMP	BPF_REG_8
+#define BPF_REG_TMP	BPF_REG_2	/* scratch reg */
+#define BPF_REG_D	BPF_REG_8	/* data, callee-saved */
+#define BPF_REG_H	BPF_REG_9	/* hlen, callee-saved */
 
 /* Kernel hidden auxiliary/helper register. */
 #define BPF_REG_AX		MAX_BPF_REG
@@ -59,11 +65,13 @@ struct sock_reuseport;
 /* unused opcode to mark special call to bpf_tail_call() helper */
 #define BPF_TAIL_CALL	0xf0
 
-/* unused opcode to mark special load instruction. Same as BPF_ABS */
-#define BPF_PROBE_MEM	0x20
-
 /* unused opcode to mark call to interpreter with arguments */
 #define BPF_CALL_ARGS	0xe0
+
+/* unused opcode to mark speculation barrier for mitigating
+ * Speculative Store Bypass
+ */
+#define BPF_NOSPEC	0xc0
 
 /* As per nm, we expose JITed images as text (code) section for
  * kallsyms. That way, tools like perf can find it to match
@@ -336,15 +344,15 @@ static inline bool insn_is_zext(const struct bpf_insn *insn)
 		.off   = OFF,					\
 		.imm   = IMM })
 
-/* Relative call */
+/* Unconditional jumps, goto pc + off16 */
 
-#define BPF_CALL_REL(TGT)					\
+#define BPF_JMP_A(OFF)						\
 	((struct bpf_insn) {					\
-		.code  = BPF_JMP | BPF_CALL,			\
+		.code  = BPF_JMP | BPF_JA,			\
 		.dst_reg = 0,					\
-		.src_reg = BPF_PSEUDO_CALL,			\
-		.off   = 0,					\
-		.imm   = TGT })
+		.src_reg = 0,					\
+		.off   = OFF,					\
+		.imm   = 0 })
 
 /* Function call */
 
@@ -374,6 +382,16 @@ static inline bool insn_is_zext(const struct bpf_insn *insn)
 #define BPF_EXIT_INSN()						\
 	((struct bpf_insn) {					\
 		.code  = BPF_JMP | BPF_EXIT,			\
+		.dst_reg = 0,					\
+		.src_reg = 0,					\
+		.off   = 0,					\
+		.imm   = 0 })
+
+/* Speculation barrier */
+
+#define BPF_ST_NOSPEC()						\
+	((struct bpf_insn) {					\
+		.code  = BPF_ST | BPF_NOSPEC,			\
 		.dst_reg = 0,					\
 		.src_reg = 0,					\
 		.off   = 0,					\
@@ -533,24 +551,21 @@ struct bpf_binary_header {
 	u32 magic;
 #endif
 	u32 pages;
-
-	/* Some arches need word alignment for their instructions */
-	u8 image[] __aligned(4);
+	u8 image[];
 };
 
 struct bpf_prog {
 	u16			pages;		/* Number of allocated pages */
-	kmemcheck_bitfield_begin(meta);
 	u16			jited:1,	/* Is our filter JIT'ed? */
-				undo_set_mem:1,	/* Passed set_memory_ro() checkpoint */
 				jit_requested:1,/* archs need to JIT the prog */
 				gpl_compatible:1, /* Is filter GPL compatible? */
 				cb_access:1,	/* Is control block accessed? */
 				dst_needed:1,	/* Do we need dst entry? */
 				blinded:1,	/* Was blinded */
 				is_func:1,	/* program is a bpf function */
-				xdp_adjust_head:1; /* Adjusting pkt head? */
-	kmemcheck_bitfield_end(meta);
+				kprobe_override:1, /* Do we override a kprobe? */
+				has_callchain_buf:1, /* callchain buffer allocated? */
+				enforce_expected_attach_type:1; /* Enforce expected_attach_type checking at attach time */
 	enum bpf_prog_type	type;		/* Type of BPF program */
 	enum bpf_attach_type	expected_attach_type; /* For some prog types */
 	u32			len;		/* Number of filter blocks */
@@ -568,7 +583,7 @@ struct bpf_prog {
 };
 
 struct sk_filter {
-	atomic_t	refcnt;
+	refcount_t	refcnt;
 	struct rcu_head	rcu;
 	struct bpf_prog	*prog;
 };
@@ -589,11 +604,13 @@ static inline unsigned int __bpf_call_func(const struct bpf_prog *prog,
 	return prog->bpf_func(ctx, prog->insnsi);
 }
 
+static inline struct bpf_binary_header *
+bpf_jit_binary_hdr(const struct bpf_prog *fp);
+
 static inline unsigned int __nocfi bpf_call_func(const struct bpf_prog *prog,
 						 const void *ctx)
 {
-	unsigned long addr = (unsigned long)prog->bpf_func & PAGE_MASK;
-	const struct bpf_binary_header *hdr = (void *)addr;
+	const struct bpf_binary_header *hdr = bpf_jit_binary_hdr(prog);
 
 	if (!IS_ENABLED(CONFIG_BPF_JIT_ALWAYS_ON) && !prog->jited)
 		return __bpf_call_func(prog, ctx);
@@ -653,13 +670,19 @@ struct bpf_skb_data_end {
 	void *data_end;
 };
 
-struct xdp_buff {
-	void *data;
-	void *data_end;
-	void *data_meta;
-	void *data_hard_start;
-	struct xdp_rxq_info *rxq;
+struct bpf_redirect_info {
+	u32 flags;
+	u32 tgt_index;
+	void *tgt_value;
+	struct bpf_map *map;
+	struct bpf_map *map_to_flush;
+	u32 kern_flags;
 };
+
+DECLARE_PER_CPU(struct bpf_redirect_info, bpf_redirect_info);
+
+/* flags for bpf_redirect_info kern_flags */
+#define BPF_RI_F_RF_NO_DIRECT	BIT(0)	/* no napi_direct on return_frame */
 
 /* Compute the linear packet data range [data, data_end) which
  * will be accessed by various program types (cls_bpf, act_bpf,
@@ -762,16 +785,16 @@ static inline u32 bpf_prog_run_clear_cb(const struct bpf_prog *prog,
 	return res;
 }
 
-static inline u32 bpf_prog_run_xdp(const struct bpf_prog *prog,
-				   struct xdp_buff *xdp)
+static __always_inline u32 bpf_prog_run_xdp(const struct bpf_prog *prog,
+					    struct xdp_buff *xdp)
 {
-	u32 ret;
-
-	rcu_read_lock();
-	ret = BPF_PROG_RUN(prog, xdp);
-	rcu_read_unlock();
-
-	return ret;
+	/* Caller needs to hold rcu_read_lock() (!), otherwise program
+	 * can be released while still running, or map elements could be
+	 * freed early while still having concurrent users. XDP fastpath
+	 * already takes rcu_read_lock() when fetching the program, so
+	 * it's not necessary here anymore.
+	 */
+	return BPF_PROG_RUN(prog, xdp);
 }
 
 static inline u32 bpf_prog_insn_size(const struct bpf_prog *prog)
@@ -829,28 +852,24 @@ bpf_ctx_narrow_access_offset(u32 off, u32 size, u32 size_default)
 #endif
 }
 
+#define bpf_ctx_wide_access_ok(off, size, type, field)			\
+	(size == sizeof(__u64) &&					\
+	off >= offsetof(type, field) &&					\
+	off + sizeof(__u64) <= offsetofend(type, field) &&		\
+	off % sizeof(__u64) == 0)
+
 #define bpf_classic_proglen(fprog) (fprog->len * sizeof(fprog->filter[0]))
 
 static inline void bpf_prog_lock_ro(struct bpf_prog *fp)
 {
-	fp->undo_set_mem = 1;
+	set_vm_flush_reset_perms(fp);
 	set_memory_ro((unsigned long)fp, fp->pages);
-}
-
-static inline void bpf_prog_unlock_ro(struct bpf_prog *fp)
-{
-	if (fp->undo_set_mem)
-		set_memory_rw((unsigned long)fp, fp->pages);
 }
 
 static inline void bpf_jit_binary_lock_ro(struct bpf_binary_header *hdr)
 {
+	set_vm_flush_reset_perms(hdr);
 	set_memory_ro((unsigned long)hdr, hdr->pages);
-}
-
-static inline void bpf_jit_binary_unlock_ro(struct bpf_binary_header *hdr)
-{
-	set_memory_rw((unsigned long)hdr, hdr->pages);
 }
 
 static inline struct bpf_binary_header *
@@ -888,7 +907,6 @@ void __bpf_prog_free(struct bpf_prog *fp);
 
 static inline void bpf_prog_unlock_free(struct bpf_prog *fp)
 {
-	bpf_prog_unlock_ro(fp);
 	__bpf_prog_free(fp);
 }
 
@@ -904,6 +922,7 @@ int sk_attach_filter(struct sock_fprog *fprog, struct sock *sk);
 int sk_attach_bpf(u32 ufd, struct sock *sk);
 int sk_reuseport_attach_filter(struct sock_fprog *fprog, struct sock *sk);
 int sk_reuseport_attach_bpf(u32 ufd, struct sock *sk);
+void sk_reuseport_prog_free(struct bpf_prog *prog);
 int sk_detach_filter(struct sock *sk);
 int sk_get_filter(struct sock *sk, struct sock_filter __user *filter,
 		  unsigned int len);
@@ -914,27 +933,62 @@ void sk_filter_uncharge(struct sock *sk, struct sk_filter *fp);
 u64 __bpf_call_base(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5);
 #define __bpf_call_base_args \
 	((u64 (*)(u64, u64, u64, u64, u64, const struct bpf_insn *)) \
-	 (void *)__bpf_call_base)
+	 __bpf_call_base)
 
 struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog);
 void bpf_jit_compile(struct bpf_prog *prog);
 bool bpf_jit_needs_zext(void);
 bool bpf_helper_changes_pkt_data(void *func);
 
-static inline bool bpf_dump_raw_ok(void)
+static inline bool bpf_dump_raw_ok(const struct cred *cred)
 {
 	/* Reconstruction of call-sites is dependent on kallsyms,
 	 * thus make dump the same restriction.
 	 */
-	return kallsyms_show_value() == 1;
+	return kallsyms_show_value(cred);
 }
 
 struct bpf_prog *bpf_patch_insn_single(struct bpf_prog *prog, u32 off,
 				       const struct bpf_insn *patch, u32 len);
 int bpf_remove_insns(struct bpf_prog *prog, u32 off, u32 cnt);
 
-int xdp_do_generic_redirect(struct net_device *dev, struct sk_buff *skb,
-			    struct bpf_prog *prog);
+void bpf_clear_redirect_map(struct bpf_map *map);
+
+static inline bool xdp_return_frame_no_direct(void)
+{
+	struct bpf_redirect_info *ri = this_cpu_ptr(&bpf_redirect_info);
+
+	return ri->kern_flags & BPF_RI_F_RF_NO_DIRECT;
+}
+
+static inline void xdp_set_return_frame_no_direct(void)
+{
+	struct bpf_redirect_info *ri = this_cpu_ptr(&bpf_redirect_info);
+
+	ri->kern_flags |= BPF_RI_F_RF_NO_DIRECT;
+}
+
+static inline void xdp_clear_return_frame_no_direct(void)
+{
+	struct bpf_redirect_info *ri = this_cpu_ptr(&bpf_redirect_info);
+
+	ri->kern_flags &= ~BPF_RI_F_RF_NO_DIRECT;
+}
+
+static inline int xdp_ok_fwd_dev(const struct net_device *fwd,
+				 unsigned int pktlen)
+{
+	unsigned int len;
+
+	if (unlikely(!(fwd->flags & IFF_UP)))
+		return -ENETDOWN;
+
+	len = fwd->mtu + fwd->hard_header_len + VLAN_HLEN;
+	if (pktlen > len)
+		return -EMSGSIZE;
+
+	return 0;
+}
 
 /* The pair of xdp_do_redirect and xdp_do_flush_map MUST be called in the
  * same cpu context. Further for best results no more than a single map
@@ -942,25 +996,12 @@ int xdp_do_generic_redirect(struct net_device *dev, struct sk_buff *skb,
  * because we only track one map and force a flush when the map changes.
  * This does not appear to be a real limitation for existing software.
  */
+int xdp_do_generic_redirect(struct net_device *dev, struct sk_buff *skb,
+			    struct xdp_buff *xdp, struct bpf_prog *prog);
 int xdp_do_redirect(struct net_device *dev,
 		    struct xdp_buff *xdp,
 		    struct bpf_prog *prog);
 void xdp_do_flush_map(void);
-
-/* Drivers not supporting XDP metadata can use this helper, which
- * rejects any room expansion for metadata as a result.
- */
-static __always_inline void
-xdp_set_data_meta_invalid(struct xdp_buff *xdp)
-{
-	xdp->data_meta = xdp->data + 1;
-}
-
-static __always_inline bool
-xdp_data_meta_unsupported(const struct xdp_buff *xdp)
-{
-	return unlikely(xdp->data_meta > xdp->data);
-}
 
 void bpf_warn_invalid_xdp_action(u32 act);
 
@@ -992,7 +1033,9 @@ bpf_jit_binary_alloc(unsigned int proglen, u8 **image_ptr,
 		     unsigned int alignment,
 		     bpf_jit_fill_hole_t bpf_fill_ill_insns);
 void bpf_jit_binary_free(struct bpf_binary_header *hdr);
-
+u64 bpf_jit_alloc_exec_limit(void);
+void *bpf_jit_alloc_exec(unsigned long size);
+void bpf_jit_free_exec(void *addr);
 void bpf_jit_free(struct bpf_prog *fp);
 
 int bpf_jit_get_func_addr(const struct bpf_prog *prog,
@@ -1005,7 +1048,7 @@ void bpf_jit_prog_release_other(struct bpf_prog *fp, struct bpf_prog *fp_other);
 static inline void bpf_jit_dump(unsigned int flen, unsigned int proglen,
 				u32 pass, void *image)
 {
-	pr_err("flen=%u proglen=%u pass=%u image=%p from=%s pid=%d\n", flen,
+	pr_err("flen=%u proglen=%u pass=%u image=%pK from=%s pid=%d\n", flen,
 	       proglen, pass, image, current->comm, task_pid_nr(current));
 
 	if (image)
@@ -1230,6 +1273,7 @@ struct bpf_sock_addr_kern {
 	 * only two (src and dst) are available at convert_ctx_access time
 	 */
 	u64 tmp_reg;
+	void *t_ctx;	/* Attach type specific context. */
 };
 
 struct bpf_sock_ops_kern {

@@ -13,7 +13,7 @@
 #include <linux/slab.h>
 #include <linux/poll.h>
 #include <linux/pagemap.h>
-#include <linux/sched.h>
+#include <linux/sched/mm.h>
 #include <linux/fsnotify.h>
 
 #include "kernfs-internal.h"
@@ -38,6 +38,15 @@ struct kernfs_open_node {
 	wait_queue_head_t	poll;
 	struct list_head	files; /* goes through kernfs_open_file.list */
 };
+
+static struct kmem_cache *kmem_open_node_pool;
+static struct kmem_cache *kmem_open_file_pool;
+
+void __init init_kernfs_file_pool(void)
+{
+	kmem_open_node_pool = KMEM_CACHE(kernfs_open_node, SLAB_HWCACHE_ALIGN | SLAB_PANIC);
+	kmem_open_file_pool = KMEM_CACHE(kernfs_open_file, SLAB_HWCACHE_ALIGN | SLAB_PANIC);
+}
 
 /*
  * kernfs_notify() may be called from any context and bounces notifications
@@ -276,6 +285,7 @@ static ssize_t kernfs_fop_write(struct file *file, const char __user *user_buf,
 	struct kernfs_open_file *of = kernfs_of(file);
 	const struct kernfs_ops *ops;
 	ssize_t len;
+	char buf_onstack[SZ_4K + 1] __aligned(sizeof(long));
 	char *buf;
 
 	if (of->atomic_write_len) {
@@ -286,13 +296,17 @@ static ssize_t kernfs_fop_write(struct file *file, const char __user *user_buf,
 		len = min_t(size_t, count, PAGE_SIZE);
 	}
 
-	buf = of->prealloc_buf;
-	if (buf)
-		mutex_lock(&of->prealloc_mutex);
-	else
-		buf = kmalloc(len + 1, GFP_KERNEL);
-	if (!buf)
-		return -ENOMEM;
+	if (len < sizeof(buf_onstack)) {
+		buf = buf_onstack;
+	} else {
+		buf = of->prealloc_buf;
+		if (buf)
+			mutex_lock(&of->prealloc_mutex);
+		else
+			buf = kmalloc(len + 1, GFP_KERNEL);
+		if (!buf)
+			return -ENOMEM;
+	}
 
 	if (copy_from_user(buf, user_buf, len)) {
 		len = -EFAULT;
@@ -326,7 +340,7 @@ static ssize_t kernfs_fop_write(struct file *file, const char __user *user_buf,
 out_free:
 	if (buf == of->prealloc_buf)
 		mutex_unlock(&of->prealloc_mutex);
-	else
+	else if (buf != buf_onstack)
 		kfree(buf);
 	return len;
 }
@@ -348,9 +362,9 @@ static void kernfs_vma_open(struct vm_area_struct *vma)
 	kernfs_put_active(of->kn);
 }
 
-static int kernfs_vma_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
+static int kernfs_vma_fault(struct vm_fault *vmf)
 {
-	struct file *file = vma->vm_file;
+	struct file *file = vmf->vma->vm_file;
 	struct kernfs_open_file *of = kernfs_of(file);
 	int ret;
 
@@ -362,16 +376,15 @@ static int kernfs_vma_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 
 	ret = VM_FAULT_SIGBUS;
 	if (of->vm_ops->fault)
-		ret = of->vm_ops->fault(vma, vmf);
+		ret = of->vm_ops->fault(vmf);
 
 	kernfs_put_active(of->kn);
 	return ret;
 }
 
-static int kernfs_vma_page_mkwrite(struct vm_area_struct *vma,
-				   struct vm_fault *vmf)
+static int kernfs_vma_page_mkwrite(struct vm_fault *vmf)
 {
-	struct file *file = vma->vm_file;
+	struct file *file = vmf->vma->vm_file;
 	struct kernfs_open_file *of = kernfs_of(file);
 	int ret;
 
@@ -383,7 +396,7 @@ static int kernfs_vma_page_mkwrite(struct vm_area_struct *vma,
 
 	ret = 0;
 	if (of->vm_ops->page_mkwrite)
-		ret = of->vm_ops->page_mkwrite(vma, vmf);
+		ret = of->vm_ops->page_mkwrite(vmf);
 	else
 		file_update_time(file);
 
@@ -516,7 +529,7 @@ static int kernfs_fop_mmap(struct file *file, struct vm_area_struct *vma)
 		goto out_put;
 
 	rc = 0;
-	of->mmapped = 1;
+	of->mmapped = true;
 	of->vm_ops = vma->vm_ops;
 	vma->vm_ops = &kernfs_vm_ops;
 out_put:
@@ -565,12 +578,13 @@ static int kernfs_get_open_node(struct kernfs_node *kn,
 	mutex_unlock(&kernfs_open_file_mutex);
 
 	if (on) {
-		kfree(new_on);
+		if (new_on)
+			kmem_cache_free(kmem_open_node_pool, new_on);
 		return 0;
 	}
 
 	/* not there, initialize a new one and retry */
-	new_on = kmalloc(sizeof(*new_on), GFP_KERNEL);
+	new_on = kmem_cache_alloc(kmem_open_node_pool, GFP_KERNEL);
 	if (!new_on)
 		return -ENOMEM;
 
@@ -612,12 +626,13 @@ static void kernfs_put_open_node(struct kernfs_node *kn,
 	spin_unlock_irqrestore(&kernfs_open_node_lock, flags);
 	mutex_unlock(&kernfs_open_file_mutex);
 
-	kfree(on);
+	if (on)
+		kmem_cache_free(kmem_open_node_pool, on);
 }
 
 static int kernfs_fop_open(struct inode *inode, struct file *file)
 {
-	struct kernfs_node *kn = file->f_path.dentry->d_fsdata;
+	struct kernfs_node *kn = inode->i_private;
 	struct kernfs_root *root = kernfs_root(kn);
 	const struct kernfs_ops *ops;
 	struct kernfs_open_file *of;
@@ -646,7 +661,7 @@ static int kernfs_fop_open(struct inode *inode, struct file *file)
 
 	/* allocate a kernfs_open_file for the file */
 	error = -ENOMEM;
-	of = kzalloc(sizeof(struct kernfs_open_file), GFP_KERNEL);
+	of = kmem_cache_zalloc(kmem_open_file_pool, GFP_KERNEL);
 	if (!of)
 		goto err_out;
 
@@ -737,7 +752,7 @@ err_seq_release:
 	seq_release(inode, file);
 err_free:
 	kfree(of->prealloc_buf);
-	kfree(of);
+	kmem_cache_free(kmem_open_file_pool, of);
 err_out:
 	kernfs_put_active(kn);
 	return error;
@@ -769,7 +784,7 @@ static void kernfs_release_file(struct kernfs_node *kn,
 
 static int kernfs_fop_release(struct inode *inode, struct file *filp)
 {
-	struct kernfs_node *kn = filp->f_path.dentry->d_fsdata;
+	struct kernfs_node *kn = inode->i_private;
 	struct kernfs_open_file *of = kernfs_of(filp);
 
 	if (kn->flags & KERNFS_HAS_RELEASE) {
@@ -781,7 +796,8 @@ static int kernfs_fop_release(struct inode *inode, struct file *filp)
 	kernfs_put_open_node(kn, of);
 	seq_release(inode, filp);
 	kfree(of->prealloc_buf);
-	kfree(of);
+	if (of)
+		kmem_cache_free(kmem_open_file_pool, of);
 
 	return 0;
 }
@@ -835,7 +851,7 @@ void kernfs_drain_open_files(struct kernfs_node *kn)
  */
 unsigned int kernfs_generic_poll(struct kernfs_open_file *of, poll_table *wait)
 {
-	struct kernfs_node *kn = of->file->f_path.dentry->d_fsdata;
+	struct kernfs_node *kn = kernfs_dentry_node(of->file->f_path.dentry);
 	struct kernfs_open_node *on = kn->attr.open;
 
 	poll_wait(of->file, &on->poll, wait);
@@ -849,7 +865,7 @@ unsigned int kernfs_generic_poll(struct kernfs_open_file *of, poll_table *wait)
 static unsigned int kernfs_fop_poll(struct file *filp, poll_table *wait)
 {
 	struct kernfs_open_file *of = kernfs_of(filp);
-	struct kernfs_node *kn = filp->f_path.dentry->d_fsdata;
+	struct kernfs_node *kn = kernfs_dentry_node(filp->f_path.dentry);
 	unsigned int ret;
 
 	if (!kernfs_get_active(kn))
@@ -1007,7 +1023,7 @@ struct kernfs_node *__kernfs_create_file(struct kernfs_node *parent,
 
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
 	if (key) {
-		lockdep_init_map(&kn->dep_map, "s_active", key, 0);
+		lockdep_init_map(&kn->dep_map, "kn->count", key, 0);
 		kn->flags |= KERNFS_LOCKDEP;
 	}
 #endif
