@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * linux/cgroup-defs.h - basic definitions for cgroup
  *
@@ -97,6 +98,7 @@ enum {
 
 	CFTYPE_NO_PREFIX	= (1 << 3),	/* (DON'T USE FOR NEW FILES) no subsys prefix */
 	CFTYPE_WORLD_WRITABLE	= (1 << 4),	/* (DON'T USE FOR NEW FILES) S_IWUGO */
+	CFTYPE_PRESSURE		= (1 << 6),	/* only if pressure feature is enabled */
 
 	/* internal flags, do not use outside cgroup core proper */
 	__CFTYPE_ONLY_ON_DFL	= (1 << 16),	/* only on default hierarchy */
@@ -242,8 +244,7 @@ struct css_set {
 	 * List of csets participating in the on-going migration either as
 	 * source or destination.  Protected by cgroup_mutex.
 	 */
-	struct list_head mg_src_preload_node;
-	struct list_head mg_dst_preload_node;
+	struct list_head mg_preload_node;
 	struct list_head mg_node;
 
 	/*
@@ -538,7 +539,7 @@ struct cftype {
 			 char *buf, size_t nbytes, loff_t off);
 
 	unsigned int (*poll)(struct kernfs_open_file *of,
-			 struct poll_table_struct *pt);
+			     struct poll_table_struct *pt);
 
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
 	struct lock_class_key	lockdep_key;
@@ -547,7 +548,7 @@ struct cftype {
 
 /*
  * Control Group subsystem type.
- * See Documentation/cgroups/cgroups.txt for details
+ * See Documentation/cgroup-v1/cgroups.txt for details
  */
 struct cgroup_subsys {
 	struct cgroup_subsys_state *(*css_alloc)(struct cgroup_subsys_state *parent_css);
@@ -652,8 +653,8 @@ extern struct percpu_rw_semaphore cgroup_threadgroup_rwsem;
  * cgroup_threadgroup_change_begin - threadgroup exclusion for cgroups
  * @tsk: target task
  *
- * Called from threadgroup_change_begin() and allows cgroup operations to
- * synchronize against threadgroup changes using a percpu_rw_semaphore.
+ * Allows cgroup operations to synchronize against threadgroup changes
+ * using a percpu_rw_semaphore.
  */
 static inline void cgroup_threadgroup_change_begin(struct task_struct *tsk)
 {
@@ -664,8 +665,7 @@ static inline void cgroup_threadgroup_change_begin(struct task_struct *tsk)
  * cgroup_threadgroup_change_end - threadgroup exclusion for cgroups
  * @tsk: target task
  *
- * Called from threadgroup_change_end().  Counterpart of
- * cgroup_threadcgroup_change_begin().
+ * Counterpart of cgroup_threadcgroup_change_begin().
  */
 static inline void cgroup_threadgroup_change_end(struct task_struct *tsk)
 {
@@ -676,7 +676,11 @@ static inline void cgroup_threadgroup_change_end(struct task_struct *tsk)
 
 #define CGROUP_SUBSYS_COUNT 0
 
-static inline void cgroup_threadgroup_change_begin(struct task_struct *tsk) {}
+static inline void cgroup_threadgroup_change_begin(struct task_struct *tsk)
+{
+	might_sleep();
+}
+
 static inline void cgroup_threadgroup_change_end(struct task_struct *tsk) {}
 
 #endif	/* CONFIG_CGROUPS */
