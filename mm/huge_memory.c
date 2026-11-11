@@ -1133,8 +1133,8 @@ static int do_huge_pmd_wp_page_fallback(struct vm_fault *vmf, pmd_t orig_pmd,
 	unsigned long mmun_start;	/* For mmu_notifiers */
 	unsigned long mmun_end;		/* For mmu_notifiers */
 
-	pages = kmalloc(sizeof(struct page *) * HPAGE_PMD_NR,
-			GFP_KERNEL);
+	pages = kmalloc_array(HPAGE_PMD_NR, sizeof(struct page *),
+			      GFP_KERNEL);
 	if (unlikely(!pages)) {
 		ret |= VM_FAULT_OOM;
 		goto out;
@@ -2367,7 +2367,8 @@ static void __split_huge_page_tail(struct page *head, int tail,
 			 (1L << PG_workingset) |
 			 (1L << PG_locked) |
 			 (1L << PG_unevictable) |
-			 (1L << PG_dirty)));
+			 (1L << PG_dirty) |
+			 LRU_GEN_MASK | LRU_REFS_MASK));
 
 	/* ->mapping in first tail page is compound_mapcount */
 	VM_BUG_ON_PAGE(tail > 2 && page_tail->mapping != TAIL_MAPPING,
