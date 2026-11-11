@@ -590,12 +590,6 @@ struct perf_event {
 
 	unsigned int			group_generation;
 	struct perf_event		*group_leader;
-
-	/*
-	 * Protect the pmu, attributes and context of a group leader.
-	 * Note: does not protect the pointer to the group_leader.
-	 */
-	struct mutex			group_leader_mutex;
 	struct pmu			*pmu;
 	void				*pmu_private;
 
@@ -735,9 +729,6 @@ struct perf_event {
 	 * CPU wakes up and will be removed from the list after that
 	 */
 	struct list_head		dormant_event_entry;
-
-	/* Is this event shared with other events */
-	bool					shared;
 #endif /* CONFIG_PERF_EVENTS */
 };
 
@@ -1274,7 +1265,7 @@ extern void perf_event_init(void);
 extern void perf_tp_event(u16 event_type, u64 count, void *record,
 			  int entry_size, struct pt_regs *regs,
 			  struct hlist_head *head, int rctx,
-			  struct task_struct *task);
+			  struct task_struct *task, struct perf_event *event);
 extern void perf_bp_event(struct perf_event *event, void *data);
 
 #ifndef perf_misc_flags
