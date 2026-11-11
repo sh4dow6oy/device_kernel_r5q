@@ -26,20 +26,7 @@ void __attribute__((weak)) arch_report_meminfo(struct seq_file *m)
 
 static void show_val_kb(struct seq_file *m, const char *s, unsigned long num)
 {
-	char v[32];
-	static const char blanks[7] = {' ', ' ', ' ', ' ',' ', ' ', ' '};
-	int len;
-
-	len = num_to_str(v, sizeof(v), num << (PAGE_SHIFT - 10));
-
-	seq_write(m, s, 16);
-
-	if (len > 0) {
-		if (len < 8)
-			seq_write(m, blanks, 8 - len);
-
-		seq_write(m, v, len);
-	}
+	seq_put_decimal_ull_width(m, s, num << (PAGE_SHIFT - 10), 8);
 	seq_write(m, " kB\n", 4);
 }
 
@@ -104,17 +91,14 @@ static int meminfo_proc_show(struct seq_file *m, void *v)
 #endif
 
 #ifdef CONFIG_ION_RBIN_HEAP
-	show_val_kb(m, "RbinTotal:       ", totalrbin_pages);
-	show_val_kb(m, "RbinAlloced:       ",
+	show_val_kb(m, "RbinTotal:      ", totalrbin_pages);
+	show_val_kb(m, "RbinAlloced:    ",
 		    atomic_read(&rbin_allocated_pages)
 		    + atomic_read(&rbin_pool_pages));
 	show_val_kb(m, "RbinPool:       ", atomic_read(&rbin_pool_pages));
-	show_val_kb(m, "RbinFree:        ", rbinfree);
-	show_val_kb(m, "RbinCached:       ",
+	show_val_kb(m, "RbinFree:       ", rbinfree);
+	show_val_kb(m, "RbinCached:     ",
 		    atomic_read(&rbin_cached_pages));
-#endif
-#ifdef CONFIG_KZEROD
-	show_val_kb(m, "ZeroedFree:     ", kzerod_get_zeroed_size());
 #endif
 	show_val_kb(m, "SwapTotal:      ", i.totalswap);
 	show_val_kb(m, "SwapFree:       ", i.freeswap);
