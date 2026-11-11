@@ -99,6 +99,9 @@
 #if defined(CONFIG_SYSCTL)
 
 /* External variables not in a header file. */
+#ifdef CONFIG_USB
+extern int deny_new_usb;
+#endif
 extern int suid_dumpable;
 #ifdef CONFIG_COREDUMP
 extern int core_uses_pid;
@@ -146,6 +149,7 @@ static int ten_thousand = 10000;
 #ifdef CONFIG_PERF_EVENTS
 static int six_hundred_forty_kb = 640 * 1024;
 #endif
+static int __maybe_unused two_hundred_million = 200000000;
 static int two_hundred_fifty_five = 255;
 
 /* this is needed for the proc_doulongvec_minmax of vm_dirty_bytes */
@@ -329,7 +333,6 @@ static struct ctl_table sysctl_base_table[] = {
 	{ }
 };
 
-#ifdef CONFIG_SCHED_DEBUG
 static int min_sched_granularity_ns = 100000;		/* 100 usecs */
 static int max_sched_granularity_ns = NSEC_PER_SEC;	/* 1 second */
 static int min_wakeup_granularity_ns;			/* 0 usecs */
@@ -338,7 +341,6 @@ static int max_wakeup_granularity_ns = NSEC_PER_SEC;	/* 1 second */
 static int min_sched_tunable_scaling = SCHED_TUNABLESCALING_NONE;
 static int max_sched_tunable_scaling = SCHED_TUNABLESCALING_END-1;
 #endif /* CONFIG_SMP */
-#endif /* CONFIG_SCHED_DEBUG */
 
 #ifdef CONFIG_COMPACTION
 static int min_extfrag_threshold;
@@ -476,6 +478,20 @@ static struct ctl_table kern_table[] = {
 		.proc_handler	= sched_updown_migrate_handler,
 	},
 	{
+		.procname	= "sched_upmigrate_boosted",
+		.data		= &sysctl_sched_capacity_margin_up_boosted,
+		.maxlen		= sizeof(unsigned int) * MAX_MARGIN_LEVELS,
+		.mode		= 0644,
+		.proc_handler	= sched_updown_migrate_handler_boosted,
+	},
+	{
+		.procname	= "sched_downmigrate_boosted",
+		.data		= &sysctl_sched_capacity_margin_down_boosted,
+		.maxlen		= sizeof(unsigned int) * MAX_MARGIN_LEVELS,
+		.mode		= 0644,
+		.proc_handler	= sched_updown_migrate_handler_boosted,
+	},
+	{
 		.procname       = "sched_energy_aware",
 		.data           = &sysctl_sched_energy_aware,
 		.maxlen         = sizeof(unsigned int),
@@ -484,7 +500,6 @@ static struct ctl_table kern_table[] = {
 		.extra1         = &zero,
 		.extra2         = &one,
 	},
-#ifdef CONFIG_SCHED_DEBUG
 	{
 		.procname	= "sched_min_granularity_ns",
 		.data		= &sysctl_sched_min_granularity,
@@ -543,6 +558,7 @@ static struct ctl_table kern_table[] = {
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec,
 	},
+#ifdef CONFIG_SCHED_DEBUG
 	{
 		.procname	= "sched_nr_migrate",
 		.data		= &sysctl_sched_nr_migrate,
@@ -636,6 +652,29 @@ static struct ctl_table kern_table[] = {
 		.mode		= 0644,
 		.proc_handler	= sched_rr_handler,
 	},
+#ifdef CONFIG_UCLAMP_TASK
+	{
+		.procname	= "sched_util_clamp_min",
+		.data		= &sysctl_sched_uclamp_util_min,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= sysctl_sched_uclamp_handler,
+	},
+	{
+		.procname	= "sched_util_clamp_max",
+		.data		= &sysctl_sched_uclamp_util_max,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= sysctl_sched_uclamp_handler,
+	},
+	{
+		.procname	= "sched_util_clamp_min_rt_default",
+		.data		= &sysctl_sched_uclamp_util_min_rt_default,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= sysctl_sched_uclamp_handler,
+	},
+#endif
 #ifdef CONFIG_SCHED_AUTOGROUP
 	{
 		.procname	= "sched_autogroup_enabled",
@@ -662,7 +701,7 @@ static struct ctl_table kern_table[] = {
 		.data		= sched_lib_name,
 		.maxlen		= LIB_PATH_LENGTH,
 		.mode		= 0644,
-		.proc_handler	= proc_dostring,
+		.proc_handler	= sysctl_sched_lib_name_handler,
 	},
 	{
 		.procname	= "sched_lib_mask_force",
@@ -1061,6 +1100,17 @@ static struct ctl_table kern_table[] = {
 		.proc_handler	= proc_dointvec_minmax_sysadmin,
 		.extra1		= &zero,
 		.extra2		= &two,
+	},
+#endif
+#ifdef CONFIG_USB
+	{
+		.procname	= "deny_new_usb",
+		.data		= &deny_new_usb,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax_sysadmin,
+		.extra1		= &zero,
+		.extra2		= &one,
 	},
 #endif
 	{
@@ -1493,13 +1543,6 @@ static struct ctl_table vm_table[] = {
 		.maxlen		= sizeof(sysctl_oom_dump_tasks),
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec,
-	},
-	{
-		.procname       = "reap_mem_on_sigkill",
-		.data           = &sysctl_reap_mem_on_sigkill,
-		.maxlen         = sizeof(sysctl_reap_mem_on_sigkill),
-		.mode           = 0644,
-		.proc_handler   = proc_dointvec,
 	},
 	{
 		.procname	= "overcommit_ratio",
@@ -1945,15 +1988,15 @@ static struct ctl_table vm_table[] = {
 	},
 #endif
 #ifdef CONFIG_USERFAULTFD
-        {
-                .procname       = "unprivileged_userfaultfd",
-                .data           = &sysctl_unprivileged_userfaultfd,
-                .maxlen         = sizeof(sysctl_unprivileged_userfaultfd),
-                .mode           = 0644,
-                .proc_handler   = proc_dointvec_minmax,
-                .extra1         = &zero,
-                .extra2         = &one,
-        },
+	{
+		.procname	= "unprivileged_userfaultfd",
+		.data		= &sysctl_unprivileged_userfaultfd,
+		.maxlen		= sizeof(sysctl_unprivileged_userfaultfd),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= &zero,
+		.extra2		= &one,
+	},
 #endif
 	{ }
 };
@@ -3329,7 +3372,8 @@ int proc_do_large_bitmap(struct ctl_table *table, int write,
 		if (IS_ERR(kbuf))
 			return PTR_ERR(kbuf);
 
-		tmp_bitmap = kzalloc(BITS_TO_LONGS(bitmap_len) * sizeof(unsigned long),
+		tmp_bitmap = kcalloc(BITS_TO_LONGS(bitmap_len),
+				     sizeof(unsigned long),
 				     GFP_KERNEL);
 		if (!tmp_bitmap) {
 			kfree(kbuf);
