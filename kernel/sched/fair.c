@@ -7733,9 +7733,6 @@ static inline int find_best_target(struct task_struct *p, int *backup_cpu,
 			if (sched_cpu_high_irqload(i))
 				continue;
 
-			if (fbt_env->skip_cpu == i)
-				continue;
-
 			/*
 			 * p's blocked utilization is still accounted for on prev_cpu
 			 * so prev_cpu will receive a negative bias due to the double
@@ -7859,11 +7856,7 @@ static inline int find_best_target(struct task_struct *p, int *backup_cpu,
 				}
 				if (best_idle_cpu != -1)
 					continue;
-
-				/* Skip CPUs which do not fit task requirements */
-				if (capacity_orig < uclamp_task_util(p))
-					continue;
-
+				
 				/*
 				 * Case A.2: Target ACTIVE CPU
 				 * Favor CPUs with max spare capacity.
@@ -7876,7 +7869,6 @@ static inline int find_best_target(struct task_struct *p, int *backup_cpu,
 				}
 				if (target_cpu != -1)
 					continue;
-
 
 				/*
 				 * Case A.3: Backup ACTIVE CPU
