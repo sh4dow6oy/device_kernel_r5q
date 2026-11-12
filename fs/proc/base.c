@@ -94,7 +94,6 @@
 #include <linux/sched/clock.h>
 #include <linux/flex_array.h>
 #include <linux/posix-timers.h>
-#include <linux/task_integrity.h>
 #include <linux/proca.h>
 #include <linux/cpufreq_times.h>
 #ifdef CONFIG_HARDWALL
