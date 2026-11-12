@@ -1224,7 +1224,7 @@ static int br_dev_newlink(struct net *src_net, struct net_device *dev, struct nl
 		spin_unlock_bh(&br->lock);
 	}
 
-	err = br_changelink(dev, tb, data, extack);
+	err = br_changelink(dev, tb, data);
 	if (err)
 		br_dev_delete(dev, NULL);
 
