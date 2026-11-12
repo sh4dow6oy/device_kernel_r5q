@@ -170,8 +170,7 @@ static void rmnet_unregister_bridge(struct net_device *dev,
 }
 
 static int rmnet_newlink(struct net *src_net, struct net_device *dev,
-			 struct nlattr *tb[], struct nlattr *data[],
-			 struct netlink_ext_ack *extack)
+                         struct nlattr *tb[], struct nlattr *data[])
 {
 	struct net_device *real_dev;
 	int mode = RMNET_EPMODE_VND;
@@ -350,8 +349,7 @@ static struct notifier_block rmnet_dev_notifier __read_mostly = {
 	.notifier_call = rmnet_config_notify_cb,
 };
 
-static int rmnet_rtnl_validate(struct nlattr *tb[], struct nlattr *data[],
-			       struct netlink_ext_ack *extack)
+static int rmnet_rtnl_validate(struct nlattr *tb[], struct nlattr *data[])
 {
 	struct rmnet_egress_agg_params *agg_params;
 	u16 mux_id;
@@ -376,8 +374,7 @@ static int rmnet_rtnl_validate(struct nlattr *tb[], struct nlattr *data[],
 }
 
 static int rmnet_changelink(struct net_device *dev, struct nlattr *tb[],
-			    struct nlattr *data[],
-			    struct netlink_ext_ack *extack)
+                            struct nlattr *data[])
 {
 	struct rmnet_priv *priv = netdev_priv(dev);
 	struct net_device *real_dev;
