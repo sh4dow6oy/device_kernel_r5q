@@ -31,9 +31,7 @@
 
 #include <trace/events/sched.h>
 
-#ifdef CONFIG_SEC_DEBUG
 #include <linux/sec_debug.h>
-#endif
 
 const char *task_event_names[] = {"PUT_PREV_TASK", "PICK_NEXT_TASK",
 				  "TASK_WAKE", "TASK_MIGRATE", "TASK_UPDATE",
@@ -93,16 +91,10 @@ static void acquire_rq_locks_irqsave(const cpumask_t *cpus,
 				     unsigned long *flags)
 {
 	int cpu;
-	int level = 0;
 
 	local_irq_save(*flags);
-	for_each_cpu(cpu, cpus) {
-		if (level == 0)
-			raw_spin_lock(&cpu_rq(cpu)->lock);
-		else
-			raw_spin_lock_nested(&cpu_rq(cpu)->lock, level);
-		level++;
-	}
+	for_each_cpu(cpu, cpus)
+		raw_spin_lock(&cpu_rq(cpu)->lock);
 }
 
 static void release_rq_locks_irqrestore(const cpumask_t *cpus,
@@ -437,10 +429,10 @@ void clear_walt_request(int cpu)
 
 		raw_spin_lock_irqsave(&rq->lock, flags);
 		if (rq->push_task) {
-			clear_reserved(rq->push_cpu);
 			push_task = rq->push_task;
 			rq->push_task = NULL;
 		}
+		clear_reserved(rq->push_cpu);
 		rq->active_balance = 0;
 		raw_spin_unlock_irqrestore(&rq->lock, flags);
 		if (push_task)
@@ -931,9 +923,6 @@ void set_window_start(struct rq *rq)
 
 unsigned int max_possible_efficiency = 1;
 unsigned int min_possible_efficiency = UINT_MAX;
-
-unsigned int sysctl_sched_conservative_pl;
-unsigned int sysctl_sched_many_wakeup_threshold = 1000;
 
 #define INC_STEP 8
 #define DEC_STEP 2
@@ -2035,11 +2024,6 @@ void init_new_task_load(struct task_struct *p)
 	memset(&p->ravg, 0, sizeof(struct ravg));
 	p->cpu_cycles = 0;
 
-	p->ravg.curr_window_cpu = kcalloc(nr_cpu_ids, sizeof(u32),
-					  GFP_KERNEL | __GFP_NOFAIL);
-	p->ravg.prev_window_cpu = kcalloc(nr_cpu_ids, sizeof(u32),
-					  GFP_KERNEL | __GFP_NOFAIL);
-
 	if (init_load_pct) {
 		init_load_windows = div64_u64((u64)init_load_pct *
 			  (u64)sched_ravg_window, 100);
@@ -2056,46 +2040,28 @@ void init_new_task_load(struct task_struct *p)
 	p->misfit = false;
 }
 
-/*
- * kfree() may wakeup kswapd. So this function should NOT be called
- * with any CPU's rq->lock acquired.
- */
-void free_task_load_ptrs(struct task_struct *p)
-{
-	kfree(p->ravg.curr_window_cpu);
-	kfree(p->ravg.prev_window_cpu);
-
-	/*
-	 * update_task_ravg() can be called for exiting tasks. While the
-	 * function itself ensures correct behavior, the corresponding
-	 * trace event requires that these pointers be NULL.
-	 */
-	p->ravg.curr_window_cpu = NULL;
-	p->ravg.prev_window_cpu = NULL;
-}
-
 void reset_task_stats(struct task_struct *p)
 {
-	u32 sum = 0;
-	u32 *curr_window_ptr = NULL;
-	u32 *prev_window_ptr = NULL;
+	u32 sum;
+	u32 curr_window_saved[CONFIG_NR_CPUS];
+	u32 prev_window_saved[CONFIG_NR_CPUS];
 
 	if (exiting_task(p)) {
 		sum = EXITING_TASK_MARKER;
+
+		memset(&p->ravg, 0, sizeof(struct ravg));
+
+		/* Retain EXITING_TASK marker */
+		p->ravg.sum_history[0] = sum;
 	} else {
-		curr_window_ptr =  p->ravg.curr_window_cpu;
-		prev_window_ptr = p->ravg.prev_window_cpu;
-		memset(curr_window_ptr, 0, sizeof(u32) * nr_cpu_ids);
-		memset(prev_window_ptr, 0, sizeof(u32) * nr_cpu_ids);
+		memcpy(curr_window_saved, p->ravg.curr_window_cpu, sizeof(curr_window_saved));
+		memcpy(prev_window_saved, p->ravg.prev_window_cpu, sizeof(prev_window_saved));
+
+		memset(&p->ravg, 0, sizeof(struct ravg));
+
+		memcpy(p->ravg.curr_window_cpu, curr_window_saved, sizeof(curr_window_saved));
+		memcpy(p->ravg.prev_window_cpu, prev_window_saved, sizeof(prev_window_saved));
 	}
-
-	memset(&p->ravg, 0, sizeof(struct ravg));
-
-	p->ravg.curr_window_cpu = curr_window_ptr;
-	p->ravg.prev_window_cpu = prev_window_ptr;
-
-	/* Retain EXITING_TASK marker */
-	p->ravg.sum_history[0] = sum;
 }
 
 void mark_task_starting(struct task_struct *p)
@@ -2153,7 +2119,9 @@ static struct sched_cluster *alloc_new_cluster(const struct cpumask *cpus)
 
 	cluster = kzalloc(sizeof(struct sched_cluster), GFP_ATOMIC);
 	if (!cluster) {
+#ifdef CONFIG_BUG
 		__WARN_printf("Cluster allocation failed. Possible bad scheduling\n");
+#endif
 		return NULL;
 	}
 
@@ -2502,19 +2470,14 @@ core_initcall(register_walt_callback);
 
 int register_cpu_cycle_counter_cb(struct cpu_cycle_counter_cb *cb)
 {
-	unsigned long flags;
-
 	mutex_lock(&cluster_lock);
 	if (!cb->get_cpu_cycle_counter) {
 		mutex_unlock(&cluster_lock);
 		return -EINVAL;
 	}
 
-	acquire_rq_locks_irqsave(cpu_possible_mask, &flags);
 	cpu_cycle_counter_cb = *cb;
 	use_cycle_counter = true;
-	release_rq_locks_irqrestore(cpu_possible_mask, &flags);
-
 	mutex_unlock(&cluster_lock);
 
 	cpufreq_unregister_notifier(&notifier_trans_block,
