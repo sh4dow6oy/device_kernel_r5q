@@ -28,7 +28,7 @@
 #include <soc/qcom/rmnet_qmi.h>
 #include <soc/qcom/qmi_rmnet.h>
 #include <linux/proc_fs.h>
- 
+
 /* Locking scheme -
  * The shared resource which needs to be protected is realdev->rx_handler_data.
  * For the writer path, this is using rtnl_lock(). The writer paths are
@@ -170,7 +170,8 @@ static void rmnet_unregister_bridge(struct net_device *dev,
 }
 
 static int rmnet_newlink(struct net *src_net, struct net_device *dev,
-                         struct nlattr *tb[], struct nlattr *data[])
+			 struct nlattr *tb[], struct nlattr *data[],
+			 struct netlink_ext_ack *extack)
 {
 	struct net_device *real_dev;
 	int mode = RMNET_EPMODE_VND;
@@ -349,7 +350,8 @@ static struct notifier_block rmnet_dev_notifier __read_mostly = {
 	.notifier_call = rmnet_config_notify_cb,
 };
 
-static int rmnet_rtnl_validate(struct nlattr *tb[], struct nlattr *data[])
+static int rmnet_rtnl_validate(struct nlattr *tb[], struct nlattr *data[],
+			       struct netlink_ext_ack *extack)
 {
 	struct rmnet_egress_agg_params *agg_params;
 	u16 mux_id;
@@ -374,7 +376,8 @@ static int rmnet_rtnl_validate(struct nlattr *tb[], struct nlattr *data[])
 }
 
 static int rmnet_changelink(struct net_device *dev, struct nlattr *tb[],
-                            struct nlattr *data[])
+			    struct nlattr *data[],
+			    struct netlink_ext_ack *extack)
 {
 	struct rmnet_priv *priv = netdev_priv(dev);
 	struct net_device *real_dev;
@@ -875,6 +878,7 @@ static struct notifier_block rmnet_addr4_notifier_block __read_mostly = {
 
 #if defined(CONFIG_ARGOS)
 #define PROC_BUFSIZE 20
+
 static ssize_t rmnet_set_dl_flush_count(struct file *file,
 					const char __user *ubuf,
 					size_t count, loff_t *ppos)
@@ -947,18 +951,6 @@ static int __init rmnet_init(void)
 	if (rc != 0)
 		goto err2;
 
-#if defined(CONFIG_ARGOS) 
-{
-	struct proc_dir_entry *pde;
-
-	/* default gro flush count*/
-	config_flushcount = 2;
-	pde = proc_create("rmnet_flush_count", 0444, NULL, &rmnet_fops);
-	if (!pde)
-		return -ENOMEM;
-}
-#endif
-
 	return 0;
 
 err2:
@@ -969,6 +961,18 @@ err1:
 
 err0:
 	unregister_netdevice_notifier(&rmnet_dev_notifier);
+
+#if defined(CONFIG_ARGOS)
+{
+	struct proc_dir_entry *pde;
+
+	/* default gro flush count*/
+	config_flushcount = 2;
+	pde = proc_create("rmnet_flush_count", 0444, NULL, &rmnet_fops);
+	if (!pde)
+		return -ENOMEM;
+}
+#endif
 	return rc;
 }
 
@@ -978,7 +982,9 @@ static void __exit rmnet_exit(void)
 	unregister_inet6addr_notifier(&rmnet_addr6_notifier_block);
 	unregister_netdevice_notifier(&rmnet_dev_notifier);
 	rtnl_link_unregister(&rmnet_link_ops);
+#if defined(CONFIG_ARGOS)
 	remove_proc_entry("rmnet_flush_count", NULL);
+#endif
 }
 
 module_init(rmnet_init)
