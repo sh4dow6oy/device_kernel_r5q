@@ -859,8 +859,7 @@ int br_dellink(struct net_device *dev, struct nlmsghdr *nlh, u16 flags)
 	return err;
 }
 
-static int br_validate(struct nlattr *tb[], struct nlattr *data[],
-		       struct netlink_ext_ack *extack)
+static int br_validate(struct nlattr *tb[], struct nlattr *data[])
 {
 	if (tb[IFLA_ADDRESS]) {
 		if (nla_len(tb[IFLA_ADDRESS]) != ETH_ALEN)
@@ -894,11 +893,7 @@ static int br_validate(struct nlattr *tb[], struct nlattr *data[],
 	return 0;
 }
 
-static int br_port_slave_changelink(struct net_device *brdev,
-				    struct net_device *dev,
-				    struct nlattr *tb[],
-				    struct nlattr *data[],
-				    struct netlink_ext_ack *extack)
+static int br_port_slave_changelink(struct net_device *brdev, struct net_device *dev, struct nlattr *tb[], struct nlattr *data[])
 {
 	struct net_bridge *br = netdev_priv(brdev);
 	int ret;
@@ -962,9 +957,7 @@ static const struct nla_policy br_policy[IFLA_BR_MAX + 1] = {
 	[IFLA_BR_MCAST_MLD_VERSION] = { .type = NLA_U8 },
 };
 
-static int br_changelink(struct net_device *brdev, struct nlattr *tb[],
-			 struct nlattr *data[],
-			 struct netlink_ext_ack *extack)
+static int br_changelink(struct net_device *brdev, struct nlattr *tb[], struct nlattr *data[])
 {
 	struct net_bridge *br = netdev_priv(brdev);
 	int err;
@@ -1216,9 +1209,7 @@ static int br_changelink(struct net_device *brdev, struct nlattr *tb[],
 	return 0;
 }
 
-static int br_dev_newlink(struct net *src_net, struct net_device *dev,
-			  struct nlattr *tb[], struct nlattr *data[],
-			  struct netlink_ext_ack *extack)
+static int br_dev_newlink(struct net *src_net, struct net_device *dev, struct nlattr *tb[], struct nlattr *data[])
 {
 	struct net_bridge *br = netdev_priv(dev);
 	int err;
