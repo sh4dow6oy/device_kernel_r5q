@@ -86,7 +86,7 @@
 #include <linux/msg.h>
 #include <linux/shm.h>
 #include <linux/bpf.h>
-	  
+
 #include "avc.h"
 #include "objsec.h"
 #include "netif.h"
@@ -100,110 +100,17 @@
 
 struct selinux_state selinux_state;
 
-#ifdef CONFIG_RKP_NS_PROT
-extern unsigned int cmp_ns_integrity(void);
-#else
-unsigned int cmp_ns_integrity(void)
-{
-	return 0;
-}
-#endif
-
-#ifdef CONFIG_RKP_KDP
-struct task_security_struct init_sec __kdp_ro;
-extern struct kmem_cache *tsec_jar;
-extern void rkp_free_security(unsigned long tsec);
-u8 rkp_ro_page(unsigned long addr);
-static inline unsigned int cmp_sec_integrity(const struct cred *cred, struct mm_struct *mm)
-{
-	return ((cred->bp_task != current) ||
-			(mm && (!( in_interrupt() || in_softirq())) &&
-			(cred->bp_pgd != swapper_pg_dir) &&
-			(mm->pgd != cred->bp_pgd)));
-}
-
-extern struct cred init_cred;
-static inline unsigned int rkp_is_valid_cred_sp(u64 cred, u64 sp)
-{
-	struct task_security_struct *tsec = (struct task_security_struct *)sp;
-
-	if ((cred == (u64)&init_cred) &&
-		( sp == (u64)&init_sec)) {
-		return 0;
-	}
-
-	if (!rkp_ro_page(cred) || !rkp_ro_page(cred + sizeof(struct cred) - 1)||
-		(!rkp_ro_page(sp) || !rkp_ro_page(sp + sizeof(struct task_security_struct) - 1))) {
-		return 1;
-	}
-
-	if ((u64)tsec->bp_cred != cred) {
-		return 1;
-	}
-	return 0;
-}
-
-inline void rkp_print_debug(void)
-{
-	u64 pgd;
-	struct cred *cred;
-
-	pgd = (u64)(current->mm?current->mm->pgd:swapper_pg_dir);
-	cred = (struct cred *)current_cred();
-
-	printk(KERN_ERR"\n RKP44 cred = %p bp_task = %p bp_pgd = %p pgd = %llx stat = #%d# task = %p mm = %p \n", cred, cred->bp_task, cred->bp_pgd, pgd, (int)rkp_ro_page((unsigned long long)cred), current, current->mm);
-
-	//printk(KERN_ERR"\n RKP44_1 uid = %d gid = %d euid = %d  egid = %d \n",(u32)cred->uid,(u32)cred->gid,(u32)cred->euid,(u32)cred->egid);
-	printk(KERN_ERR"\n RKP44_2 Cred %llx #%d# #%d# Sec ptr %llx #%d# #%d#\n", (u64)cred, rkp_ro_page((u64)cred), rkp_ro_page((u64)cred + sizeof(struct cred)), (u64)cred->security, rkp_ro_page((u64)cred->security), rkp_ro_page((u64)cred->security + sizeof(struct task_security_struct)));
-}
-
-/* Main function to verify cred security context of a process */
-int security_integrity_current(void)
-{
-	rcu_read_lock();
-	if (rkp_cred_enable &&
-		(rkp_is_valid_cred_sp((u64)current_cred(), (u64)current_cred()->security) ||
-		cmp_sec_integrity(current_cred(), current->mm) ||
-		cmp_ns_integrity())) {
-		rkp_print_debug();
-		rcu_read_unlock();
-		panic("RKP CRED PROTECTION VIOLATION\n");
-	}
-	rcu_read_unlock();
-	return 0;
-}
-
-unsigned int rkp_get_task_sec_size(void)
-{
-	return sizeof(struct task_security_struct);
-}
-
-unsigned int rkp_get_offset_bp_cred(void)
-{
-	return offsetof(struct task_security_struct, bp_cred);
-}
-#endif /* CONFIG_RKP_KDP */
-
-
 /* SECMARK reference count */
 static atomic_t selinux_secmark_refcount = ATOMIC_INIT(0);
 
-// [ SEC_SELINUX_PORTING_COMMON
-static DEFINE_MUTEX(selinux_sdcardfs_lock);
-// ] SEC_SELINUX_PORTING_COMMON
-
 #ifdef CONFIG_SECURITY_SELINUX_DEVELOP
-int selinux_enforcing;
-static int selinux_enforcing_boot;
-
+int selinux_enforcing_boot;
 
 static int __init enforcing_setup(char *str)
 {
 	unsigned long enforcing;
-	if (!kstrtoul(str, 0, &enforcing)) {
+	if (!kstrtoul(str, 0, &enforcing))
 		selinux_enforcing_boot = enforcing ? 1 : 0;
-		selinux_enforcing = enforcing ? 1 : 0;
-	}
 	return 1;
 }
 __setup("enforcing=", enforcing_setup);
@@ -212,8 +119,7 @@ __setup("enforcing=", enforcing_setup);
 #endif
 
 #ifdef CONFIG_SECURITY_SELINUX_BOOTPARAM
-int selinux_enabled __kdp_ro = CONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE;
-// CONFIG_RKP_KDP
+int selinux_enabled = CONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE;
 
 static int __init selinux_enabled_setup(char *str)
 {
@@ -305,14 +211,10 @@ static void cred_init_security(void)
 	struct cred *cred = (struct cred *) current->real_cred;
 	struct task_security_struct *tsec;
 
-#ifdef CONFIG_RKP_KDP
-	tsec = &init_sec;
-	tsec->bp_cred = cred;
-#else
 	tsec = kzalloc(sizeof(struct task_security_struct), GFP_KERNEL);
 	if (!tsec)
 		panic("SELinux:  Failed to initialize initial task.\n");
-#endif
+
 	tsec->osid = tsec->sid = SECINITSID_KERNEL;
 	cred->security = tsec;
 }
@@ -381,7 +283,7 @@ static int __inode_security_revalidate(struct inode *inode,
 
 	might_sleep_if(may_sleep);
 
-	if (ss_initialized && // SEC_SELINUX_PORTING_COMMON Change to use RKP
+	if (selinux_state.initialized &&
 	    isec->initialized != LABEL_INITIALIZED) {
 		if (!may_sleep)
 			return -ECHILD;
@@ -730,7 +632,7 @@ static int selinux_get_mnt_opts(const struct super_block *sb,
 	if (!(sbsec->flags & SE_SBINITIALIZED))
 		return -EINVAL;
 
-	if (!ss_initialized) // SEC_SELINUX_PORTING_COMMON Change to use RKP
+	if (!selinux_state.initialized)
 		return -EINVAL;
 
 	/* make sure we always check enough bits to cover the mask */
@@ -853,7 +755,7 @@ static int selinux_set_mnt_opts(struct super_block *sb,
 
 	mutex_lock(&sbsec->lock);
 
-	if (!ss_initialized) { // SEC_SELINUX_PORTING_COMMON Change to use RKP
+	if (!selinux_state.initialized) {
 		if (!num_opts) {
 			/* Defer initialization until selinux_complete_init,
 			   after the initial policy is loaded and the security
@@ -967,13 +869,9 @@ static int selinux_set_mnt_opts(struct super_block *sb,
 	if (!strcmp(sb->s_type->name, "debugfs") ||
 	    !strcmp(sb->s_type->name, "tracefs") ||
 	    !strcmp(sb->s_type->name, "sysfs") ||
-// [ SEC_SELINUX_PORTING_COMMON
-        !strcmp(sb->s_type->name, "configfs") ||
-// ] SEC_SELINUX_PORTING_COMMON
 	    !strcmp(sb->s_type->name, "pstore") ||
 	    !strcmp(sb->s_type->name, "bpf") ||
 	    !strcmp(sb->s_type->name, "binder") ||
-	    !strcmp(sb->s_type->name, "bpf") ||
 	    !strcmp(sb->s_type->name, "cgroup") ||
 	    !strcmp(sb->s_type->name, "cgroup2"))
 		sbsec->flags |= SE_SBGENFS;
@@ -1146,7 +1044,8 @@ static int selinux_sb_clone_mnt_opts(const struct super_block *oldsb,
 	 * if the parent was able to be mounted it clearly had no special lsm
 	 * mount options.  thus we can safely deal with this superblock later
 	 */
-	if (!ss_initialized) // SEC_SELINUX_PORTING_COMMON Change to use RKP
+ 
+	if (!selinux_state.initialized)
 		return 0;
 
 	/*
@@ -1217,6 +1116,7 @@ static int selinux_parse_opts_str(char *options,
 	char *context = NULL, *defcontext = NULL;
 	char *fscontext = NULL, *rootcontext = NULL;
 	int rc, num_mnt_opts = 0;
+
 
 	opts->num_mnt_opts = 0;
 
@@ -1408,6 +1308,7 @@ static int selinux_sb_show_options(struct seq_file *m, struct super_block *sb)
 {
 	struct security_mnt_opts opts;
 	int rc;
+
 
 	rc = selinux_get_mnt_opts(sb, &opts);
 	if (rc) {
@@ -1651,7 +1552,6 @@ static int inode_doinit_with_dentry(struct inode *inode, struct dentry *opt_dent
 	u16 sclass;
 	struct dentry *dentry;
 #define INITCONTEXTLEN 255
-	char context_onstack[INITCONTEXTLEN + 1];
 	char *context = NULL;
 	unsigned len = 0;
 	int rc = 0;
@@ -1715,10 +1615,17 @@ static int inode_doinit_with_dentry(struct inode *inode, struct dentry *opt_dent
 		}
 
 		len = INITCONTEXTLEN;
-		context = context_onstack;
+		context = kmalloc(len+1, GFP_NOFS);
+		if (!context) {
+			rc = -ENOMEM;
+			dput(dentry);
+			goto out;
+		}
 		context[len] = '\0';
 		rc = __vfs_getxattr(dentry, inode, XATTR_NAME_SELINUX, context, len);
 		if (rc == -ERANGE) {
+			kfree(context);
+
 			/* Need a larger buffer.  Query for the right size. */
 			rc = __vfs_getxattr(dentry, inode, XATTR_NAME_SELINUX, NULL, 0);
 			if (rc < 0) {
@@ -1741,8 +1648,7 @@ static int inode_doinit_with_dentry(struct inode *inode, struct dentry *opt_dent
 				printk(KERN_WARNING "SELinux: %s:  getxattr returned "
 				       "%d for dev=%s ino=%ld\n", __func__,
 				       -rc, inode->i_sb->s_id, inode->i_ino);
-				if (context != context_onstack)
-					kfree(context);
+				kfree(context);
 				goto out;
 			}
 			/* Map ENODATA to the default file SID */
@@ -1767,15 +1673,13 @@ static int inode_doinit_with_dentry(struct inode *inode, struct dentry *opt_dent
 					       "returned %d for dev=%s ino=%ld\n",
 					       __func__, context, -rc, dev, ino);
 				}
-				if (context != context_onstack)
-					kfree(context);
+				kfree(context);
 				/* Leave with the unlabeled SID */
 				rc = 0;
 				break;
 			}
 		}
-		if (context != context_onstack)
-			kfree(context);
+		kfree(context);
 		break;
 	case SECURITY_FS_USE_TASK:
 		sid = task_sid;
@@ -2317,7 +2221,6 @@ static int selinux_binder_transaction(const struct cred *from,
 	u32 fromsid = cred_sid(from);
 	u32 tosid = cred_sid(to);
 	int rc;
-
 	if (mysid != fromsid) {
 		rc = avc_has_perm(&selinux_state,
 				  mysid, fromsid, SECCLASS_BINDER,
@@ -2349,6 +2252,7 @@ static int selinux_binder_transfer_file(const struct cred *from,
 	struct inode_security_struct *isec;
 	struct common_audit_data ad;
 	int rc;
+
 
 	ad.type = LSM_AUDIT_DATA_PATH;
 	ad.u.path = file->f_path;
@@ -2383,6 +2287,7 @@ static int selinux_ptrace_access_check(struct task_struct *child,
 {
 	u32 sid = current_sid();
 	u32 csid = task_sid(child);
+
 
 	if (mode & PTRACE_MODE_READ)
 		return avc_has_perm(&selinux_state,
@@ -2437,7 +2342,6 @@ static int selinux_quotactl(int cmds, int type, int id, struct super_block *sb)
 {
 	const struct cred *cred = current_cred();
 	int rc = 0;
-
 	if (!sb)
 		return 0;
 
@@ -2464,7 +2368,6 @@ static int selinux_quotactl(int cmds, int type, int id, struct super_block *sb)
 static int selinux_quota_on(struct dentry *dentry)
 {
 	const struct cred *cred = current_cred();
-
 	return dentry_has_perm(cred, dentry, FILE__QUOTAON);
 }
 
@@ -2760,6 +2663,7 @@ static void selinux_bprm_committing_creds(struct linux_binprm *bprm)
 	struct rlimit *rlim, *initrlim;
 	int rc, i;
 
+
 	new_tsec = bprm->cred->security;
 	if (new_tsec->sid == new_tsec->osid)
 		return;
@@ -2851,6 +2755,7 @@ static void selinux_bprm_committed_creds(struct linux_binprm *bprm)
 
 static int selinux_sb_alloc_security(struct super_block *sb)
 {
+
 	return superblock_alloc_security(sb);
 }
 
@@ -2914,7 +2819,6 @@ static int selinux_sb_copy_data(char *orig, char *copy)
 	char *in_save, *in_curr, *in_end;
 	char *sec_curr, *nosec_save, *nosec;
 	int open_quote = 0;
-
 	in_curr = orig;
 	sec_curr = copy;
 
@@ -3041,35 +2945,23 @@ static int selinux_sb_kern_mount(struct super_block *sb, int flags, void *data)
 	struct common_audit_data ad;
 	int rc;
 
-	// [ SEC_SELINUX_PORTING_COMMON
-	if((strcmp(sb->s_type->name,"sdcardfs")) == 0)
-		mutex_lock(&selinux_sdcardfs_lock);
-
 	rc = superblock_doinit(sb, data);
 	if (rc)
-		goto out;
+		return rc;
 
 	/* Allow all mounts performed by the kernel */
 	if (flags & (MS_KERNMOUNT | MS_SUBMOUNT))
-		goto out;
+		return 0;
 
 	ad.type = LSM_AUDIT_DATA_DENTRY;
 	ad.u.dentry = sb->s_root;
-	rc = superblock_has_perm(cred, sb, FILESYSTEM__MOUNT, &ad);
-
-out:
-	if((strcmp(sb->s_type->name,"sdcardfs")) == 0)
-		mutex_unlock(&selinux_sdcardfs_lock);
-	// ] SEC_SELINUX_PORTING_COMMON
-
-	return rc;
+	return superblock_has_perm(cred, sb, FILESYSTEM__MOUNT, &ad);
 }
 
 static int selinux_sb_statfs(struct dentry *dentry)
 {
 	const struct cred *cred = current_cred();
 	struct common_audit_data ad;
-
 	ad.type = LSM_AUDIT_DATA_DENTRY;
 	ad.u.dentry = dentry->d_sb->s_root;
 	return superblock_has_perm(cred, dentry->d_sb, FILESYSTEM__GETATTR, &ad);
@@ -3082,7 +2974,6 @@ static int selinux_mount(const char *dev_name,
 			 void *data)
 {
 	const struct cred *cred = current_cred();
-
 	if (flags & MS_REMOUNT)
 		return superblock_has_perm(cred, path->dentry->d_sb,
 					   FILESYSTEM__REMOUNT, NULL);
@@ -3093,7 +2984,6 @@ static int selinux_mount(const char *dev_name,
 static int selinux_umount(struct vfsmount *mnt, int flags)
 {
 	const struct cred *cred = current_cred();
-
 	return superblock_has_perm(cred, mnt->mnt_sb,
 				   FILESYSTEM__UNMOUNT, NULL);
 }
@@ -3180,7 +3070,7 @@ static int selinux_inode_init_security(struct inode *inode, struct inode *dir,
 		isec->initialized = LABEL_INITIALIZED;
 	}
 
-	if (!ss_initialized || !(sbsec->flags & SBLABEL_MNT)) // SEC_SELINUX_PORTING_COMMON Change to use RKP
+	if (!selinux_state.initialized || !(sbsec->flags & SBLABEL_MNT))
 		return -EOPNOTSUPP;
 
 	if (name)
@@ -3242,7 +3132,6 @@ static int selinux_inode_rename(struct inode *old_inode, struct dentry *old_dent
 static int selinux_inode_readlink(struct dentry *dentry)
 {
 	const struct cred *cred = current_cred();
-
 	return dentry_has_perm(cred, dentry, FILE__READ);
 }
 
@@ -3273,11 +3162,9 @@ static noinline int audit_inode_permission(struct inode *inode,
 					   int result,
 					   unsigned flags)
 {
-#ifdef CONFIG_AUDIT
 	struct common_audit_data ad;
 	struct inode_security_struct *isec = inode->i_security;
 	int rc;
-
 	ad.type = LSM_AUDIT_DATA_INODE;
 	ad.u.inode = inode;
 
@@ -3286,7 +3173,6 @@ static noinline int audit_inode_permission(struct inode *inode,
 			    audited, denied, result, &ad, flags);
 	if (rc)
 		return rc;
-#endif
 	return 0;
 }
 
@@ -3301,7 +3187,6 @@ static int selinux_inode_permission(struct inode *inode, int mask)
 	struct av_decision avd;
 	int rc, rc2;
 	u32 audited, denied;
-
 	from_access = mask & MAY_ACCESS;
 	mask &= (MAY_READ|MAY_WRITE|MAY_EXEC|MAY_APPEND);
 
@@ -3341,7 +3226,6 @@ static int selinux_inode_setattr(struct dentry *dentry, struct iattr *iattr)
 	struct inode *inode = d_backing_inode(dentry);
 	unsigned int ia_valid = iattr->ia_valid;
 	__u32 av = FILE__WRITE;
-
 	/* ATTR_FORCE is just used for ATTR_KILL_S[UG]ID. */
 	if (ia_valid & ATTR_FORCE) {
 		ia_valid &= ~(ATTR_KILL_SUID | ATTR_KILL_SGID | ATTR_MODE |
@@ -3519,14 +3403,12 @@ static void selinux_inode_post_setxattr(struct dentry *dentry, const char *name,
 static int selinux_inode_getxattr(struct dentry *dentry, const char *name)
 {
 	const struct cred *cred = current_cred();
-
 	return dentry_has_perm(cred, dentry, FILE__GETATTR);
 }
 
 static int selinux_inode_listxattr(struct dentry *dentry)
 {
 	const struct cred *cred = current_cred();
-
 	return dentry_has_perm(cred, dentry, FILE__GETATTR);
 }
 
@@ -3551,7 +3433,7 @@ static int selinux_inode_getsecurity(struct inode *inode, const char *name, void
 	int error;
 	char *context = NULL;
 	struct inode_security_struct *isec;
-
+ 
 	if (strcmp(name, XATTR_SELINUX_SUFFIX))
 		return -EOPNOTSUPP;
 
@@ -3684,7 +3566,6 @@ static int selinux_file_permission(struct file *file, int mask)
 	struct file_security_struct *fsec = file->f_security;
 	struct inode_security_struct *isec;
 	u32 sid = current_sid();
-
 	if (!mask)
 		/* No permission to check.  Existence test. */
 		return 0;
@@ -3756,7 +3637,6 @@ static int selinux_file_ioctl(struct file *file, unsigned int cmd,
 {
 	const struct cred *cred = current_cred();
 	int error = 0;
-
 	switch (cmd) {
 	case FIONREAD:
 	/* fall through */
@@ -3994,7 +3874,6 @@ static int selinux_file_fcntl(struct file *file, unsigned int cmd,
 static void selinux_file_set_fowner(struct file *file)
 {
 	struct file_security_struct *fsec;
-
 	fsec = file->f_security;
 	fsec->fown_sid = current_sid();
 }
@@ -4006,7 +3885,6 @@ static int selinux_file_send_sigiotask(struct task_struct *tsk,
 	u32 sid = task_sid(tsk);
 	u32 perm;
 	struct file_security_struct *fsec;
-
 	/* struct fown_struct is never outside the context of a struct file */
 	file = container_of(fown, struct file, f_owner);
 
@@ -4025,7 +3903,6 @@ static int selinux_file_send_sigiotask(struct task_struct *tsk,
 static int selinux_file_receive(struct file *file)
 {
 	const struct cred *cred = current_cred();
-
 	return file_has_perm(cred, file, file_to_av(file));
 }
 
@@ -4033,7 +3910,6 @@ static int selinux_file_open(struct file *file, const struct cred *cred)
 {
 	struct file_security_struct *fsec;
 	struct inode_security_struct *isec;
-
 	fsec = file->f_security;
 	isec = inode_security(file_inode(file));
 	/*
@@ -4073,7 +3949,6 @@ static int selinux_task_alloc(struct task_struct *task,
 static int selinux_cred_alloc_blank(struct cred *cred, gfp_t gfp)
 {
 	struct task_security_struct *tsec;
-
 	tsec = kzalloc(sizeof(struct task_security_struct), gfp);
 	if (!tsec)
 		return -ENOMEM;
@@ -4088,22 +3963,14 @@ static int selinux_cred_alloc_blank(struct cred *cred, gfp_t gfp)
 static void selinux_cred_free(struct cred *cred)
 {
 	struct task_security_struct *tsec = cred->security;
+
 	/*
 	 * cred->security == NULL if security_cred_alloc_blank() or
 	 * security_prepare_creds() returned an error.
 	 */
 	BUG_ON(cred->security && (unsigned long) cred->security < PAGE_SIZE);
-#ifdef CONFIG_RKP_KDP
-	if (rkp_ro_page((unsigned long)cred)) {
-		uh_call(UH_APP_RKP, RKP_KDP_X45, (u64) &cred->security, 7, 0, 0);
-	} else
-#endif
 	cred->security = (void *) 0x7UL;
-#ifdef CONFIG_RKP_KDP
-	rkp_free_security((unsigned long)tsec);
-#else
 	kfree(tsec);
-#endif
 }
 
 /*
@@ -4114,7 +3981,6 @@ static int selinux_cred_prepare(struct cred *new, const struct cred *old,
 {
 	const struct task_security_struct *old_tsec;
 	struct task_security_struct *tsec;
-
 	old_tsec = old->security;
 
 	tsec = kmemdup(old_tsec, sizeof(struct task_security_struct), gfp);
@@ -4175,7 +4041,6 @@ static int selinux_kernel_create_files_as(struct cred *new, struct inode *inode)
 	struct task_security_struct *tsec = new->security;
 	u32 sid = current_sid();
 	int ret;
-
 	ret = avc_has_perm(&selinux_state,
 			   sid, isec->sid,
 			   SECCLASS_KERNEL_SERVICE,
@@ -4315,7 +4180,6 @@ static int selinux_task_setrlimit(struct task_struct *p, unsigned int resource,
 		struct rlimit *new_rlim)
 {
 	struct rlimit *old_rlim = p->signal->rlim + resource;
-
 	/* Control the ability to change the hard limit (whether
 	   lowering or raising it), so that the hard limit can
 	   later be used as a safe reset point for the soft limit
@@ -4353,7 +4217,6 @@ static int selinux_task_kill(struct task_struct *p, struct siginfo *info,
 				int sig, u32 secid)
 {
 	u32 perm;
-
 	if (!sig)
 		perm = PROCESS__SIGNULL; /* null signal; existence test */
 	else
@@ -4369,7 +4232,7 @@ static void selinux_task_to_inode(struct task_struct *p,
 {
 	struct inode_security_struct *isec = inode->i_security;
 	u32 sid = task_sid(p);
-
+ 
 	spin_lock(&isec->lock);
 	isec->sclass = inode_mode_to_security_class(inode->i_mode);
 	isec->sid = sid;
@@ -4678,7 +4541,7 @@ static int selinux_socket_create(int family, int type,
 	u32 newsid;
 	u16 secclass;
 	int rc;
-
+ 
 	if (kern)
 		return 0;
 
@@ -4729,7 +4592,7 @@ static int selinux_socket_bind(struct socket *sock, struct sockaddr *address, in
 {
 	struct sock *sk = sock->sk;
 	u16 family;
-	int err;
+	int err; 
 
 	err = sock_has_perm(sk, SOCKET__BIND);
 	if (err)
@@ -4963,7 +4826,7 @@ static int selinux_socket_getsockopt(struct socket *sock, int level,
 }
 
 static int selinux_socket_shutdown(struct socket *sock, int how)
-{
+{ 
 	return sock_has_perm(sock->sk, SOCKET__SHUTDOWN);
 }
 
@@ -5157,7 +5020,6 @@ static int selinux_socket_getpeersec_stream(struct socket *sock, char __user *op
 	u32 scontext_len;
 	struct sk_security_struct *sksec = sock->sk->sk_security;
 	u32 peer_sid = SECSID_NULL;
-
 	if (sksec->sclass == SECCLASS_UNIX_STREAM_SOCKET ||
 	    sksec->sclass == SECCLASS_TCP_SOCKET)
 		peer_sid = sksec->peer_sid;
@@ -5189,7 +5051,6 @@ static int selinux_socket_getpeersec_dgram(struct socket *sock, struct sk_buff *
 	u32 peer_secid = SECSID_NULL;
 	u16 family;
 	struct inode_security_struct *isec;
-
 	if (skb && skb->protocol == htons(ETH_P_IP))
 		family = PF_INET;
 	else if (skb && skb->protocol == htons(ETH_P_IPV6))
@@ -5214,15 +5075,16 @@ out:
 
 static int selinux_sk_alloc_security(struct sock *sk, int family, gfp_t priority)
 {
-	struct sk_security_struct *sksec = sk->sk_security;
+	struct sk_security_struct *sksec; 
+	sksec = kzalloc(sizeof(*sksec), priority);
+	if (!sksec)
+		return -ENOMEM;
 
-#ifdef CONFIG_NETLABEL
-	memset(sksec, 0, offsetof(struct sk_security_struct, sid));
-#endif
 	sksec->peer_sid = SECINITSID_UNLABELED;
 	sksec->sid = SECINITSID_UNLABELED;
 	sksec->sclass = SECCLASS_SOCKET;
 	selinux_netlbl_sk_security_reset(sksec);
+	sk->sk_security = sksec;
 
 	return 0;
 }
@@ -5231,12 +5093,14 @@ static void selinux_sk_free_security(struct sock *sk)
 {
 	struct sk_security_struct *sksec = sk->sk_security;
 
+	sk->sk_security = NULL;
 	selinux_netlbl_sk_security_free(sksec);
+	kfree(sksec);
 }
 
 static void selinux_sk_clone_security(const struct sock *sk, struct sock *newsk)
 {
-	const struct sk_security_struct *sksec = sk->sk_security;
+	struct sk_security_struct *sksec = sk->sk_security;
 	struct sk_security_struct *newsksec = newsk->sk_security;
 
 	newsksec->sid = sksec->sid;
@@ -5248,6 +5112,7 @@ static void selinux_sk_clone_security(const struct sock *sk, struct sock *newsk)
 
 static void selinux_sk_getsecid(struct sock *sk, u32 *secid)
 {
+	
 	if (!sk)
 		*secid = SECINITSID_ANY_SOCKET;
 	else {
@@ -5262,7 +5127,6 @@ static void selinux_sock_graft(struct sock *sk, struct socket *parent)
 	struct inode_security_struct *isec =
 		inode_security_novalidate(SOCK_INODE(parent));
 	struct sk_security_struct *sksec = sk->sk_security;
-
 	if (sk->sk_family == PF_INET || sk->sk_family == PF_INET6 ||
 	    sk->sk_family == PF_UNIX)
 		isec->sid = sksec->sid;
@@ -5277,7 +5141,6 @@ static int selinux_inet_conn_request(struct sock *sk, struct sk_buff *skb,
 	u16 family = req->rsk_ops->family;
 	u32 connsid;
 	u32 peersid;
-
 	err = selinux_skb_peerlbl_sid(skb, family, &peersid);
 	if (err)
 		return err;
@@ -5351,7 +5214,6 @@ static void selinux_req_classify_flow(const struct request_sock *req,
 static int selinux_tun_dev_alloc_security(void **security)
 {
 	struct tun_security_struct *tunsec;
-
 	tunsec = kzalloc(sizeof(*tunsec), GFP_KERNEL);
 	if (!tunsec)
 		return -ENOMEM;
@@ -5369,7 +5231,6 @@ static void selinux_tun_dev_free_security(void *security)
 static int selinux_tun_dev_create(void)
 {
 	u32 sid = current_sid();
-
 	/* we aren't taking into account the "sockcreate" SID since the socket
 	 * that is being created here is not a socket in the traditional sense,
 	 * instead it is a private sock, accessible only to the kernel, and
@@ -5384,7 +5245,7 @@ static int selinux_tun_dev_create(void)
 
 static int selinux_tun_dev_attach_queue(void *security)
 {
-	struct tun_security_struct *tunsec = security;
+	struct tun_security_struct *tunsec = security; 
 
 	return avc_has_perm(&selinux_state,
 			    current_sid(), tunsec->sid, SECCLASS_TUN_SOCKET,
@@ -5395,7 +5256,7 @@ static int selinux_tun_dev_attach(struct sock *sk, void *security)
 {
 	struct tun_security_struct *tunsec = security;
 	struct sk_security_struct *sksec = sk->sk_security;
-
+ 
 	/* we don't currently perform any NetLabel based labeling here and it
 	 * isn't clear that we would want to do so anyway; while we could apply
 	 * labeling without the support of the TUN user the resulting labeled
@@ -5414,7 +5275,7 @@ static int selinux_tun_dev_open(void *security)
 	struct tun_security_struct *tunsec = security;
 	u32 sid = current_sid();
 	int err;
-
+ 
 	err = avc_has_perm(&selinux_state,
 			   sid, tunsec->sid, SECCLASS_TUN_SOCKET,
 			   TUN_SOCKET__RELABELFROM, NULL);
@@ -5466,7 +5327,7 @@ static int selinux_nlmsg_perm(struct sock *sk, struct sk_buff *skb)
 				sk->sk_protocol, nlh->nlmsg_type,
 				secclass_map[sclass - 1].name,
 				task_pid_nr(current), current->comm);
-			if (enforcing_enabled(&selinux_state) &&
+			if (enforcing_enabled(&selinux_state)&&
 			    !security_get_allow_unknown(&selinux_state))
 				return rc;
 			rc = 0;
@@ -5815,7 +5676,7 @@ static unsigned int selinux_ipv6_postroute(void *priv,
 #endif	/* CONFIG_NETFILTER */
 
 static int selinux_netlink_send(struct sock *sk, struct sk_buff *skb)
-{
+{ 
 	return selinux_nlmsg_perm(sk, skb);
 }
 
@@ -5881,12 +5742,12 @@ static int ipc_has_perm(struct kern_ipc_perm *ipc_perms,
 }
 
 static int selinux_msg_msg_alloc_security(struct msg_msg *msg)
-{
+{ 
 	return msg_msg_alloc_security(msg);
 }
 
 static void selinux_msg_msg_free_security(struct msg_msg *msg)
-{
+{ 
 	msg_msg_free_security(msg);
 }
 
@@ -5897,7 +5758,7 @@ static int selinux_msg_queue_alloc_security(struct msg_queue *msq)
 	struct common_audit_data ad;
 	u32 sid = current_sid();
 	int rc;
-
+ 
 	rc = ipc_alloc_security(&msq->q_perm, SECCLASS_MSGQ);
 	if (rc)
 		return rc;
@@ -5927,7 +5788,7 @@ static int selinux_msg_queue_associate(struct msg_queue *msq, int msqflg)
 	struct ipc_security_struct *isec;
 	struct common_audit_data ad;
 	u32 sid = current_sid();
-
+ 
 	isec = msq->q_perm.security;
 
 	ad.type = LSM_AUDIT_DATA_IPC;
@@ -5942,7 +5803,7 @@ static int selinux_msg_queue_msgctl(struct msg_queue *msq, int cmd)
 {
 	int err;
 	int perms;
-
+ 
 	switch (cmd) {
 	case IPC_INFO:
 	case MSG_INFO:
@@ -5975,7 +5836,7 @@ static int selinux_msg_queue_msgsnd(struct msg_queue *msq, struct msg_msg *msg, 
 	struct common_audit_data ad;
 	u32 sid = current_sid();
 	int rc;
-
+ 
 	isec = msq->q_perm.security;
 	msec = msg->security;
 
@@ -6023,7 +5884,7 @@ static int selinux_msg_queue_msgrcv(struct msg_queue *msq, struct msg_msg *msg,
 	struct common_audit_data ad;
 	u32 sid = task_sid(target);
 	int rc;
-
+ 
 	isec = msq->q_perm.security;
 	msec = msg->security;
 
@@ -6077,7 +5938,7 @@ static int selinux_shm_associate(struct shmid_kernel *shp, int shmflg)
 	struct ipc_security_struct *isec;
 	struct common_audit_data ad;
 	u32 sid = current_sid();
-
+ 
 	isec = shp->shm_perm.security;
 
 	ad.type = LSM_AUDIT_DATA_IPC;
@@ -6093,7 +5954,7 @@ static int selinux_shm_shmctl(struct shmid_kernel *shp, int cmd)
 {
 	int perms;
 	int err;
-
+ 
 	switch (cmd) {
 	case IPC_INFO:
 	case SHM_INFO:
@@ -6127,7 +5988,7 @@ static int selinux_shm_shmat(struct shmid_kernel *shp,
 			     char __user *shmaddr, int shmflg)
 {
 	u32 perms;
-
+ 
 	if (shmflg & SHM_RDONLY)
 		perms = SHM__READ;
 	else
@@ -6143,7 +6004,7 @@ static int selinux_sem_alloc_security(struct sem_array *sma)
 	struct common_audit_data ad;
 	u32 sid = current_sid();
 	int rc;
-
+ 
 	rc = ipc_alloc_security(&sma->sem_perm, SECCLASS_SEM);
 	if (rc)
 		return rc;
@@ -6164,7 +6025,7 @@ static int selinux_sem_alloc_security(struct sem_array *sma)
 }
 
 static void selinux_sem_free_security(struct sem_array *sma)
-{
+{ 
 	ipc_free_security(&sma->sem_perm);
 }
 
@@ -6173,7 +6034,7 @@ static int selinux_sem_associate(struct sem_array *sma, int semflg)
 	struct ipc_security_struct *isec;
 	struct common_audit_data ad;
 	u32 sid = current_sid();
-
+ 
 	isec = sma->sem_perm.security;
 
 	ad.type = LSM_AUDIT_DATA_IPC;
@@ -6189,7 +6050,7 @@ static int selinux_sem_semctl(struct sem_array *sma, int cmd)
 {
 	int err;
 	u32 perms;
-
+ 
 	switch (cmd) {
 	case IPC_INFO:
 	case SEM_INFO:
@@ -6232,7 +6093,7 @@ static int selinux_sem_semop(struct sem_array *sma,
 			     struct sembuf *sops, unsigned nsops, int alter)
 {
 	u32 perms;
-
+ 
 	if (alter)
 		perms = SEM__READ | SEM__WRITE;
 	else
@@ -6244,7 +6105,7 @@ static int selinux_sem_semop(struct sem_array *sma,
 static int selinux_ipc_permission(struct kern_ipc_perm *ipcp, short flag)
 {
 	u32 av = 0;
-
+ 
 	av = 0;
 	if (flag & S_IRUGO)
 		av |= IPC__UNIX_READ;
@@ -6259,12 +6120,12 @@ static int selinux_ipc_permission(struct kern_ipc_perm *ipcp, short flag)
 
 static void selinux_ipc_getsecid(struct kern_ipc_perm *ipcp, u32 *secid)
 {
-	struct ipc_security_struct *isec = ipcp->security;
+	struct ipc_security_struct *isec = ipcp->security; 
 	*secid = isec->sid;
 }
 
 static void selinux_d_instantiate(struct dentry *dentry, struct inode *inode)
-{
+{ 
 	if (inode)
 		inode_doinit_with_dentry(inode, dentry);
 }
@@ -6276,6 +6137,7 @@ static int selinux_getprocattr(struct task_struct *p,
 	u32 sid;
 	int error;
 	unsigned len;
+ 
 
 	rcu_read_lock();
 	__tsec = __task_cred(p)->security;
@@ -6326,7 +6188,7 @@ static int selinux_setprocattr(const char *name, void *value, size_t size)
 	u32 mysid = current_sid(), sid = 0, ptsid;
 	int error;
 	char *str = value;
-
+ 
 	/*
 	 * Basic control over ability to set these attributes at all.
 	 */
@@ -6465,13 +6327,13 @@ static int selinux_ismaclabel(const char *name)
 }
 
 static int selinux_secid_to_secctx(u32 secid, char **secdata, u32 *seclen)
-{
+{ 
 	return security_sid_to_context(&selinux_state, secid,
 				       secdata, seclen);
 }
 
 static int selinux_secctx_to_secid(const char *secdata, u32 seclen, u32 *secid)
-{
+{ 
 	return security_context_to_sid(&selinux_state, secdata, seclen,
 				       secid, GFP_KERNEL);
 }
@@ -6484,7 +6346,7 @@ static void selinux_release_secctx(char *secdata, u32 seclen)
 static void selinux_inode_invalidate_secctx(struct inode *inode)
 {
 	struct inode_security_struct *isec = inode->i_security;
-
+ 
 	spin_lock(&isec->lock);
 	isec->initialized = LABEL_INVALID;
 	spin_unlock(&isec->lock);
@@ -6494,7 +6356,7 @@ static void selinux_inode_invalidate_secctx(struct inode *inode)
  *	called with inode->i_mutex locked
  */
 static int selinux_inode_notifysecctx(struct inode *inode, void *ctx, u32 ctxlen)
-{
+{ 
 	int rc = selinux_inode_setsecurity(inode, XATTR_SELINUX_SUFFIX,
 					   ctx, ctxlen, 0);
 	/* Do not return error when suppressing label (SBLABEL_MNT not set). */
@@ -6505,13 +6367,13 @@ static int selinux_inode_notifysecctx(struct inode *inode, void *ctx, u32 ctxlen
  *	called with inode->i_mutex locked
  */
 static int selinux_inode_setsecctx(struct dentry *dentry, void *ctx, u32 ctxlen)
-{
+{ 
 	return __vfs_setxattr_noperm(dentry, XATTR_NAME_SELINUX, ctx, ctxlen, 0);
 }
 
 static int selinux_inode_getsecctx(struct inode *inode, void **ctx, u32 *ctxlen)
 {
-	int len = 0;
+	int len = 0; 
 	len = selinux_inode_getsecurity(inode, XATTR_SELINUX_SUFFIX,
 						ctx, true);
 	if (len < 0)
@@ -6526,7 +6388,7 @@ static int selinux_key_alloc(struct key *k, const struct cred *cred,
 {
 	const struct task_security_struct *tsec;
 	struct key_security_struct *ksec;
-
+ 
 	ksec = kzalloc(sizeof(struct key_security_struct), GFP_KERNEL);
 	if (!ksec)
 		return -ENOMEM;
@@ -6544,7 +6406,7 @@ static int selinux_key_alloc(struct key *k, const struct cred *cred,
 static void selinux_key_free(struct key *k)
 {
 	struct key_security_struct *ksec = k->security;
-
+ 
 	k->security = NULL;
 	kfree(ksec);
 }
@@ -6556,7 +6418,7 @@ static int selinux_key_permission(key_ref_t key_ref,
 	struct key *key;
 	struct key_security_struct *ksec;
 	u32 sid;
-
+ 
 	/* if no specific permissions are requested, we skip the
 	   permission check. No serious, additional covert channels
 	   appear to be created. */
@@ -6578,7 +6440,7 @@ static int selinux_key_getsecurity(struct key *key, char **_buffer)
 	char *context = NULL;
 	unsigned len;
 	int rc;
-
+ 
 	rc = security_sid_to_context(&selinux_state, ksec->sid,
 				     &context, &len);
 	if (!rc)
@@ -6794,6 +6656,7 @@ static void selinux_bpf_prog_free(struct bpf_prog_aux *aux)
 }
 #endif
 
+
 #ifdef CONFIG_PERF_EVENTS
 static int selinux_perf_event_open(struct perf_event_attr *attr, int type)
 {
@@ -6855,8 +6718,7 @@ static int selinux_perf_event_write(struct perf_event *event)
 }
 #endif
 
-// CONFIG_RKP_KDP
-static struct security_hook_list selinux_hooks[] __lsm_ro_after_init_kdp = {
+static struct security_hook_list selinux_hooks[] __lsm_ro_after_init = {
 	LSM_HOOK_INIT(binder_set_context_mgr, selinux_binder_set_context_mgr),
 	LSM_HOOK_INIT(binder_transaction, selinux_binder_transaction),
 	LSM_HOOK_INIT(binder_transfer_binder, selinux_binder_transfer_binder),
@@ -7268,7 +7130,7 @@ static void selinux_nf_ip_exit(void)
 static int selinux_disabled;
 int selinux_disable(struct selinux_state *state)
 {
-	if (ss_initialized) {// SEC_SELINUX_PORTING_COMMON Change to use RKP
+	if (state->initialized) {
 		/* Not permitted after initial policy load. */
 		return -EINVAL;
 	}
