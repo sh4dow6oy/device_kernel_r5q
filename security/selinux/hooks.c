@@ -4518,7 +4518,7 @@ static int socket_sockcreate_sid(const struct task_security_struct *tsec,
 
 static int sock_has_perm(struct sock *sk, u32 perms)
 {
-	struct sk_security_struct *sksec = sk->sk_security;
+	 *sksec = sk->sk_security;
 	struct common_audit_data ad;
 	struct lsm_network_audit net = {0,};
 
@@ -4559,7 +4559,7 @@ static int selinux_socket_post_create(struct socket *sock, int family,
 {
 	const struct task_security_struct *tsec = current_security();
 	struct inode_security_struct *isec = inode_security_novalidate(SOCK_INODE(sock));
-	struct sk_security_struct *sksec;
+	 *sksec;
 	u16 sclass = socket_type_to_security_class(family, type, protocol);
 	u32 sid = SECINITSID_KERNEL;
 	int err = 0;
@@ -4606,7 +4606,7 @@ static int selinux_socket_bind(struct socket *sock, struct sockaddr *address, in
 	family = sk->sk_family;
 	if (family == PF_INET || family == PF_INET6) {
 		char *addrp;
-		struct sk_security_struct *sksec = sk->sk_security;
+		 *sksec = sk->sk_security;
 		struct common_audit_data ad;
 		struct lsm_network_audit net = {0,};
 		struct sockaddr_in *addr4 = NULL;
@@ -4701,7 +4701,7 @@ out:
 static int selinux_socket_connect(struct socket *sock, struct sockaddr *address, int addrlen)
 {
 	struct sock *sk = sock->sk;
-	struct sk_security_struct *sksec = sk->sk_security;
+	 *sksec = sk->sk_security;
 	int err;
 
 	err = sock_has_perm(sk, SOCKET__CONNECT);
@@ -4834,9 +4834,9 @@ static int selinux_socket_unix_stream_connect(struct sock *sock,
 					      struct sock *other,
 					      struct sock *newsk)
 {
-	struct sk_security_struct *sksec_sock = sock->sk_security;
-	struct sk_security_struct *sksec_other = other->sk_security;
-	struct sk_security_struct *sksec_new = newsk->sk_security;
+	 *sksec_sock = sock->sk_security;
+	 *sksec_other = other->sk_security;
+	 *sksec_new = newsk->sk_security;
 	struct common_audit_data ad;
 	struct lsm_network_audit net = {0,};
 	int err;
@@ -4868,8 +4868,8 @@ static int selinux_socket_unix_stream_connect(struct sock *sock,
 static int selinux_socket_unix_may_send(struct socket *sock,
 					struct socket *other)
 {
-	struct sk_security_struct *ssec = sock->sk->sk_security;
-	struct sk_security_struct *osec = other->sk->sk_security;
+	 *ssec = sock->sk->sk_security;
+	 *osec = other->sk->sk_security;
 	struct common_audit_data ad;
 	struct lsm_network_audit net = {0,};
 
@@ -4911,7 +4911,7 @@ static int selinux_sock_rcv_skb_compat(struct sock *sk, struct sk_buff *skb,
 				       u16 family)
 {
 	int err = 0;
-	struct sk_security_struct *sksec = sk->sk_security;
+	 *sksec = sk->sk_security;
 	u32 sk_sid = sksec->sid;
 	struct common_audit_data ad;
 	struct lsm_network_audit net = {0,};
@@ -4944,7 +4944,7 @@ static int selinux_sock_rcv_skb_compat(struct sock *sk, struct sk_buff *skb,
 static int selinux_socket_sock_rcv_skb(struct sock *sk, struct sk_buff *skb)
 {
 	int err;
-	struct sk_security_struct *sksec = sk->sk_security;
+	 *sksec = sk->sk_security;
 	u16 family = sk->sk_family;
 	u32 sk_sid = sksec->sid;
 	struct common_audit_data ad;
@@ -5018,7 +5018,7 @@ static int selinux_socket_getpeersec_stream(struct socket *sock, char __user *op
 	int err = 0;
 	char *scontext;
 	u32 scontext_len;
-	struct sk_security_struct *sksec = sock->sk->sk_security;
+	 *sksec = sock->sk->sk_security;
 	u32 peer_sid = SECSID_NULL;
 	if (sksec->sclass == SECCLASS_UNIX_STREAM_SOCKET ||
 	    sksec->sclass == SECCLASS_TCP_SOCKET)
@@ -5075,7 +5075,7 @@ out:
 
 static int selinux_sk_alloc_security(struct sock *sk, int family, gfp_t priority)
 {
-	struct sk_security_struct *sksec; 
+	 *sksec; 
 	sksec = kzalloc(sizeof(*sksec), priority);
 	if (!sksec)
 		return -ENOMEM;
@@ -5084,7 +5084,6 @@ static int selinux_sk_alloc_security(struct sock *sk, int family, gfp_t priority
 	sksec->sid = SECINITSID_UNLABELED;
 	sksec->sclass = SECCLASS_SOCKET;
 	selinux_netlbl_sk_security_reset(sksec);
-	sk->sk_security = sksec;
 
 	return 0;
 }
@@ -5093,14 +5092,12 @@ static void selinux_sk_free_security(struct sock *sk)
 {
 	struct sk_security_struct *sksec = sk->sk_security;
 
-	sk->sk_security = NULL;
 	selinux_netlbl_sk_security_free(sksec);
-	kfree(sksec);
 }
 
 static void selinux_sk_clone_security(const struct sock *sk, struct sock *newsk)
 {
-	struct sk_security_struct *sksec = sk->sk_security;
+	const struct sk_security_struct *sksec = sk->sk_security;
 	struct sk_security_struct *newsksec = newsk->sk_security;
 
 	newsksec->sid = sksec->sid;
