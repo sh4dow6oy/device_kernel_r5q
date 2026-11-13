@@ -362,7 +362,7 @@ char *put_dec(char *buf, unsigned long long n)
  *
  * If speed is not important, use snprintf(). It's easy to read the code.
  */
-int num_to_str(char *buf, int size, unsigned long long num, unsigned int width)
+int num_to_str(char *buf, int size, unsigned long long num)
 {
 	/* put_dec requires 2-byte alignment of the buffer. */
 	char tmp[sizeof(num) * 3] __aligned(2);
@@ -376,21 +376,11 @@ int num_to_str(char *buf, int size, unsigned long long num, unsigned int width)
 		len = put_dec(tmp, num) - tmp;
 	}
 
-	if (len > size || width > size)
+	if (len > size)
 		return 0;
-
-	if (width > len) {
-		width = width - len;
-		for (idx = 0; idx < width; idx++)
-			buf[idx] = ' ';
-	} else {
-		width = 0;
-	}
-
 	for (idx = 0; idx < len; ++idx)
-		buf[idx + width] = tmp[len - idx - 1];
-
-	return len + width;
+		buf[idx] = tmp[len - idx - 1];
+	return len;
 }
 
 #define SIGN	1		/* unsigned/signed, must be 1 */
@@ -1468,6 +1458,8 @@ char *uuid_string(char *buf, char *end, const u8 *addr,
 	return string(buf, end, uuid, spec);
 }
 
+int kptr_restrict __read_mostly=4;
+
 static noinline_for_stack
 char *restricted_pointer(char *buf, char *end, const void *ptr,
 			 struct printf_spec spec)
@@ -1762,8 +1754,6 @@ char *device_node_string(char *buf, char *end, struct device_node *dn,
 
 	return widen_string(buf, buf - buf_start, end, spec);
 }
-
-int kptr_restrict __read_mostly = 4;
 
 /*
  * Show a '%p' thing.  A kernel extension is that the '%p' is followed
