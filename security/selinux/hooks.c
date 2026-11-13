@@ -5084,29 +5084,24 @@ static int selinux_sk_alloc_security(struct sock *sk, int family, gfp_t priority
 	sksec->sid = SECINITSID_UNLABELED;
 	sksec->sclass = SECCLASS_SOCKET;
 	selinux_netlbl_sk_security_reset(sksec);
-	
-	/* Copiem structura în array-ul alocat static din struct sock */
-	memcpy(&sk->sk_security[0], sksec, sizeof(struct sk_security_struct));
-	kfree(sksec); /* Eliberăm sksec temporar, deoarece datele au fost copiate */
+	sk->sk_security = sksec;
 
 	return 0;
 }
 
 static void selinux_sk_free_security(struct sock *sk)
 {
-	/* Luăm adresa primului element din array */
-	struct sk_security_struct *sksec = &sk->sk_security[0];
+	struct sk_security_struct *sksec = sk->sk_security;
 
+	sk->sk_security = NULL;
 	selinux_netlbl_sk_security_free(sksec);
-	/* Setăm conținutul la zero în loc să atribuim NULL pe un array */
-	memset(&sk->sk_security[0], 0, sizeof(struct sk_security_struct));
+	kfree(sksec);
 }
 
 static void selinux_sk_clone_security(const struct sock *sk, struct sock *newsk)
 {
-	/* Accesăm elementele din array folosind &...[0] */
-	const struct sk_security_struct *sksec = &sk->sk_security[0];
-	struct sk_security_struct *newsksec = &newsk->sk_security[0];
+	struct sk_security_struct *sksec = sk->sk_security;
+	struct sk_security_struct *newsksec = newsk->sk_security;
 
 	newsksec->sid = sksec->sid;
 	newsksec->peer_sid = sksec->peer_sid;
