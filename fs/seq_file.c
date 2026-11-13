@@ -710,6 +710,28 @@ void seq_put_decimal_ull_width(struct seq_file *m, const char *delimiter,
 		goto overflow;
 
 	if (num < 10) {
+		m->buf[m->count++] = num + '0';void seq_put_decimal_ull_width(struct seq_file *m, const char *delimiter,
+			 unsigned long long num, unsigned int width)
+{
+	int len;
+
+	if (m->count + 2 >= m->size) /* we'll write 2 bytes at least */
+		goto overflow;
+
+	len = strlen(delimiter);
+	if (m->count + len >= m->size)
+		goto overflow;
+
+	memcpy(m->buf + m->count, delimiter, len);
+	m->count += len;
+
+	if (!width)
+		width = 1;
+
+	if (m->count + width >= m->size)
+		goto overflow;
+
+	if (num < 10) {
 		m->buf[m->count++] = num + '0';
 		return;
 	}
@@ -725,6 +747,13 @@ overflow:
 	seq_set_overflow(m);
 }
 EXPORT_SYMBOL(seq_put_decimal_ull_width);
+
+void seq_put_decimal_ull(struct seq_file *m, const char *delimiter,
+			 unsigned long long num)
+{
+	return seq_put_decimal_ull_width(m, delimiter, num, 0);
+}
+EXPORT_SYMBOL(seq_put_decimal_ull);
 /**
  * seq_put_hex_ll - put a number in hexadecimal notation
  * @m: seq_file identifying the buffer to which data should be written
