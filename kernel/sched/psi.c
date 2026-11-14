@@ -938,6 +938,21 @@ void psi_task_switch(struct task_struct *prev, struct task_struct *next,
 	}
 }
 
+void psi_memstall_tick(struct task_struct *task, int cpu)
+{
+	struct psi_group *group;
+	void *iter = NULL;
+
+	while ((group = iterate_groups(task, &iter))) {
+		struct psi_group_cpu *groupc;
+
+		groupc = per_cpu_ptr(group->pcpu, cpu);
+		write_seqcount_begin(&groupc->seq);
+		record_times(groupc, cpu, true);
+		write_seqcount_end(&groupc->seq);
+	}
+}
+
 /**
  * psi_memstall_enter - mark the beginning of a memory stall section
  * @flags: flags to handle nested sections
