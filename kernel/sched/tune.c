@@ -57,9 +57,8 @@ struct schedtune {
 	 * towards idle CPUs */
 	int prefer_idle;
 
-	/* Hint to bias scheduling of tasks on that SchedTune CGroup
-	 * towards higher capacity CPUs */
-	bool prefer_high_cap;
+	/* When sched_boost applied, perfer_perf task bias to prime cluster */
+	int prefer_prime;
 };
 
 static inline struct schedtune *css_st(struct cgroup_subsys_state *css)
@@ -86,8 +85,9 @@ static inline struct schedtune *parent_st(struct schedtune *st)
  * By default, system-wide boosting is disabled, i.e. no boosting is applied
  * to tasks which are not into a child control group.
  */
-static struct schedtune root_schedtune = {
-	.boost = 0,
+static struct schedtune
+root_schedtune = {
+	.boost	= 0,
 #ifdef CONFIG_SCHED_WALT
 	.sched_boost_no_override = false,
 	.sched_boost_enabled = true,
@@ -95,7 +95,7 @@ static struct schedtune root_schedtune = {
 	.colocate_update_disabled = false,
 #endif
 	.prefer_idle = 0,
-	.prefer_high_cap = false,
+	.prefer_prime = 0,
 };
 
 /*
@@ -109,7 +109,7 @@ static struct schedtune root_schedtune = {
  *    implementation especially for the computation of the per-CPU boost
  *    value
  */
-#define BOOSTGROUPS_COUNT 9
+#define BOOSTGROUPS_COUNT 8
 
 /* Array of configured boostgroups */
 static struct schedtune *allocated_group[BOOSTGROUPS_COUNT] = {
@@ -183,9 +183,18 @@ void restore_cgroup_boost_settings(void)
 
 bool task_sched_boost(struct task_struct *p)
 {
-	struct schedtune *st = task_schedtune(p);
+	struct schedtune *st;
+	bool enabled;
 
-	return st->sched_boost_enabled;
+	if (unlikely(!schedtune_initialized))
+		return false;
+
+	rcu_read_lock();
+	st = task_schedtune(p);
+	enabled = st->sched_boost_enabled;
+	rcu_read_unlock();
+
+	return enabled;
 }
 
 static u64
@@ -582,6 +591,26 @@ int schedtune_prefer_idle(struct task_struct *p)
 	return prefer_idle;
 }
 
+bool schedtune_prefer_prime(struct task_struct *p)
+{
+	struct schedtune *st;
+	int prefer_prime;
+
+	if (unlikely(!schedtune_initialized))
+		return 0;
+
+	/* Get prefer_prime value */
+	rcu_read_lock();
+	st = task_schedtune(p);
+	prefer_prime = st->prefer_prime;
+	rcu_read_unlock();
+
+	if(prefer_prime)
+		return sched_boost_policy() != SCHED_BOOST_NONE;
+
+	return false;
+}
+
 static u64
 prefer_idle_read(struct cgroup_subsys_state *css, struct cftype *cft)
 {
@@ -596,6 +625,24 @@ prefer_idle_write(struct cgroup_subsys_state *css, struct cftype *cft,
 {
 	struct schedtune *st = css_st(css);
 	st->prefer_idle = !!prefer_idle;
+
+	return 0;
+}
+
+static u64
+prefer_prime_read(struct cgroup_subsys_state *css, struct cftype *cft)
+{
+	struct schedtune *st = css_st(css);
+
+	return st->prefer_prime;
+}
+
+static int
+prefer_prime_write(struct cgroup_subsys_state *css, struct cftype *cft,
+	    u64 prefer_prime)
+{
+	struct schedtune *st = css_st(css);
+	st->prefer_prime = prefer_prime;
 
 	return 0;
 }
@@ -648,40 +695,6 @@ boost_write(struct cgroup_subsys_state *css, struct cftype *cft,
 	return 0;
 }
 
-int schedtune_prefer_high_cap(struct task_struct *p)
-{
-	struct schedtune *st;
-	int prefer_high_cap;
-
-	if (unlikely(!schedtune_initialized))
-		return 0;
-
-	/* Get prefer_high_cap value */
-	rcu_read_lock();
-	st = task_schedtune(p);
-	prefer_high_cap = st->prefer_high_cap;
-	rcu_read_unlock();
-
-	return prefer_high_cap;
-}
-
-static u64 prefer_high_cap_read(struct cgroup_subsys_state *css,
-				struct cftype *cft)
-{
-	struct schedtune *st = css_st(css);
-
-	return st->prefer_high_cap;
-}
-
-static int prefer_high_cap_write(struct cgroup_subsys_state *css,
-				 struct cftype *cft, u64 prefer_high_cap)
-{
-	struct schedtune *st = css_st(css);
-	st->prefer_high_cap = !!prefer_high_cap;
-
-	return 0;
-}
-
 static struct cftype files[] = {
 #ifdef CONFIG_SCHED_WALT
 	{
@@ -706,11 +719,11 @@ static struct cftype files[] = {
 		.write_u64 = prefer_idle_write,
 	},
 	{
-		.name = "prefer_high_cap",
-		.read_u64 = prefer_high_cap_read,
-		.write_u64 = prefer_high_cap_write,
+		.name = "prefer_prime",
+		.read_u64 = prefer_prime_read,
+		.write_u64 = prefer_prime_write,
 	},
-	{} /* terminate */
+	{ }	/* terminate */
 };
 
 static int
