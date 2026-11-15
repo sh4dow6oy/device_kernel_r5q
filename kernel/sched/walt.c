@@ -31,7 +31,9 @@
 
 #include <trace/events/sched.h>
 
+#ifdef CONFIG_SEC_DEBUG
 #include <linux/sec_debug.h>
+#endif
 
 const char *task_event_names[] = {"PUT_PREV_TASK", "PICK_NEXT_TASK",
 				  "TASK_WAKE", "TASK_MIGRATE", "TASK_UPDATE",
@@ -435,10 +437,10 @@ void clear_walt_request(int cpu)
 
 		raw_spin_lock_irqsave(&rq->lock, flags);
 		if (rq->push_task) {
+			clear_reserved(rq->push_cpu);
 			push_task = rq->push_task;
 			rq->push_task = NULL;
 		}
-		clear_reserved(rq->push_cpu);
 		rq->active_balance = 0;
 		raw_spin_unlock_irqrestore(&rq->lock, flags);
 		if (push_task)
@@ -2033,6 +2035,11 @@ void init_new_task_load(struct task_struct *p)
 	memset(&p->ravg, 0, sizeof(struct ravg));
 	p->cpu_cycles = 0;
 
+	p->ravg.curr_window_cpu = kcalloc(nr_cpu_ids, sizeof(u32),
+					  GFP_KERNEL | __GFP_NOFAIL);
+	p->ravg.prev_window_cpu = kcalloc(nr_cpu_ids, sizeof(u32),
+					  GFP_KERNEL | __GFP_NOFAIL);
+
 	if (init_load_pct) {
 		init_load_windows = div64_u64((u64)init_load_pct *
 			  (u64)sched_ravg_window, 100);
@@ -2069,26 +2076,26 @@ void free_task_load_ptrs(struct task_struct *p)
 
 void reset_task_stats(struct task_struct *p)
 {
-	u32 sum;
-	u32 curr_window_saved[CONFIG_NR_CPUS];
-	u32 prev_window_saved[CONFIG_NR_CPUS];
+	u32 sum = 0;
+	u32 *curr_window_ptr = NULL;
+	u32 *prev_window_ptr = NULL;
 
 	if (exiting_task(p)) {
 		sum = EXITING_TASK_MARKER;
-
-		memset(&p->ravg, 0, sizeof(struct ravg));
-
-		/* Retain EXITING_TASK marker */
-		p->ravg.sum_history[0] = sum;
 	} else {
-		memcpy(curr_window_saved, p->ravg.curr_window_cpu, sizeof(curr_window_saved));
-		memcpy(prev_window_saved, p->ravg.prev_window_cpu, sizeof(prev_window_saved));
-
-		memset(&p->ravg, 0, sizeof(struct ravg));
-
-		memcpy(p->ravg.curr_window_cpu, curr_window_saved, sizeof(curr_window_saved));
-		memcpy(p->ravg.prev_window_cpu, prev_window_saved, sizeof(prev_window_saved));
+		curr_window_ptr =  p->ravg.curr_window_cpu;
+		prev_window_ptr = p->ravg.prev_window_cpu;
+		memset(curr_window_ptr, 0, sizeof(u32) * nr_cpu_ids);
+		memset(prev_window_ptr, 0, sizeof(u32) * nr_cpu_ids);
 	}
+
+	memset(&p->ravg, 0, sizeof(struct ravg));
+
+	p->ravg.curr_window_cpu = curr_window_ptr;
+	p->ravg.prev_window_cpu = prev_window_ptr;
+
+	/* Retain EXITING_TASK marker */
+	p->ravg.sum_history[0] = sum;
 }
 
 void mark_task_starting(struct task_struct *p)
