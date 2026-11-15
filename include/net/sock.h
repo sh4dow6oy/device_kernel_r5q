@@ -1154,9 +1154,7 @@ struct proto {
 	void			(*unhash)(struct sock *sk);
 	void			(*rehash)(struct sock *sk);
 	int			(*get_port)(struct sock *sk, unsigned short snum);
-#ifdef CONFIG_MPTCP
-	void			(*clear_sk)(struct sock *sk, int size);
-#endif
+
 	/* Keeping track of sockets in use */
 #ifdef CONFIG_PROC_FS
 	unsigned int		inuse_idx;
@@ -2506,59 +2504,6 @@ skb_sk_is_prefetched(struct sk_buff *skb)
 static inline bool sk_fullsock(const struct sock *sk)
 {
 	return (1 << sk->sk_state) & ~(TCPF_TIME_WAIT | TCPF_NEW_SYN_RECV);
-}
-
-static inline bool
-sk_is_refcounted(struct sock *sk)
-{
-	/* Only full sockets have sk->sk_flags. */
-	return !sk_fullsock(sk) || !sock_flag(sk, SOCK_RCU_FREE);
-}
-
-/**
- * skb_steal_sock
- * @skb to steal the socket from
- * @refcounted is set to true if the socket is reference-counted
- */
-static inline struct sock *
-skb_steal_sock(struct sk_buff *skb, bool *refcounted)
-{
-	if (skb->sk) {
-		struct sock *sk = skb->sk;
-
-		*refcounted = true;
-		if (skb_sk_is_prefetched(skb))
-			*refcounted = sk_is_refcounted(sk);
-		skb->destructor = NULL;
-		skb->sk = NULL;
-		return sk;
-	}
-	*refcounted = false;
-	return NULL;
-}
-
-/* Checks if this SKB belongs to an HW offloaded socket
- * and whether any SW fallbacks are required based on dev.
- * Check decrypted mark in case skb_orphan() cleared socket.
- */
-static inline struct sk_buff *sk_validate_xmit_skb(struct sk_buff *skb,
-						   struct net_device *dev)
-{
-#ifdef CONFIG_SOCK_VALIDATE_XMIT
-	struct sock *sk = skb->sk;
-
-	if (sk && sk_fullsock(sk) && sk->sk_validate_xmit_skb) {
-		skb = sk->sk_validate_xmit_skb(sk, dev, skb);
-#ifdef CONFIG_TLS_DEVICE
-	} else if (unlikely(skb->decrypted)) {
-		pr_warn_ratelimited("unencrypted skb with no associated socket - dropping\n");
-		kfree_skb(skb);
-		skb = NULL;
-#endif
-	}
-#endif
-
-	return skb;
 }
 
 static inline bool
