@@ -5,6 +5,7 @@ ccflags-$(CONFIG_DRM_MSM_DSI) += -I $(srctree)/drivers/gpu/drm/msm/dsi
 ccflags-$(CONFIG_DRM_MSM_DSI_PLL) += -I $(srctree)/drivers/gpu/drm/msm/dsi
 ccflags-y += -I $(srctree)/drivers/gpu/drm/msm/sde
 ccflags-y += -I $(srctree)/drivers/media/platform/msm/sde/rotator
+ccflags-$(CONFIG_DISPLAY_SAMSUNG) += -I $(srctree)/drivers/gpu/drm/msm/samsung
 ccflags-y += -I $(srctree)/drivers/gpu/drm/msm/hdmi
 ccflags-$(CONFIG_DRM_SDE_SHD) += -I $(srctree)/drivers/gpu/drm/msm/shd
 ccflags-$(CONFIG_DRM_SDE_SHP) += -I $(srctree)/drivers/gpu/drm/msm/shp
