@@ -40,10 +40,6 @@
 #include <asm/paravirt.h>
 #endif
 
-#ifdef CONFIG_SEC_DEBUG_SUMMARY
-#include <linux/sec_debug.h>
-#endif
-
 #include "sched.h"
 #include "walt.h"
 #include "../workqueue_internal.h"
@@ -53,15 +49,6 @@
 #include <trace/events/sched.h>
 
 DEFINE_PER_CPU_SHARED_ALIGNED(struct rq, runqueues);
-
-#ifdef CONFIG_SEC_DEBUG_SCHED_LOG
-void summary_set_lpm_info_runqueues(struct sec_debug_summary_data_apss *apss)
-{
-	pr_info("%s : 0x%llx\n", __func__, virt_to_phys((void *)&runqueues));
-	apss->aplpm.p_runqueues = virt_to_phys((void *)&runqueues);
-	apss->aplpm.cstate_offset = offsetof(struct rq, cstate);
-}
-#endif
 
 /*
  * Debugging: various feature bits
@@ -1347,17 +1334,16 @@ unlock:
 /*
  * Cross migrate two tasks
  */
-int migrate_swap(struct task_struct *cur, struct task_struct *p,
-		int target_cpu, int curr_cpu)
+int migrate_swap(struct task_struct *cur, struct task_struct *p)
 {
 	struct migration_swap_arg arg;
 	int ret = -EINVAL;
 
 	arg = (struct migration_swap_arg){
 		.src_task = cur,
-		.src_cpu = curr_cpu,
+		.src_cpu = task_cpu(cur),
 		.dst_task = p,
-		.dst_cpu = target_cpu,
+		.dst_cpu = task_cpu(p),
 	};
 
 	if (arg.src_cpu == arg.dst_cpu)
@@ -1382,6 +1368,7 @@ int migrate_swap(struct task_struct *cur, struct task_struct *p,
 out:
 	return ret;
 }
+
 /*
  * wait_task_inactive - wait for a thread to unschedule.
  *
@@ -3597,9 +3584,6 @@ static void __sched notrace __schedule(bool preempt)
 		trace_sched_switch(preempt, prev, next);
 
 		/* Also unlocks the rq: */
-#ifdef CONFIG_SEC_DEBUG_SCHED_LOG
-		sec_debug_task_sched_log(cpu, preempt, next, prev);
-#endif
 		rq = context_switch(rq, prev, next, &rf);
 	} else {
 		update_task_ravg(prev, rq, TASK_UPDATE, wallclock, 0);
