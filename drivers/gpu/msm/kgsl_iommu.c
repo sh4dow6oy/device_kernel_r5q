@@ -847,10 +847,6 @@ static int kgsl_iommu_fault_handler(struct iommu_domain *domain,
 	adreno_dev = ADRENO_DEVICE(device);
 	gpudev = ADRENO_GPU_DEVICE(adreno_dev);
 
-	adreno_dev->pf_info.addr = addr;
-	adreno_dev->pf_info.jiff = jiffies;
-	adreno_dev->pf_info.count++;
-
 	write = (flags & IOMMU_FAULT_WRITE) ? 1 : 0;
 	if (flags & IOMMU_FAULT_TRANSLATION)
 		fault_type = "translation";
@@ -890,33 +886,6 @@ static int kgsl_iommu_fault_handler(struct iommu_domain *domain,
 	}
 
 	contextidr = KGSL_IOMMU_GET_CTX_REG(ctx, CONTEXTIDR);
-	adreno_dev->pf_info.ttbr = ptbase;
-	{
-		unsigned int sctlr, actlr, ttbcr, mair0, mair1, fsr;
-		unsigned int fsynr0, fsynr1, tlbstatus;
-		uint64_t far, ipafar;
-
-		sctlr = KGSL_IOMMU_GET_CTX_REG(ctx, SCTLR);
-		actlr = KGSL_IOMMU_GET_CTX_REG(ctx, ACTLR);
-		ttbcr = KGSL_IOMMU_GET_CTX_REG(ctx, TTBCR);
-		mair0 = KGSL_IOMMU_GET_CTX_REG(ctx, MAIR0);
-		mair1 = KGSL_IOMMU_GET_CTX_REG(ctx, MAIR1);
-		fsr = KGSL_IOMMU_GET_CTX_REG(ctx, FSR);
-		fsynr0 = KGSL_IOMMU_GET_CTX_REG(ctx, FSYNR0);
-		fsynr1 = KGSL_IOMMU_GET_CTX_REG(ctx, FSYNR1);
-		tlbstatus = KGSL_IOMMU_GET_CTX_REG(ctx, TLBSTATUS);
-
-		far = KGSL_IOMMU_GET_CTX_REG_Q(ctx, FAR);
-		ipafar = KGSL_IOMMU_GET_CTX_REG_Q(ctx, IPAFAR);
-
-		dev_err_ratelimited(device->dev, "[sctlr] 0x%08x\n[actlr] 0x%08x\n[ttbcr] 0x%08x\n[mair0] 0x%08x\n[mair1] 0x%08x\n[fsr] 0x%08x\n[fsynr0] 0x%08x\n[fsynr1] 0x%08x\n[tlbstat] 0x%08x\n",
-			sctlr, actlr, ttbcr, mair0, mair1, fsr, fsynr0,
-			fsynr1, tlbstatus);
-		dev_err_ratelimited(device->dev, "[far] 0x%016lx\n[ipafar] 0x%016lx\n",
-			(unsigned long)far,
-			(unsigned long)ipafar);
-	}
-
 	ptname = MMU_FEATURE(mmu, KGSL_MMU_GLOBAL_PAGETABLE) ?
 		KGSL_MMU_GLOBAL_PT : pid;
 	/*
@@ -973,23 +942,7 @@ static int kgsl_iommu_fault_handler(struct iommu_domain *domain,
 			else
 				KGSL_LOG_DUMP(ctx->kgsldev, "*EMPTY*\n");
 		}
-#if defined(CONFIG_DISPLAY_SAMSUNG) || defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
-#if defined(CONFIG_SEC_ABC)
-		sec_abc_send_event("MODULE=gpu_qc@ERROR=gpu_page_fault");
-#endif
-		inc_dpui_u32_field(DPUI_KEY_QCT_GPU_PF, 1);
-
-		{
-			/* To print gpuaddr info */
-			extern void kgsl_svm_addr_mapping_check(pid_t pid, uint64_t fault_addr);
-			extern void kgsl_svm_addr_mapping_log(pid_t pid);
-
-			kgsl_svm_addr_mapping_log(ptname);
-			kgsl_svm_addr_mapping_check(ptname, addr);
-		}
-#endif
 	}
-
 
 	/*
 	 * We do not want the h/w to resume fetching data from an iommu
