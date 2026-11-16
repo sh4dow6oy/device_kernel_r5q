@@ -2292,7 +2292,7 @@ const struct bpf_func_proto bpf_seq_printf_btf_proto __weak;
 
 const struct bpf_func_proto * __weak bpf_get_trace_printk_proto(void)
 {
-	return &bpf_trace_printk_dummy_proto;
+	return NULL;
 }
 
 u64 __weak
