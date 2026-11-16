@@ -128,10 +128,6 @@ union swap_header {
  */
 struct reclaim_state {
 	unsigned long reclaimed_slab;
-#ifdef CONFIG_LRU_GEN
-	/* per-thread mm walk data */
-	struct lru_gen_mm_walk *mm_walk;
-#endif
 };
 
 #ifdef __KERNEL__
@@ -412,12 +408,9 @@ extern unsigned long total_swapcache_pages(void);
 extern void show_swap_cache_info(void);
 extern int add_to_swap(struct page *page);
 extern int add_to_swap_cache(struct page *, swp_entry_t, gfp_t);
-extern int __add_to_swap_cache(struct page *page, swp_entry_t entry,
-			void **shadowp);
-extern void __delete_from_swap_cache(struct page *page, void *shadow);
+extern int __add_to_swap_cache(struct page *page, swp_entry_t entry);
+extern void __delete_from_swap_cache(struct page *);
 extern void delete_from_swap_cache(struct page *);
-extern void clear_shadow_from_swap_cache(int type, unsigned long begin,
-				unsigned long end);
 extern void free_page_and_swap_cache(struct page *);
 extern void free_pages_and_swap_cache(struct page **, int);
 extern struct page *lookup_swap_cache(swp_entry_t entry,
@@ -478,8 +471,6 @@ extern int try_to_free_swap(struct page *);
 struct backing_dev_info;
 extern int init_swap_address_space(unsigned int type, unsigned long nr_pages);
 extern void exit_swap_address_space(unsigned int type);
-extern unsigned long get_swap_orig_data_nrpages(void);
-extern unsigned long get_swap_comp_pool_nrpages(void);
 
 #else /* CONFIG_SWAP */
 
@@ -572,16 +563,11 @@ static inline int add_to_swap_cache(struct page *page, swp_entry_t entry,
 	return -1;
 }
 
-static inline void __delete_from_swap_cache(struct page *page, void *shadow)
+static inline void __delete_from_swap_cache(struct page *page)
 {
 }
 
 static inline void delete_from_swap_cache(struct page *page)
-{
-}
-
-static inline void clear_shadow_from_swap_cache(int type, unsigned long begin,
-				unsigned long end)
 {
 }
 
@@ -631,7 +617,7 @@ static inline int split_swap_cluster(swp_entry_t entry)
 }
 #endif
 
-#if defined(CONFIG_MEMCG) && !defined(CONFIG_MEMCG_FORCE_USE_VM_SWAPPINESS)
+#ifdef CONFIG_MEMCG
 static inline int mem_cgroup_swappiness(struct mem_cgroup *memcg)
 {
 	/* Cgroup2 doesn't have per-cgroup swappiness */
