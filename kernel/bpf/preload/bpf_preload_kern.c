@@ -7,21 +7,6 @@
 #include <linux/sched/signal.h>
 #include "bpf_preload.h"
 
-static inline bool thread_group_exited(struct pid *pid)
-{
-	struct task_struct *task;
-	bool exited = false;
-
-	rcu_read_lock();
-	task = pid_task(pid, PIDTYPE_TGID);
-	if (!task || (READ_ONCE(task->signal->flags) & SIGNAL_GROUP_EXIT) ||
-	    atomic_read(&task->signal->live) == 0)
-		exited = true;
-	rcu_read_unlock();
-
-	return exited;
-}
-
 extern char bpf_preload_umd_start;
 extern char bpf_preload_umd_end;
 
