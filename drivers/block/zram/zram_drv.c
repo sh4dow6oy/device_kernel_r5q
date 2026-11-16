@@ -3976,10 +3976,6 @@ static int __init zram_init(void)
 		num_devices--;
 	}
 
-	show_mem_extra_notifier_register(&zram_size_nb);
-#ifdef CONFIG_ZRAM_LRU_WRITEBACK
-	am_app_launch_notifier_register(&zram_app_launch_nb);
-#endif
 	return 0;
 
 out_error:
@@ -3990,9 +3986,6 @@ out_error:
 static void __exit zram_exit(void)
 {
 	destroy_devices();
-#ifdef CONFIG_ZRAM_LRU_WRITEBACK
-	am_app_launch_notifier_unregister(&zram_app_launch_nb);
-#endif
 }
 
 module_init(zram_init);
