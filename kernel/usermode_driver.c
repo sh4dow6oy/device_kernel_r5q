@@ -5,7 +5,6 @@
 #include <linux/shmem_fs.h>
 #include <linux/pipe_fs_i.h>
 #include <linux/mount.h>
-#include <linux/sched.h>
 #include <linux/fs_struct.h>
 #include <linux/task_work.h>
 #include <linux/usermode_driver.h>
