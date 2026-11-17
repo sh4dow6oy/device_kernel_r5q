@@ -15,7 +15,6 @@
 #define _LINUX_PERF_EVENT_H
 
 #include <uapi/linux/perf_event.h>
-#include <uapi/linux/bpf_perf_event.h>
 
 /*
  * Kernel-internal data types and definitions:
@@ -591,6 +590,12 @@ struct perf_event {
 
 	unsigned int			group_generation;
 	struct perf_event		*group_leader;
+
+	/*
+	 * Protect the pmu, attributes and context of a group leader.
+	 * Note: does not protect the pointer to the group_leader.
+	 */
+	struct mutex			group_leader_mutex;
 	struct pmu			*pmu;
 	void				*pmu_private;
 
@@ -730,6 +735,9 @@ struct perf_event {
 	 * CPU wakes up and will be removed from the list after that
 	 */
 	struct list_head		dormant_event_entry;
+
+	/* Is this event shared with other events */
+	bool					shared;
 #endif /* CONFIG_PERF_EVENTS */
 };
 
@@ -831,7 +839,7 @@ struct perf_output_handle {
 };
 
 struct bpf_perf_event_data_kern {
-	bpf_user_pt_regs_t *regs;
+	struct pt_regs *regs;
 	struct perf_sample_data *data;
 	struct perf_event *event;
 };
@@ -1005,9 +1013,9 @@ extern void perf_event_output_forward(struct perf_event *event,
 extern void perf_event_output_backward(struct perf_event *event,
 				       struct perf_sample_data *data,
 				       struct pt_regs *regs);
-extern int perf_event_output(struct perf_event *event,
-			     struct perf_sample_data *data,
-			     struct pt_regs *regs);
+extern void perf_event_output(struct perf_event *event,
+			      struct perf_sample_data *data,
+			      struct pt_regs *regs);
 
 static inline bool
 __is_default_overflow_handler(perf_overflow_handler_t overflow_handler)
@@ -1174,8 +1182,6 @@ get_perf_callchain(struct pt_regs *regs, u32 init_nr, bool kernel, bool user,
 		   u32 max_stack, bool crosstask, bool add_mark);
 extern int get_callchain_buffers(int max_stack);
 extern void put_callchain_buffers(void);
-extern struct perf_callchain_entry *get_callchain_entry(int *rctx);
-extern void put_callchain_entry(int rctx);
 
 extern int sysctl_perf_event_max_stack;
 extern int sysctl_perf_event_max_contexts_per_stack;
@@ -1212,12 +1218,15 @@ extern int sysctl_perf_cpu_time_max_percent;
 
 extern void perf_sample_event_took(u64 sample_len_ns);
 
-int perf_proc_update_handler(struct ctl_table *table, int write,
-		void *buffer, size_t *lenp, loff_t *ppos);
-int perf_cpu_time_max_percent_handler(struct ctl_table *table, int write,
-		void *buffer, size_t *lenp, loff_t *ppos);
+extern int perf_proc_update_handler(struct ctl_table *table, int write,
+		void __user *buffer, size_t *lenp,
+		loff_t *ppos);
+extern int perf_cpu_time_max_percent_handler(struct ctl_table *table, int write,
+		void __user *buffer, size_t *lenp,
+		loff_t *ppos);
+
 int perf_event_max_stack_handler(struct ctl_table *table, int write,
-		void *buffer, size_t *lenp, loff_t *ppos);
+				 void __user *buffer, size_t *lenp, loff_t *ppos);
 
 /* Access to perf_event_open(2) syscall. */
 #define PERF_SECURITY_OPEN		0
@@ -1272,9 +1281,6 @@ extern void perf_bp_event(struct perf_event *event, void *data);
 # define perf_misc_flags(regs) \
 		(user_mode(regs) ? PERF_RECORD_MISC_USER : PERF_RECORD_MISC_KERNEL)
 # define perf_instruction_pointer(regs)	instruction_pointer(regs)
-#endif
-#ifndef perf_arch_bpf_user_pt_regs
-# define perf_arch_bpf_user_pt_regs(regs) regs
 #endif
 
 static inline bool has_branch_stack(struct perf_event *event)
