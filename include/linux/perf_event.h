@@ -1283,6 +1283,10 @@ extern void perf_bp_event(struct perf_event *event, void *data);
 # define perf_instruction_pointer(regs)	instruction_pointer(regs)
 #endif
 
+#ifndef perf_arch_bpf_user_pt_regs
+# define perf_arch_bpf_user_pt_regs(regs) regs
+#endif
+
 static inline bool has_branch_stack(struct perf_event *event)
 {
 	return event->attr.sample_type & PERF_SAMPLE_BRANCH_STACK;
