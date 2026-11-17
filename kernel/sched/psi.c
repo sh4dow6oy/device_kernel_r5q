@@ -175,7 +175,7 @@ static u64 psi_period __read_mostly;
 
 /* System-level pressure and stall tracking */
 static DEFINE_PER_CPU(struct psi_group_cpu, system_group_pcpu);
-struct psi_group psi_system = {
+static struct psi_group psi_system = {
 	.pcpu = &system_group_pcpu,
 };
 
@@ -1284,6 +1284,14 @@ static int __init psi_proc_init(void)
 	proc_create("pressure/io", 0, NULL, &psi_io_fops);
 	proc_create("pressure/memory", 0, NULL, &psi_memory_fops);
 	proc_create("pressure/cpu", 0, NULL, &psi_cpu_fops);
+
+	#ifdef CONFIG_SAMSUNG_LMKD_DEBUG
+	if (!proc_symlink("pressure/lmkd_count", NULL, "/proc/lmkd_debug/lmkd_count"))
+		pr_err("Failed to create link /proc/pressure/lmkd_count -> /proc/lmkd_debug/lmkd_count\n");
+	if (!proc_symlink("pressure/lmkd_cricount", NULL, "/proc/lmkd_debug/lmkd_cricount"))
+		pr_err("Failed to create link /proc/pressure/lmkd_cricount -> /proc/lmkd_debug/lmkd_cricount\n");
+	#endif
+
 	return 0;
 }
 module_init(psi_proc_init);
