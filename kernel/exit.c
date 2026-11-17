@@ -63,12 +63,15 @@
 #include <linux/rcuwait.h>
 #include <linux/compat.h>
 #include <linux/sysfs.h>
-#include <linux/usermode_driver.h>
 
 #include <linux/uaccess.h>
 #include <asm/unistd.h>
 #include <asm/pgtable.h>
 #include <asm/mmu_context.h>
+
+#ifdef CONFIG_SEC_DEBUG
+#include <linux/sec_debug.h>
+#endif
 
 /*
  * The default value should be high enough to not crash a system that randomly
@@ -121,7 +124,6 @@ static void __unhash_process(struct task_struct *p, bool group_dead)
 	nr_threads--;
 	detach_pid(p, PIDTYPE_PID);
 	if (group_dead) {
-		detach_pid(p, PIDTYPE_TGID);
 		detach_pid(p, PIDTYPE_PGID);
 		detach_pid(p, PIDTYPE_SID);
 
@@ -743,8 +745,7 @@ static void forget_original_parent(struct task_struct *father,
 				t->parent = t->real_parent;
 			if (t->pdeath_signal)
 				group_send_sig_info(t->pdeath_signal,
-						    SEND_SIG_NOINFO, t,
-						    PIDTYPE_TGID);
+						    SEND_SIG_NOINFO, t);
 		}
 		/*
 		 * If this is a threaded reparent there is no need to
@@ -833,6 +834,8 @@ static inline void check_stack_usage(void) {}
 void __noreturn do_exit(long code)
 {
 	struct task_struct *tsk = current;
+	struct pid_namespace *pid_ns;
+	struct task_struct *reaper;
 	int group_dead;
 
 	/*
@@ -919,6 +922,26 @@ void __noreturn do_exit(long code)
 	tsk->exit_code = code;
 	taskstats_exit(tsk, group_dead);
 
+#ifdef CONFIG_SEC_DEBUG
+	if (sec_debug_is_enabled()) {
+		write_lock_irq(&tasklist_lock);
+		pid_ns = task_active_pid_ns(tsk);
+		if (unlikely(pid_ns == &init_pid_ns)) {
+			reaper = pid_ns->child_reaper;
+			if (unlikely(reaper == tsk)) {
+				reaper = find_alive_thread(tsk);
+				if (unlikely(!reaper)) {
+					write_unlock_irq(&tasklist_lock);
+					panic("Attempted to kill init! exitcode=0x%08x\n",
+						tsk->signal->group_exit_code ?: tsk->exit_code);
+					write_lock_irq(&tasklist_lock);
+				}
+			}
+		}
+		write_unlock_irq(&tasklist_lock);
+	}
+#endif
+
 	exit_mm();
 
 	if (group_dead)
@@ -934,8 +957,7 @@ void __noreturn do_exit(long code)
 	exit_task_namespaces(tsk);
 	exit_task_work(tsk);
 	exit_thread(tsk);
-	if (group_dead)
-		exit_umh(tsk);
+	exit_umh(tsk);
 
 	/*
 	 * Flush inherited counters to the parent - before the parent
@@ -1091,6 +1113,14 @@ struct wait_opts {
 	wait_queue_entry_t		child_wait;
 	int			notask_error;
 };
+
+static inline
+struct pid *task_pid_type(struct task_struct *task, enum pid_type type)
+{
+	if (type != PIDTYPE_PID)
+		task = task->group_leader;
+	return task->pids[type].pid;
+}
 
 static int eligible_pid(struct wait_opts *wo, struct task_struct *p)
 {
