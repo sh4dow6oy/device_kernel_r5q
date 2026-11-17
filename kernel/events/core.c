@@ -1333,7 +1333,7 @@ static u32 perf_event_pid_type(struct perf_event *event, struct task_struct *p,
 
 static u32 perf_event_pid(struct perf_event *event, struct task_struct *p)
 {
-	return perf_event_pid_type(event, p, PIDTYPE_TGID);
+	return perf_event_pid_type(event, p, __PIDTYPE_TGID);
 }
 
 static u32 perf_event_tid(struct perf_event *event, struct task_struct *p)
@@ -1802,9 +1802,6 @@ static void perf_group_detach(struct perf_event *event)
 		list_del_init(&event->group_entry);
 		event->group_leader->nr_siblings--;
 		event->group_leader->group_generation++;
-
-		if (event->shared)
-			event->group_leader = event;
 
 		goto out;
 	}
