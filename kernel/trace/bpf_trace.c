@@ -818,7 +818,8 @@ __bpf_perf_event_output(struct pt_regs *regs, struct bpf_map *map,
 	if (unlikely(event->oncpu != cpu))
 		return -EOPNOTSUPP;
 
-	return perf_event_output(event, sd, regs);
+	perf_event_output(event, sd, regs);
+	return 0;
 }
 
 /*
