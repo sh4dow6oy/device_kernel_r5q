@@ -181,8 +181,8 @@ int battery_notifier_init(void)
 
 	pr_info("%s\n", __func__);
 
-	charger_device = sec_device_create(0, NULL, "charger_notifier");
-	pdic_device = sec_device_create(0, NULL, "pdic_notifier");
+	charger_device = sec_device_create(NULL, "charger_notifier");
+	pdic_device = sec_device_create(NULL, "pdic_notifier");
 	if (IS_ERR(charger_device)) {
 		pr_err("%s Failed to create device(charer_notifier)!\n", __func__);
 		ret = -ENODEV;
