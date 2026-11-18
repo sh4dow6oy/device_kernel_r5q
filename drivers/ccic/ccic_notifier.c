@@ -342,7 +342,7 @@ int ccic_notifier_init(void)
 #if defined(CONFIG_SEC_SYSFS)
 		ccic_device = sec_device_create(NULL, "ccic");
 #elif defined(CONFIG_DRV_SAMSUNG)
-		ccic_device = sec_device_create(0, NULL, "ccic");
+		ccic_device = sec_device_create(NULL, "ccic");
 #endif
 		if (IS_ERR(ccic_device)) {
 			pr_err("%s Failed to create device(switch)!\n", __func__);
