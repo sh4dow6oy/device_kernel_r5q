@@ -73,8 +73,10 @@ static void ccic_event_notifier(struct work_struct *data)
 	ccic_noti.sub1 = event_work->attach;
 	ccic_noti.sub2 = event_work->event;
 	ccic_noti.sub3 = 0;
+#ifdef CONFIG_BATTERY_SAMSUNG
 #ifdef CONFIG_USB_TYPEC_MANAGER_NOTIFIER
 	ccic_noti.pd = &pd_noti;
+#endif
 #endif
 	ccic_notifier_notify((CC_NOTI_TYPEDEF *) &ccic_noti, NULL, 0);
 
