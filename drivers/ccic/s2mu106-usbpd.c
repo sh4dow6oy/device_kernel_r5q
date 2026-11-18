@@ -24,6 +24,9 @@
 #include <linux/module.h>
 #include <linux/delay.h>
 #include <linux/completion.h>
+#if defined(CONFIG_BATTERY_NOTIFIER)
+#include <linux/battery/battery_notifier.h>
+#endif
 
 #include <linux/ccic/usbpd.h>
 #include <linux/ccic/usbpd-s2mu106.h>
