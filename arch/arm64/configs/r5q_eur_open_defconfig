@@ -4373,8 +4373,9 @@ CONFIG_TYPEC=y
 #
 # USB Power Delivery
 #
-# CONFIG_USB_PD is not set
-# CONFIG_QPNP_USB_PDPHY is not set
+CONFIG_USB_PD=y
+CONFIG_USB_PD_POLICY=y
+CONFIG_QPNP_USB_PDPHY=y
 
 #
 # USB Notify features
