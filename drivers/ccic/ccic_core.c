@@ -26,11 +26,11 @@
 #include <linux/sec_class.h>
 #endif
 //#include <linux/sec_sysfs.h>
-#include <linux/ccic/ccic_core.h>
-#include <linux/ccic/ccic_sysfs.h>
 #include <linux/power_supply.h>
 #include <linux/of.h>
 #include <linux/regulator/consumer.h>
+#include <linux/ccic/ccic_core.h>
+#include <linux/ccic/ccic_sysfs.h>
 
 #ifndef CONFIG_SWITCH
 #error "ERROR: CONFIG_SWITCH is not set."
@@ -38,10 +38,18 @@
 
 #include <linux/switch.h>
 
-struct device *ccic_device;
+static struct device *ccic_device;
 static struct switch_dev switch_dock = {
 	.name = "ccic_dock",
 };
+
+struct device *get_ccic_device(void)
+{
+	if (!ccic_device)
+		return NULL;
+	return ccic_device;
+}
+EXPORT_SYMBOL(get_ccic_device);
 
 void enable_dp_switch_regulator(int mode)
 {
@@ -131,21 +139,17 @@ void ccic_send_dock_uevent(u32 vid, u32 pid, int state)
 	char *envp[3] = { switch_string, pd_ids_string, NULL };
 
 	pr_info("%s: CCIC dock : USBPD_IPS=%04x:%04x SWITCH_STATE=%d\n",
-			__func__,
-			le16_to_cpu(vid),
-			le16_to_cpu(pid),
-			state);
+		__func__, le16_to_cpu(vid), le16_to_cpu(pid), state);
 
 	if (IS_ERR(ccic_device)) {
 		pr_err("%s CCIC ERROR: Failed to send a dock uevent!\n",
-				__func__);
+			__func__);
 		return;
 	}
 
 	snprintf(switch_string, 32, "SWITCH_STATE=%d", state);
 	snprintf(pd_ids_string, 32, "USBPD_IDS=%04x:%04x",
-			le16_to_cpu(vid),
-			le16_to_cpu(pid));
+		le16_to_cpu(vid), le16_to_cpu(pid));
 	kobject_uevent_env(&ccic_device->kobj, KOBJ_CHANGE, envp);
 }
 
@@ -154,19 +158,31 @@ int ccic_core_register_chip(pccic_data_t pccic_data)
 	int ret = 0;
 
 	pr_info("%s\n", __func__);
-	if (!ccic_device || IS_ERR(ccic_device)) {
+	if (IS_ERR(ccic_device)) {
 		pr_err("%s ccic_device is not present try again\n", __func__);
 		ret = -ENODEV;
 		goto out;
 	}
 
 	dev_set_drvdata(ccic_device, pccic_data);
+
 	/* create sysfs group */
 	ret = sysfs_create_group(&ccic_device->kobj, &ccic_sysfs_group);
 	if (ret)
 		pr_err("%s: ccic sysfs fail, ret %d", __func__, ret);
 out:
 	return ret;
+}
+
+void ccic_core_unregister_chip(void)
+{
+	pr_info("%s\n", __func__);
+	if (IS_ERR(ccic_device)) {
+		pr_err("%s ccic_device is not present try again\n", __func__);
+		return;
+	}
+	sysfs_remove_group(&ccic_device->kobj, &ccic_sysfs_group);
+	dev_set_drvdata(ccic_device, NULL);
 }
 
 int ccic_core_init(void)
@@ -178,7 +194,7 @@ int ccic_core_init(void)
 #if defined(CONFIG_DRV_SAMSUNG)
 	ccic_device = sec_device_create(NULL, "ccic");
 #endif
-	if (!ccic_device || IS_ERR(ccic_device)) {
+	if (IS_ERR(ccic_device)) {
 		pr_err("%s Failed to create device(switch)!\n", __func__);
 		ret = -ENODEV;
 		goto out;
@@ -205,4 +221,3 @@ void *ccic_core_get_drvdata(void)
 	}
 	return (pccic_data->drv_data);
 }
-
