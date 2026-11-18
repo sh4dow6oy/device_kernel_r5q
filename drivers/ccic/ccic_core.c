@@ -176,7 +176,7 @@ int ccic_core_init(void)
 	pr_info("%s\n", __func__);
 
 #if defined(CONFIG_DRV_SAMSUNG)
-	ccic_device = sec_device_create(0, NULL, "ccic");
+	ccic_device = sec_device_create(NULL, "ccic");
 #endif
 	if (!ccic_device || IS_ERR(ccic_device)) {
 		pr_err("%s Failed to create device(switch)!\n", __func__);
