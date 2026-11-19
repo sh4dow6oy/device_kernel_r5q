@@ -13,10 +13,8 @@
  */
 
 #include <linux/notifier.h>
-
-#if defined(CONFIG_BATTERY_NOTIFIER)
 #include <linux/battery/battery_notifier.h>
-#endif
+
 
 struct pdic_notifier_struct pd_noti;
 
