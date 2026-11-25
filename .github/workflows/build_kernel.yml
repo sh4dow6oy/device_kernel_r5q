@@ -1,82 +1,133 @@
-name: Build paradigm kernel
+name: Build r5q Kernel (OneUI)
 
 on:
   workflow_dispatch:
     inputs:
-      release:
-          description: 'Upload release'
-          type: boolean
-          required: true
-          default: false
-      changelog:
-          description: 'Changelog'
-          type: string
-          required: false
+      branch:
+        description: 'Branch-ul de compilat'
+        required: true
+        default: 'oneui'
+      defconfig:
+        description: 'Defconfig (ex: r5q_eur_open_defconfig sau vendor/r5q_eur_open_defconfig)'
+        required: true
+        default: 'r5q_eur_open_defconfig'
+      anykernel_repo:
+        description: 'URL AnyKernel3 pentru r5q'
+        required: false
+        default: 'https://github.com/osm0sis/AnyKernel3'
+      anykernel_branch:
+        description: 'Branch AnyKernel3'
+        required: false
+        default: 'master'
+
+env:
+  ARCH: arm64
+  SUBARCH: arm64
+  KBUILD_BUILD_USER: sh4dow6oy
+  KBUILD_BUILD_HOST: github-actions
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      # 1. Checkout repository with submodules (shallow clone)
-      - name: Checkout repository
-        uses: actions/checkout@v5
+      - name: Maximize Build Space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo apt-get clean
+          df -h
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            bc bison build-essential ccache cpio curl device-tree-compiler \
+            flex git jq kmod libc6-dev libelf-dev libncurses-dev \
+            libpcre2-dev libssl-dev llvm lld clang make openssl \
+            binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi \
+            pigz python3 python-is-python3 tar unzip wget xz-utils zip zstd
+
+      - name: Checkout Kernel Source
+        uses: actions/checkout@v4
         with:
-          submodules: true
+          repository: sh4dow6oy/device_kernel_r5q
+          ref: ${{ github.event.inputs.branch }}
           fetch-depth: 1
 
-      - name: Install build tools
+      - name: Setup Neutron Clang
         run: |
-          sudo apt-get install -y \
-            build-essential \
-            git \
-            curl \
-            unzip \
-            wget \
-            zip \
-            zstd
+          mkdir -p "$HOME/toolchain/clang"
+          cd "$HOME/toolchain/clang"
+          curl -LO "https://raw.githubusercontent.com/Neutron-Toolchains/antman/main/antman"
+          chmod +x antman
+          ./antman -S=latest
+          ./antman --patch=glibc
 
-      - name: Download prebuilt Google clang
+      - name: Configure & Build Kernel
         run: |
-          wget -O llvm.tar.zst https://github.com/Ylarod/setup-ndk-clang/releases/download/prebuilt/clang-linux-x86-ndk-r29-r563880c.tar.zst
-          mkdir llvm-21; cd llvm-21
-          tar -I unzstd -xf ../llvm.tar.zst
-          rm ../llvm.tar.zst
-          cd ..
+          export PATH="$HOME/toolchain/clang/bin:$PATH"
+          export USE_CCACHE=1
+          export CCACHE_EXEC=/usr/bin/ccache
 
-      # 2. Run your custom bash script
-      - name: Build kernel
+          # Detecteaza automat daca r5q_eur_open_defconfig e in configs/ sau configs/vendor/
+          DEFCONFIG="${{ github.event.inputs.defconfig }}"
+          if [ ! -f "arch/arm64/configs/$DEFCONFIG" ] && [ -f "arch/arm64/configs/vendor/$DEFCONFIG" ]; then
+            DEFCONFIG="vendor/$DEFCONFIG"
+          fi
+          echo "Using defconfig: $DEFCONFIG"
+
+          MAKE_ARGS=(
+            O=out
+            ARCH=arm64
+            SUBARCH=arm64
+            CC=clang
+            AR=llvm-ar
+            NM=llvm-nm
+            OBJCOPY=llvm-objcopy
+            OBJDUMP=llvm-objdump
+            STRIP=llvm-strip
+            LD=ld.lld
+            CLANG_TRIPLE=aarch64-linux-gnu-
+            CROSS_COMPILE=aarch64-linux-gnu-
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+            DTC_EXT=/usr/bin/dtc
+          )
+
+          make "${MAKE_ARGS[@]}" "$DEFCONFIG"
+          make -j"$(nproc --all)" "${MAKE_ARGS[@]}"
+
+      - name: Package with AnyKernel3
+        if: success()
         run: |
-          chmod +x build.sh
-          bash build.sh
+          git clone --depth=1 -b "${{ github.event.inputs.anykernel_branch }}" \
+            "${{ github.event.inputs.anykernel_repo }}" AnyKernel3
 
-      - name: Generate release version
-        id: ts
-        run: |
-          echo "RELEASE_TS=$(date +'%Y%m%d-%H%M%S')" >> $GITHUB_ENV
-          : > version.txt
-          echo "**Kernel version:** $(cat out/include/config/kernel.release)  " >> version.txt
-          echo >> version.txt
-          export KHASH="$(git rev-parse HEAD)"
-          echo "**Kernel source:** [$KHASH](https://github.com/UN1CA/kernel_samsung_sm7150/tree/$KHASH)" >> version.txt
-
-          if [ "${{ github.event.inputs.release }}" = "true" ] && \
-             [ -n "${{ github.event.inputs.changelog }}" ]; then
-            echo >> version.txt
-            echo "**Changelog:**" >> version.txt
-            echo >> version.txt
-            printf "%b\n" "${{ github.event.inputs.changelog }}" >> version.txt
+          IMAGE_PATH="out/arch/arm64/boot/Image.gz-dtb"
+          if [ ! -f "$IMAGE_PATH" ]; then
+            IMAGE_PATH="out/arch/arm64/boot/Image.gz"
+          fi
+          if [ ! -f "$IMAGE_PATH" ]; then
+            IMAGE_PATH="out/arch/arm64/boot/Image"
           fi
 
-      # 3. Upload the generated boot.img
-      - name: Upload release assets
-        if: github.event.inputs.release
-        uses: softprops/action-gh-release@v2.4.2
-        env:
-          GITHUB_TOKEN: ${{ secrets.TOKEN }}
+          cp "$IMAGE_PATH" AnyKernel3/
+
+          if [ -f "out/arch/arm64/boot/dtbo.img" ]; then
+            cp "out/arch/arm64/boot/dtbo.img" AnyKernel3/
+          fi
+
+          if [ -f "out/arch/arm64/boot/dtb.img" ]; then
+            cp "out/arch/arm64/boot/dtb.img" AnyKernel3/
+          fi
+
+          cd AnyKernel3
+          rm -rf .git
+          ZIP_NAME="r5q-oneui-$(date +%Y%m%d-%H%M).zip"
+          zip -r9 "../$ZIP_NAME" ./*
+          echo "ZIP_NAME=$ZIP_NAME" >> "$GITHUB_ENV"
+
+      - name: Upload Kernel Artifact
+        uses: actions/upload-artifact@v4
         with:
-          body_path: version.txt
-          tag_name: "${{ env.RELEASE_TS }}"
-          name: "ParadigmKernel-${{ env.RELEASE_TS }}"
-          files: |
-            boot.img
-            dtbo.img
+          name: ${{ env.ZIP_NAME }}
+          path: ${{ env.ZIP_NAME }}
+          retention-days: 7
