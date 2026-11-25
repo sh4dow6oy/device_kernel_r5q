@@ -49,11 +49,13 @@
 #if (defined CONFIG_CCIC_NOTIFIER || defined CONFIG_DUAL_ROLE_USB_INTF || defined CONFIG_TYPEC)
 #include <linux/ccic/usbpd_ext.h>
 #endif
+#include <linux/battery/battery_notifier.h>
 #ifdef CONFIG_BATTERY_SAMSUNG
 #ifdef CONFIG_USB_TYPEC_MANAGER_NOTIFIER
 extern struct pdic_notifier_struct pd_noti;
 #endif
 #endif
+struct pdic_notifier_struct pd_noti;
 
 #if defined(CONFIG_BATTERY_SAMSUNG)
 extern unsigned int lpcharge;
