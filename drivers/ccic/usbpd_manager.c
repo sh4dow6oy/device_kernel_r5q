@@ -15,15 +15,10 @@
 #include <linux/muic/muic_notifier.h>
 #endif /* CONFIG_MUIC_NOTIFIER */
 #include <linux/ccic/pdic_notifier.h>
-#ifdef CONFIG_BATTERY_SAMSUNG
-#ifdef CONFIG_USB_TYPEC_MANAGER_NOTIFIER
 #include <linux/battery/battery_notifier.h>
-#endif
-#endif
-
-#if defined(CONFIG_CCIC_NOTIFIER)
 #include <linux/ccic/ccic_notifier.h>
-#endif
+extern struct device *ccic_device;
+extern struct pdic_notifier_struct pd_noti;
 
 #if (defined CONFIG_CCIC_NOTIFIER || defined CONFIG_DUAL_ROLE_USB_INTF)
 #include <linux/ccic/usbpd_ext.h>
