@@ -1,4 +1,4 @@
-name: Build r5q Kernel (OneUI)
+name: Build r5q Kernel (FIFTH)
 
 on:
   workflow_dispatch:
